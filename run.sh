@@ -40,15 +40,19 @@ SAFE_NAME="$(printf '%s' "${SAFE_NAME}" | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 
 VOLUME="${CLAUDE_VOLUME:-claude-${SAFE_NAME:-repo}-$(path_hash "${PROJECT_DIR}")}"
 echo ">> session volume: ${VOLUME}  (docker volume inspect ${VOLUME})"
 
-# 3. Read-only config mounts, added only if the host path exists.
+# 3. Config mounts, added only if the host path exists.
 RO_MOUNTS=()
 add_ro_mount() {  # <host_path> <container_path>
   if [ -e "$1" ]; then RO_MOUNTS+=(--volume "$1:$2:ro")
   else echo ">> skipping (not found on host): $1" >&2; fi
 }
+add_rw_mount() {  # <host_path> <container_path>
+  if [ -e "$1" ]; then RO_MOUNTS+=(--volume "$1:$2")
+  else echo ">> skipping (not found on host): $1" >&2; fi
+}
 # --- harmless config to share (edit as needed) ---
 add_ro_mount "${SCRIPT_DIR}/settings.json" "${HOME_IN_CONTAINER}/.claude/settings.json"
-add_ro_mount "${SCRIPT_DIR}/claude.json"   "${HOME_IN_CONTAINER}/.claude.json"
+add_rw_mount "${SCRIPT_DIR}/claude.json"   "${HOME_IN_CONTAINER}/.claude.json"
 add_ro_mount "${SCRIPT_DIR}/CLAUDE.md"       "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
 # add_ro_mount "${HOME}/.claude/commands"      "${HOME_IN_CONTAINER}/.claude/commands"
 add_ro_mount "${HOME}/.gitconfig"            "${HOME_IN_CONTAINER}/.gitconfig"
