@@ -52,7 +52,7 @@ add_ro_mount "${SCRIPT_DIR}/claude.json"   "${HOME_IN_CONTAINER}/.claude.json"
 add_ro_mount "${SCRIPT_DIR}/CLAUDE.md"       "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
 # add_ro_mount "${HOME}/.claude/commands"      "${HOME_IN_CONTAINER}/.claude/commands"
 add_ro_mount "${HOME}/.gitconfig"            "${HOME_IN_CONTAINER}/.gitconfig"
-add_ro_mount "${SCRIPT_DIR}/sounds"          "${HOME_IN_CONTAINER}/sounds"
+add_ro_mount "${SCRIPT_DIR}/sound-effects/sounds" "${HOME_IN_CONTAINER}/sounds"
 
 # Retrieve a secret from macOS Keychain
 # Usage: sec-get "Entry Name"

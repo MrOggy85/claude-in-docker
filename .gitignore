@@ -1,3 +1,5 @@
 settings.json
 claude.json
 CLAUDE.md
+sound-effects/sounds/*
+!sound-effects/sounds/.gitkeep

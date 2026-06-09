@@ -49,3 +49,7 @@ Add a `.mcp.json` file at the root of your project repository. Claude Code picks
 $ cd ~/code/my-repo
 $ ../claude-in-docker/run.sh
 ```
+
+## Additional Information
+
+See [docs/index.md](docs/index.md) for guides on optional features.
