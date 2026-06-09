@@ -10,6 +10,27 @@ This is a solution for running claude code in a docker container. It assumes you
 ## Setup
 - copy `settings.json.example` to `settings.json`
   - `settings.json` is gitignored. Add your own settings here that will be used by Claude Code
+- copy `claude.json.example` to `claude.json`
+  - `claude.json` is gitignored. Contains onboarding state and your user-level MCP server config
+
+## MCP Servers
+
+### User-level servers
+Add servers to the `mcpServers` object in your local `claude.json`. They apply to every project you run in the container. Example:
+
+```json
+"mcpServers": {
+  "atlassian": {
+    "type": "sse",
+    "url": "https://mcp.atlassian.com/v1/sse"
+  }
+}
+```
+
+`claude.json` is mounted from the host at runtime, so changes take effect on the next container start — no image rebuild required.
+
+### Project-level servers
+Add a `.mcp.json` file at the root of your project repository. Claude Code picks it up automatically from the mounted workspace. These are scoped to that repo and are typically checked in.
 
 ## Run
 

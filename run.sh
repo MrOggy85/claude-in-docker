@@ -48,6 +48,7 @@ add_ro_mount() {  # <host_path> <container_path>
 }
 # --- harmless config to share (edit as needed) ---
 add_ro_mount "${SCRIPT_DIR}/settings.json" "${HOME_IN_CONTAINER}/.claude/settings.json"
+add_ro_mount "${SCRIPT_DIR}/claude.json"   "${HOME_IN_CONTAINER}/.claude.json"
 add_ro_mount "${HOME}/.claude/CLAUDE.md"     "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
 # add_ro_mount "${HOME}/.claude/commands"      "${HOME_IN_CONTAINER}/.claude/commands"
 add_ro_mount "${HOME}/.gitconfig"            "${HOME_IN_CONTAINER}/.gitconfig"

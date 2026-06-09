@@ -1,0 +1,10 @@
+{
+  "hasCompletedOnboarding": true,
+  "projects": {
+    "/home/dev/repo": {
+      "hasTrustDialogAccepted": true,
+      "hasCompletedProjectOnboarding": true
+    }
+  },
+  "mcpServers": {}
+}
