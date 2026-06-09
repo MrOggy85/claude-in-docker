@@ -39,16 +39,17 @@ Add a `.mcp.json` file at the root of your project repository. Claude Code picks
 - `cd` to the folder you want to run Claude Code from
 - execute `run.sh` from that folder
 
-### Example
+### Shell profile alias
+
+Add this function to your shell profile (`~/.zshrc`, `~/.bashrc`, etc.) so you can invoke `claude` from any directory without specifying the path — and so it overrides a locally installed `claude` binary if you have one:
+
+```bash
+function claude {
+  ~/code/claude-in-docker/run.sh "$@"
+}
 ```
-- /Users/me/code
-  - my-repo
-  - claude-in-docker
-```
-```
-$ cd ~/code/my-repo
-$ ../claude-in-docker/run.sh
-```
+
+Reload your shell (`source ~/.zshrc`) or open a new terminal, then run `claude` from any project directory.
 
 ## Additional Information
 
