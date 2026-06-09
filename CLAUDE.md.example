@@ -1,0 +1,5 @@
+# User instructions for Claude Code
+
+Add your personal instructions here. This file is mounted into the container as
+~/.claude/CLAUDE.md and applies to every project you run.
+

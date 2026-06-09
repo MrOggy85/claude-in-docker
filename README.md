@@ -12,6 +12,8 @@ This is a solution for running claude code in a docker container. It assumes you
   - `settings.json` is gitignored. Add your own settings here that will be used by Claude Code
 - copy `claude.json.example` to `claude.json`
   - `claude.json` is gitignored. Contains onboarding state and your user-level MCP server config
+- copy `CLAUDE.md.example` to `CLAUDE.md`
+  - `CLAUDE.md` is gitignored. Add your personal instructions for Claude Code here
 
 ## MCP Servers
 
