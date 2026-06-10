@@ -63,8 +63,8 @@ RUN chmod -R 777 /home/dev
 # code calling getpwuid(). Make /etc/passwd writable and inject an entry for
 # the runtime UID at container start.
 RUN chmod 666 /etc/passwd /etc/group
-RUN printf '#!/bin/bash\nset -e\nif ! getent passwd "$(id -u)" >/dev/null 2>&1; then\n  echo "dev:x:$(id -u):$(id -g):dev:/home/dev:/bin/bash" >> /etc/passwd\nfi\nif ! getent group "$(id -g)" >/dev/null 2>&1; then\n  echo "dev:x:$(id -g):" >> /etc/group\nfi\nexec "$@"\n' > /usr/local/bin/entrypoint.sh \
- && chmod +x /usr/local/bin/entrypoint.sh
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 WORKDIR /home/dev/repo
