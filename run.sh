@@ -69,26 +69,21 @@ add_rw_mount() {  # <host_path> <container_path>
   if [ -e "$1" ]; then RO_MOUNTS+=(--volume "$1:$2")
   else echo ">> skipping (not found on host): $1" >&2; fi
 }
+# Credentials persist across all projects via a single host file bind-mounted
+# read-write over ~/.claude/.credentials.json (the rest of ~/.claude stays
+# per-project). Pre-create it (seeded "{}", mode 600) so Docker mounts it as a
+# file, not a directory, and `/login` writes the real token in place.
+CRED_FILE="${SCRIPT_DIR}/.credentials.json"
+[ -e "$CRED_FILE" ] || { printf '{}' > "$CRED_FILE"; chmod 600 "$CRED_FILE"; }
+
 # --- harmless config to share (edit as needed) ---
 add_ro_mount "${SCRIPT_DIR}/settings.json" "${HOME_IN_CONTAINER}/.claude/settings.json"
 add_rw_mount "${SCRIPT_DIR}/claude.json"   "${HOME_IN_CONTAINER}/.claude.json"
+add_rw_mount "${CRED_FILE}"                 "${HOME_IN_CONTAINER}/.claude/.credentials.json"
 add_ro_mount "${SCRIPT_DIR}/CLAUDE.md"       "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
 # add_ro_mount "${HOME}/.claude/commands"      "${HOME_IN_CONTAINER}/.claude/commands"
 add_ro_mount "${HOME}/.gitconfig"            "${HOME_IN_CONTAINER}/.gitconfig"
 add_ro_mount "${SCRIPT_DIR}/sound-effects/sounds" "${HOME_IN_CONTAINER}/sounds"
-
-# Retrieve a secret from macOS Keychain
-# Usage: sec-get "Entry Name"
-function keychain_get {
-  local entry="$1"
-
-  if [[ -z "$entry" ]]; then
-    echo "Usage: sec-get \"Entry Name\""
-    return 1
-  fi
-
-  security find-generic-password -a "$USER" -s "$entry" -w
-}
 
 # 4. Run as your host UID:GID; HOME forced so "~" resolves for the passwd-less UID.
 #    NET_ADMIN is required for iptables/ipset; it is only exercisable via the
@@ -100,7 +95,6 @@ exec docker run \
   --user "$(id -u):$(id -g)" \
   --cap-add=NET_ADMIN \
   --env HOME="${HOME_IN_CONTAINER}" \
-  --env CLAUDE_CODE_OAUTH_TOKEN="$(keychain_get "claude_ouath_token")" \
   --env COLORTERM=truecolor \
   --volume "${PROJECT_DIR}:${REPO_IN_CONTAINER}" \
   --volume "${VOLUME}:${HOME_IN_CONTAINER}/.claude" \
