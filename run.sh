@@ -20,11 +20,30 @@ HOST_CLAUDE_DIR="${HOME}/.claude"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(pwd)"
 
-# 1. Build the image once (rebuild manually with: docker build -t claude-code:local "$SCRIPT_DIR").
-#    The image bakes in NO user/UID, so this same image works on macOS and Debian.
-if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
-  echo ">> Building ${IMAGE} (first run only)..."
-  docker build --tag "${IMAGE}" "${SCRIPT_DIR}"
+# 1. Build the image when it doesn't exist or when the build context has changed.
+#    A SHA-256 hash of the key files is stored as an image label at build time;
+#    on each run we recompute it and rebuild if it differs.
+context_hash() {
+  local files=(
+    "${SCRIPT_DIR}/Dockerfile"
+    "${SCRIPT_DIR}/entrypoint.sh"
+    "${SCRIPT_DIR}/init-firewall.sh"
+    "${SCRIPT_DIR}/allowed-domains.txt"
+  )
+  # Filter to files that actually exist, then hash them
+  local existing=()
+  for f in "${files[@]}"; do [ -f "$f" ] && existing+=("$f"); done
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "${existing[@]}"
+  else shasum -a 256 "${existing[@]}"; fi | sha256sum | cut -c1-16
+}
+
+CURRENT_HASH="$(context_hash)"
+IMAGE_HASH="$(docker image inspect "${IMAGE}" --format '{{index .Config.Labels "build.context-hash"}}' 2>/dev/null || true)"
+
+if [[ "$IMAGE_HASH" != "$CURRENT_HASH" ]]; then
+  [[ -n "$IMAGE_HASH" ]] && echo ">> Build context changed — rebuilding ${IMAGE}..." \
+                          || echo ">> Building ${IMAGE}..."
+  docker build --tag "${IMAGE}" --label "build.context-hash=${CURRENT_HASH}" "${SCRIPT_DIR}"
 fi
 
 # 2. Stable per-project volume name: claude-<dirname>-<short hash of full path>.

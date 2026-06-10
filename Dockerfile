@@ -73,7 +73,7 @@ RUN chmod 666 /etc/passwd /etc/group
 COPY allowed-domains.txt /etc/allowed-domains.txt
 COPY init-firewall.sh /usr/local/bin/init-firewall.sh
 RUN chmod +x /usr/local/bin/init-firewall.sh \
- && echo "ALL ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" \
+ && printf 'Defaults!/usr/local/bin/init-firewall.sh !pam_acct_mgmt\nALL ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh\n' \
       > /etc/sudoers.d/firewall \
  && chmod 0440 /etc/sudoers.d/firewall
 
