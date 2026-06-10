@@ -1,0 +1,19 @@
+# Outbound allowlist — copy to allowed-domains.txt (gitignored) and rebuild the image.
+# One hostname per line. Lines starting with # are ignored.
+
+# Claude Code API
+api.anthropic.com
+
+# Statsig (feature flags / telemetry)
+statsig.anthropic.com
+statsig.com
+
+# Error reporting
+sentry.io
+
+# npm registry
+registry.npmjs.org
+
+# GitHub
+api.github.com
+github.com

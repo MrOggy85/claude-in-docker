@@ -14,6 +14,8 @@ This is a solution for running claude code in a docker container. It assumes you
   - `claude.json` is gitignored. Contains onboarding state and your user-level MCP server config
 - copy `CLAUDE.md.example` to `CLAUDE.md`
   - `CLAUDE.md` is gitignored. Add your personal instructions for Claude Code here
+- copy `allowed-domains.txt.example` to `allowed-domains.txt`
+  - `allowed-domains.txt` is gitignored. Domains listed here are baked into the Docker image and are the only outbound destinations the container can reach. Rebuild the image after changing this file.
 
 ## MCP Servers
 

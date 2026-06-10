@@ -72,11 +72,14 @@ function keychain_get {
 }
 
 # 4. Run as your host UID:GID; HOME forced so "~" resolves for the passwd-less UID.
-#    The named volume mounts the whole ~/.claude; RO files layer on top of it.
+#    NET_ADMIN is required for iptables/ipset; it is only exercisable via the
+#    sudo rule scoped to /usr/local/bin/init-firewall.sh — no other escalation
+#    is possible from the non-root runtime user.
 #    "${ARR[@]+...}" keeps it safe under `set -u` on macOS bash 3.2.
 exec docker run \
   --interactive --tty --rm \
   --user "$(id -u):$(id -g)" \
+  --cap-add=NET_ADMIN \
   --env HOME="${HOME_IN_CONTAINER}" \
   --env CLAUDE_CODE_OAUTH_TOKEN="$(keychain_get "claude_ouath_token")" \
   --env COLORTERM=truecolor \

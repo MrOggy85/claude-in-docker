@@ -1,5 +1,6 @@
 settings.json
 claude.json
 CLAUDE.md
+allowed-domains.txt
 sound-effects/sounds/*
 !sound-effects/sounds/.gitkeep

@@ -24,6 +24,9 @@ RUN apt-get update \
   gnupg \
   dnsutils \
   man-db \
+  iptables \
+  ipset \
+  sudo \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code globally as root, into /usr/local (readable/executable by
@@ -55,7 +58,6 @@ RUN cat > /home/dev/.claude.json <<'JSON'
 }
 JSON
 
-# Make HOME writable for any runtime UID (settings/state/json can be rewritten).
 RUN chmod -R 777 /home/dev
 
 # The container runs as the host UID (see run.sh --user flag), which usually
@@ -63,6 +65,18 @@ RUN chmod -R 777 /home/dev
 # code calling getpwuid(). Make /etc/passwd writable and inject an entry for
 # the runtime UID at container start.
 RUN chmod 666 /etc/passwd /etc/group
+
+# Outbound firewall: allowed domains are baked in at build time; rules are
+# applied on each container start via a sudo-scoped call in the entrypoint.
+# The sudo rule is restricted to this one script so no other root escalation
+# is possible.
+COPY allowed-domains.txt /etc/allowed-domains.txt
+COPY init-firewall.sh /usr/local/bin/init-firewall.sh
+RUN chmod +x /usr/local/bin/init-firewall.sh \
+ && echo "ALL ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" \
+      > /etc/sudoers.d/firewall \
+ && chmod 0440 /etc/sudoers.d/firewall
+
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
