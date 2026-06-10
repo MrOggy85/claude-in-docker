@@ -4,8 +4,6 @@ This is a solution for running claude code in a docker container. It assumes you
 
 ## Prerequisites
 - docker
-- Claude Code Oauth Token
-  - saved in Apple keychain under the name `claude_ouath_token`
 
 ## Setup
 - copy `settings.json.example` to `settings.json`
@@ -16,6 +14,15 @@ This is a solution for running claude code in a docker container. It assumes you
   - `CLAUDE.md` is gitignored. Add your personal instructions for Claude Code here
 - copy `allowed-domains.txt.example` to `allowed-domains.txt`
   - `allowed-domains.txt` is gitignored. Domains listed here are baked into the Docker image and are the only outbound destinations the container can reach. Rebuild the image after changing this file.
+
+## Authentication
+
+The first time you run Claude Code, log in with the `/login` command and complete the OAuth
+flow. Your credentials are written to `.credentials.json` (next to `run.sh`, gitignored) and
+bind-mounted into the container, so a single login is shared across **every** project you run
+in the container — you only need to do it once.
+
+To force a re-login, delete `.credentials.json` (it is re-created empty on the next run).
 
 ## MCP Servers
 
