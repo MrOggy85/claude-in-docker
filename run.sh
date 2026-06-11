@@ -89,7 +89,10 @@ add_ro_mount "${SCRIPT_DIR}/sound-effects/sounds" "${HOME_IN_CONTAINER}/sounds"
 #    sudo rule scoped to /usr/local/bin/init-firewall.sh — no other escalation
 #    is possible from the non-root runtime user.
 #    "${ARR[@]+...}" keeps it safe under `set -u` on macOS bash 3.2.
-exec docker run \
+# Run without `exec` so control returns to this script after the session ends,
+# allowing the usage archive to be updated below.
+STATUS=0
+docker run \
   --name "${VOLUME}" \
   --interactive --tty --rm \
   --user "$(id -u):$(id -g)" \
@@ -102,4 +105,22 @@ exec docker run \
   ${RO_MOUNTS[@]+"${RO_MOUNTS[@]}"} \
   --workdir "${REPO_IN_CONTAINER}" \
   "${IMAGE}" \
-  claude "$@"
+  claude "$@" || STATUS=$?
+
+# 5. Copy this session's usage records into the shared archive
+#    (~/.claude-docker-usage) so `ccusage` can read them from the host. The
+#    transform lives in sync-volume.sh (shared with usage.sh): an allowlist that
+#    keeps only the cost fields ccusage reads, with cwd relabeled to
+#    /home/dev/<PROJ> for per-project reporting — conversation text, tool I/O,
+#    file snapshots, and attachments never leave the volume. See usage.sh for
+#    the same sync across every volume, plus the report. Set CLAUDE_AUTO_USAGE=0
+#    (or false/no/off) to skip.
+case "${CLAUDE_AUTO_USAGE:-1}" in 0|false|no|off|FALSE|NO|OFF) AUTO_USAGE=0 ;; *) AUTO_USAGE=1 ;; esac
+if [[ "${AUTO_USAGE}" == "1" ]]; then
+  ARCHIVE="${CLAUDE_USAGE_DIR:-${HOME}/.claude-docker-usage}"
+  if ! IMAGE="${IMAGE}" "${SCRIPT_DIR}/sync-volume.sh" "${VOLUME}" "${SAFE_NAME:-repo}" "${ARCHIVE}"; then
+    echo ">> WARNING: usage sync failed — run ${SCRIPT_DIR}/usage.sh to retry" >&2
+  fi
+fi
+
+exit "${STATUS}"
