@@ -91,6 +91,7 @@ add_ro_mount "${SCRIPT_DIR}/sound-effects/sounds" "${HOME_IN_CONTAINER}/sounds"
 #    is possible from the non-root runtime user.
 #    "${ARR[@]+...}" keeps it safe under `set -u` on macOS bash 3.2.
 exec docker run \
+  --name "${VOLUME}" \
   --interactive --tty --rm \
   --user "$(id -u):$(id -g)" \
   --cap-add=NET_ADMIN \
