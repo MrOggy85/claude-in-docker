@@ -120,7 +120,11 @@ Docker volumes rather than your host `~/.claude`, so running `npx ccusage` on th
 `ccusage` over the combined set. `run.sh` also refreshes the archive automatically after each
 session.
 
+Run it from this repository's checkout (unlike `claude`, which runs from your project
+directories):
+
 ```bash
+cd ~/code/claude-in-docker
 ./usage.sh                # monthly breakdown across all projects (default)
 ./usage.sh daily          # any ccusage subcommand or flags are passed through
 ./usage.sh monthly --json

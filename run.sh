@@ -118,10 +118,8 @@ docker run \
 case "${CLAUDE_AUTO_USAGE:-1}" in 0|false|no|off|FALSE|NO|OFF) AUTO_USAGE=0 ;; *) AUTO_USAGE=1 ;; esac
 if [[ "${AUTO_USAGE}" == "1" ]]; then
   ARCHIVE="${CLAUDE_USAGE_DIR:-${HOME}/.claude-docker-usage}"
-  if IMAGE="${IMAGE}" "${SCRIPT_DIR}/sync-volume.sh" "${VOLUME}" "${SAFE_NAME:-repo}" "${ARCHIVE}"; then
-    echo ">> usage synced to ${ARCHIVE}  (run ./usage.sh for a report)"
-  else
-    echo ">> WARNING: usage sync failed — run ./usage.sh to retry" >&2
+  if ! IMAGE="${IMAGE}" "${SCRIPT_DIR}/sync-volume.sh" "${VOLUME}" "${SAFE_NAME:-repo}" "${ARCHIVE}"; then
+    echo ">> WARNING: usage sync failed — run ${SCRIPT_DIR}/usage.sh to retry" >&2
   fi
 fi
 
