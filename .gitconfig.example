@@ -1,0 +1,13 @@
+# Copy to .gitconfig (gitignored) and edit. This file is bind-mounted read-only
+# over ~/.gitconfig inside the container, so git in the container uses it
+# instead of your host's global config.
+
+[user]
+	name = Your Name
+	email = you@example.com
+
+# The container runs as your host UID, which matches the mounted repo's owner,
+# so a safe.directory exception is normally unnecessary. Uncomment if you hit
+# "detected dubious ownership" (e.g. when the UID mapping differs).
+# [safe]
+#	directory = /home/dev/repo

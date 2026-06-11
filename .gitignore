@@ -1,6 +1,7 @@
 settings.json
 claude.json
 CLAUDE.md
+.gitconfig
 .credentials.json
 allowed-domains.txt
 sound-effects/sounds/*

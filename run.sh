@@ -81,8 +81,7 @@ add_ro_mount "${SCRIPT_DIR}/settings.json" "${HOME_IN_CONTAINER}/.claude/setting
 add_rw_mount "${SCRIPT_DIR}/claude.json"   "${HOME_IN_CONTAINER}/.claude.json"
 add_rw_mount "${CRED_FILE}"                 "${HOME_IN_CONTAINER}/.claude/.credentials.json"
 add_ro_mount "${SCRIPT_DIR}/CLAUDE.md"       "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
-# add_ro_mount "${HOME}/.claude/commands"      "${HOME_IN_CONTAINER}/.claude/commands"
-add_ro_mount "${HOME}/.gitconfig"            "${HOME_IN_CONTAINER}/.gitconfig"
+add_ro_mount "${SCRIPT_DIR}/.gitconfig"      "${HOME_IN_CONTAINER}/.gitconfig"
 add_ro_mount "${SCRIPT_DIR}/sound-effects/sounds" "${HOME_IN_CONTAINER}/sounds"
 
 # 4. Run as your host UID:GID; HOME forced so "~" resolves for the passwd-less UID.
