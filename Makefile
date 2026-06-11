@@ -1,15 +1,21 @@
 # Config files are created from their committed *.example templates.
-# `make init` copies any that don't exist yet; it never overwrites your edits.
-TEMPLATES := settings.json claude.json CLAUDE.md allowed-domains.txt .gitconfig
+# Each file is its own target with no prerequisites, so `make init` creates the
+# ones that are missing and leaves existing files (your edits) untouched.
 
 .PHONY: init
-init: ## Copy *.example templates to their target files (skips files that already exist)
-	@for f in $(TEMPLATES); do \
-	  if [ -e "$$f" ]; then \
-	    echo "skip   $$f (already exists)"; \
-	  elif [ -e "$$f.example" ]; then \
-	    cp "$$f.example" "$$f" && echo "create $$f"; \
-	  else \
-	    echo "warn   $$f.example missing" >&2; \
-	  fi; \
-	done
+init: settings.json claude.json CLAUDE.md allowed-domains.txt .gitconfig
+
+settings.json:
+	cp settings.json.example settings.json
+
+claude.json:
+	cp claude.json.example claude.json
+
+CLAUDE.md:
+	cp CLAUDE.md.example CLAUDE.md
+
+allowed-domains.txt:
+	cp allowed-domains.txt.example allowed-domains.txt
+
+.gitconfig:
+	cp .gitconfig.example .gitconfig
