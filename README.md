@@ -10,14 +10,18 @@ It is **not** an air-gapped, 100% secure setup. It is a solution to mitigate the
 - docker
 
 ## Setup
-- copy `settings.json.example` to `settings.json`
-  - `settings.json` is gitignored. Add your own settings here that will be used by Claude Code
-- copy `claude.json.example` to `claude.json`
-  - `claude.json` is gitignored. Contains onboarding state and your user-level MCP server config
-- copy `CLAUDE.md.example` to `CLAUDE.md`
-  - `CLAUDE.md` is gitignored. Add your personal instructions for Claude Code here
-- copy `allowed-domains.txt.example` to `allowed-domains.txt`
-  - `allowed-domains.txt` is gitignored. Domains listed here are baked into the Docker image and are the only outbound destinations the container can reach. Rebuild the image after changing this file.
+
+**tl;dr**
+Run `make init`
+
+This copies every `*.example` template to its target in one step (existing files are left untouched), then edit the copies.
+All of the following files are gitignored and your personal files:
+
+- `settings.json` add your own settings here that will be used by Claude Code
+- `claude.json` contains onboarding state and your user-level MCP server config
+- `CLAUDE.md` add your personal instructions for Claude Code here
+- `allowed-domains.txt` domains listed here are baked into the Docker image and are the only outbound destinations the container can reach. Rebuild the image after changing this file.
+- `.gitconfig` set your git `user.name` / `user.email` here.
 
 ## Authentication
 
