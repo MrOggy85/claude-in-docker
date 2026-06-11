@@ -110,3 +110,10 @@ function claude {
 ## Additional Information
 
 See [docs/index.md](docs/index.md) for guides on optional features.
+
+## Credits
+
+This solution is heavily inspired by Anthropic's own approach to running Claude Code in a [devcontainer](https://containers.dev/):
+
+- [Anthropic's devcontainer Dockerfile](https://github.com/anthropics/claude-code/blob/main/.devcontainer/Dockerfile)
+- [Claude Code devcontainer docs](https://code.claude.com/docs/en/devcontainer)
