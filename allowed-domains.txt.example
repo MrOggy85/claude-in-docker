@@ -14,9 +14,8 @@ sentry.io
 # npm registry
 registry.npmjs.org
 
-# GitHub
-api.github.com
-github.com
+# GitHub MCP
+api.githubcopilot.com
 
 # Atlassian MCP
 mcp.atlassian.com

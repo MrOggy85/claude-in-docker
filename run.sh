@@ -96,6 +96,7 @@ exec docker run \
   --cap-add=NET_ADMIN \
   --env HOME="${HOME_IN_CONTAINER}" \
   --env COLORTERM=truecolor \
+  --env MCP_GH_BEARER \
   --volume "${PROJECT_DIR}:${REPO_IN_CONTAINER}" \
   --volume "${VOLUME}:${HOME_IN_CONTAINER}/.claude" \
   ${RO_MOUNTS[@]+"${RO_MOUNTS[@]}"} \
