@@ -26,8 +26,13 @@ RUN apt-get update \
   man-db \
   iptables \
   ipset \
+  shellcheck \
   sudo \
     && rm -rf /var/lib/apt/lists/*
+
+# Debian ships fd-find and bat under non-canonical names; add the usual aliases.
+RUN ln -s "$(command -v fdfind)" /usr/local/bin/fd \
+ && ln -s "$(command -v batcat)" /usr/local/bin/bat
 
 # Install Claude Code globally as root, into /usr/local (readable/executable by
 # every user). Because the install is root-owned, we disable the self-updater so
