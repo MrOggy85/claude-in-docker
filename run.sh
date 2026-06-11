@@ -6,7 +6,12 @@
 # Mounts:
 #   - $(pwd)    -> /home/dev/repo     (the project you launch this from)
 #   - ~/.claude -> /home/dev/.claude  (your settings/config/credentials)
+#   - $CLAUDE_MOUNTS                   (optional extra folders, see step 3b)
 # Working dir is set to /home/dev/repo, then `claude` runs.
+#
+# All script arguments are forwarded verbatim to `claude`. Extra host folders
+# are mounted via the CLAUDE_MOUNTS env var (not flags), so they don't consume
+# any positional args meant for claude.
 
 set -euo pipefail
 
@@ -83,6 +88,52 @@ add_rw_mount "${CRED_FILE}"                 "${HOME_IN_CONTAINER}/.claude/.crede
 add_ro_mount "${SCRIPT_DIR}/CLAUDE.md"       "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
 add_ro_mount "${SCRIPT_DIR}/.gitconfig"      "${HOME_IN_CONTAINER}/.gitconfig"
 add_ro_mount "${SCRIPT_DIR}/sound-effects/sounds" "${HOME_IN_CONTAINER}/sounds"
+
+# 3b. Extra project mounts (read-only by default). Set CLAUDE_MOUNTS to a
+#     comma-separated list of host folders; each is mounted at
+#     /home/dev/<basename>. Append ":rw" to an entry to make it writable
+#     (":ro" is accepted to be explicit). Paths may use ~ and may be relative
+#     (resolved against the launch dir):
+#       CLAUDE_MOUNTS="~/shared-lib,../other-repo:rw" ./run.sh
+#     The primary repo (pwd -> /home/dev/repo) and the per-project session
+#     volume are unaffected; usage tracking still keys off the primary repo.
+USED_TARGETS=" ${REPO_IN_CONTAINER} ${HOME_IN_CONTAINER}/.claude "
+if [[ -n "${CLAUDE_MOUNTS:-}" ]]; then
+  IFS=',' read -r -a EXTRA_MOUNTS <<< "${CLAUDE_MOUNTS}"
+  for entry in ${EXTRA_MOUNTS[@]+"${EXTRA_MOUNTS[@]}"}; do
+    # trim surrounding whitespace
+    entry="${entry#"${entry%%[![:space:]]*}"}"
+    entry="${entry%"${entry##*[![:space:]]}"}"
+    [[ -z "$entry" ]] && continue
+    # optional :rw / :ro suffix selects mode (default read-only)
+    mode="ro"
+    case "$entry" in
+      *:rw) mode="rw"; entry="${entry%:rw}" ;;
+      *:ro)            entry="${entry%:ro}" ;;
+    esac
+    # expand leading ~, resolve relative paths against the launch dir
+    case "$entry" in
+      "~")   entry="${HOME}" ;;
+      "~/"*) entry="${HOME}/${entry#\~/}" ;;
+      /*)    ;;
+      *)     entry="${PROJECT_DIR}/${entry}" ;;
+    esac
+    if [[ ! -e "$entry" ]]; then
+      echo ">> skipping extra mount (not found on host): $entry" >&2; continue
+    fi
+    # canonicalise without relying on realpath (absent on stock macOS)
+    if [[ -d "$entry" ]]; then host="$(cd "$entry" && pwd)"
+    else                       host="$(cd "$(dirname "$entry")" && pwd)/$(basename "$entry")"; fi
+    base="$(basename "$host")"
+    target="${HOME_IN_CONTAINER}/${base}"
+    if [[ "$USED_TARGETS" == *" ${target} "* ]]; then
+      echo ">> skipping extra mount (target ${target} already in use): $host" >&2; continue
+    fi
+    USED_TARGETS+="${target} "
+    RO_MOUNTS+=(--volume "${host}:${target}:${mode}")
+    echo ">> extra mount (${mode}): ${host} -> ${target}"
+  done
+fi
 
 # 4. Run as your host UID:GID; HOME forced so "~" resolves for the passwd-less UID.
 #    NET_ADMIN is required for iptables/ipset; it is only exercisable via the
