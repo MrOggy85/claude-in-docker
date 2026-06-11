@@ -17,3 +17,8 @@ registry.npmjs.org
 # GitHub
 api.github.com
 github.com
+
+# Atlassian MCP
+mcp.atlassian.com
+# OAuth dynamic client registration + token exchange endpoints (separate host)
+cf.mcp.atlassian.com
