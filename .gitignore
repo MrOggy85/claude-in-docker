@@ -1,9 +1,11 @@
+.claude/
 settings.json
 claude.json
 CLAUDE.md
 .gitconfig
 .credentials.json
 allowed-domains.txt
+install_additional_packages.sh
 sound-effects/sounds/*
 !sound-effects/sounds/.gitkeep
 .claude-docker-usage/

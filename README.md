@@ -22,6 +22,7 @@ All of the following files are gitignored and your personal files:
 - `CLAUDE.md` add your personal instructions for Claude Code here
 - `allowed-domains.txt` domains listed here are baked into the Docker image and are the only outbound destinations the container can reach. Rebuild the image after changing this file.
 - `.gitconfig` set your git `user.name` / `user.email` here.
+- `install_additional_packages.sh` runs at image build time as root; add commands here to install extra tools a workflow needs (e.g. Deno). Rebuild the image after changing this file.
 
 ## Run
 
