@@ -11,13 +11,11 @@
 # host directory, then runs ccusage over the combined set. It does NOT touch the
 # live session volumes, so per-project resume/isolation is unaffected.
 #
-# Privacy: this is an allowlist, not a denylist. Each record is rebuilt from
-# scratch keeping ONLY the fields ccusage reads to compute cost (timestamp,
-# message.usage, message.model, message.id, requestId, costUSD,
-# isApiErrorMessage), plus a relabeled cwd for per-project grouping. Records that
-# carry no token usage are dropped entirely. Everything else — conversation text,
-# thinking, tool inputs/outputs, file snapshots, AI titles, attachments — never
-# leaves the volume because it is never copied in the first place.
+# Privacy: the copy is an allowlist, not a denylist — each record is rebuilt
+# from scratch keeping ONLY the fields ccusage reads to compute cost, plus a
+# relabeled cwd for per-project grouping. The transform lives in sync-volume.sh
+# (shared with run.sh's per-session auto-sync); see that file for the
+# field-by-field breakdown.
 #
 # Usage:
 #   ./usage.sh                # monthly report (default)
@@ -33,57 +31,16 @@ set -euo pipefail
 IMAGE="claude-code:local"
 ARCHIVE="${CLAUDE_USAGE_DIR:-${HOME}/.claude-docker-usage}"
 CCUSAGE_VERSION="${CCUSAGE_VERSION:-latest}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Allowlist copy, run inside the image (which ships jq). The PROJ env var (the
-# real host project name) is supplied per volume below. For every *.jsonl in the
-# volume it writes a copy under /archive/projects/<PROJ>/ containing only the
-# records that carry token usage, each rebuilt from scratch with just the fields
-# ccusage reads:
-#   - timestamp             date grouping
-#   - message.usage         token counts — the basis of every cost number; only
-#                           input_tokens, output_tokens, cache_read_input_tokens,
-#                           cache_creation_input_tokens and the cache_creation
-#                           5m/1h split are kept (the split is priced separately).
-#                           The rest of the usage blob — iterations (a full second
-#                           copy of these counts), server_tool_use, service_tier,
-#                           inference_geo, speed — is dropped: ccusage never reads it.
-#   - message.model         which price list to apply
-#   - message.id, requestId ccusage's dedup keys, so resynced/resumed sessions
-#                           are never double-counted
-#   - costUSD               precomputed cost, when Claude Code already recorded it
-#   - isApiErrorMessage     lets ccusage exclude API-error turns from the total
-#   - cwd, rewritten to /home/dev/<PROJ> for per-project reporting (the in-volume
-#     path is always the fixed container dir, which would otherwise collapse every
-#     project into one); the destination folder carries the real name too.
-# Any record without message.usage is dropped, and any field not listed above is
-# never copied — so conversation text, thinking, tool I/O, file snapshots, AI
-# titles, and attachments cannot leak even if Claude Code adds new record types.
-# A file with any unparseable line is skipped wholesale, never copied verbatim.
-STRIP_SCRIPT='DEST="/archive/projects/${PROJ}"
-export CWD_VAL="/home/dev/${PROJ}"
-mkdir -p "$DEST"
-cd /data/projects 2>/dev/null || exit 0
-find . -name "*.jsonl" -type f | while IFS= read -r f; do
-  b="$(basename "$f")"
-  if jq -c "def clean: with_entries(select(.value != null)); if .message.usage then { timestamp: .timestamp, cwd: env.CWD_VAL, requestId: .requestId, costUSD: .costUSD, isApiErrorMessage: .isApiErrorMessage, message: ({ id: .message.id, model: .message.model, usage: (.message.usage | { input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, cache_creation } | clean) } | clean) } | clean else empty end" "$f" > "$DEST/$b.tmp" 2>/dev/null; then
-    mv "$DEST/$b.tmp" "$DEST/$b"
-  else
-    rm -f "$DEST/$b.tmp"
-    echo "skip (parse error): $f" >&2
-  fi
-done'
-
-# The archive contains plaintext session transcripts, so restrict it to the
-# owner (0700) before anything is written into it.
-mkdir -p "${ARCHIVE}/projects"
-chmod 700 "${ARCHIVE}" "${ARCHIVE}/projects"
-
-# All per-project session volumes created by run.sh are named claude-*.
+# All per-project session volumes created by run.sh are named claude-*. Docker's
+# name filter matches substrings anywhere in the name, so anchor the prefix with
+# grep to keep unrelated volumes (e.g. mydata-claude-store) out of the archive.
 # Read into an array via a loop rather than `mapfile`, which macOS bash 3.2 lacks.
 VOLUMES=()
 while IFS= read -r v; do
   [ -n "$v" ] && VOLUMES+=("$v")
-done < <(docker volume ls --quiet --filter 'name=claude-')
+done < <(docker volume ls --quiet | grep '^claude-' || true)
 if [ "${#VOLUMES[@]}" -eq 0 ]; then
   echo "No claude-* session volumes found — run a session via ./run.sh first." >&2
   exit 1
@@ -99,18 +56,10 @@ for v in "${VOLUMES[@]}"; do
   PROJ="${tmp%-*}"
   [ -n "${PROJ}" ] && [ "${PROJ}" != "${tmp}" ] || PROJ="${v}"
 
-  # Strip-and-relabel copy into the shared host archive. We override the image
-  # entrypoint (skip the firewall init — no NET_ADMIN needed here) and run as the
-  # host UID so the copied files are owned by you. Refreshing resumed sessions is
-  # safe: ccusage dedups by message id, so re-running never inflates totals.
-  docker run --rm \
-    --user "$(id -u):$(id -g)" \
-    --entrypoint sh \
-    --env PROJ="${PROJ}" \
-    --volume "${v}:/data:ro" \
-    --volume "${ARCHIVE}:/archive" \
-    "${IMAGE}" \
-    -c "${STRIP_SCRIPT}"
+  # Strip-and-relabel copy into the shared host archive (see sync-volume.sh).
+  # Refreshing resumed sessions is safe: ccusage dedups by message id, so
+  # re-running never inflates totals.
+  IMAGE="${IMAGE}" "${SCRIPT_DIR}/sync-volume.sh" "${v}" "${PROJ}" "${ARCHIVE}"
 done
 
 echo ">> Running ccusage over ${ARCHIVE}"

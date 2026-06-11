@@ -26,24 +26,29 @@ the volume). Because the logs never touch your host `~/.claude`, running
 
 ## How they reach `~/.claude-docker-usage/`
 
-The sync is a **strip-and-copy** step, not a bind mount. It runs in two places:
+The sync is a **strip-and-copy** step, not a bind mount. The transform itself
+lives in one place — `sync-volume.sh`, which syncs a single volume — and is
+invoked from two places:
 
 1. **Automatically after every session** (`run.sh`, step 5). When your `claude`
-   session exits, `run.sh` starts a second, short-lived container with the
-   entrypoint overridden to `sh`, mounting:
+   session exits, `run.sh` calls `sync-volume.sh` for that session's volume.
+   Gated by `CLAUDE_AUTO_USAGE` (default on; set to `0`/`false`/`no`/`off` to
+   skip).
 
-   ```
-   --volume "${VOLUME}:/data:ro"     # the session volume, read-only
-   --volume "${ARCHIVE}:/archive"    # ~/.claude-docker-usage, read-write
-   ```
+2. **On demand via `./usage.sh`**, which calls `sync-volume.sh` for **every**
+   `claude-*` volume on the machine, then runs `ccusage` over the combined
+   archive.
 
-   It runs a `jq` script that writes a sanitized copy of every `*.jsonl` to
-   `/archive/projects/<PROJECT>/`. Gated by `CLAUDE_AUTO_USAGE` (default on; set
-   to `0`/`false`/`no`/`off` to skip).
+`sync-volume.sh` starts a short-lived container with the entrypoint overridden
+to `sh`, mounting:
 
-2. **On demand via `./usage.sh`**, which does the same strip-and-copy but loops
-   over **every** `claude-*` volume on the machine, then runs `ccusage` over the
-   combined archive.
+```
+--volume "${VOLUME}:/data:ro"     # the session volume, read-only
+--volume "${ARCHIVE}:/archive"    # ~/.claude-docker-usage, read-write
+```
+
+and runs a `jq` script inside it (the image ships `jq`; the host need not) that
+writes a sanitized copy of every `*.jsonl` to `/archive/projects/<PROJECT>/`.
 
 ## What actually gets copied
 
@@ -78,7 +83,8 @@ created `0700` (owner-only) before anything is written into it.
 ```
 container: ~/.claude/projects/**/*.jsonl   (Docker volume claude-<proj>-<hash>)
         │
-        │  jq allowlist strip + cwd relabel   (run.sh on exit, or usage.sh on demand)
+        │  sync-volume.sh: jq allowlist strip + cwd relabel
+        │  (run.sh on exit, or usage.sh on demand)
         ▼
 host: ~/.claude-docker-usage/projects/<proj>/*.jsonl   (metadata only, 0700)
         │
@@ -96,6 +102,10 @@ host: ~/.claude-docker-usage/projects/<proj>/*.jsonl   (metadata only, 0700)
 
 ## Requirements and caveats
 
+- **The `claude-code:local` image must exist.** The strip-and-copy runs `jq` inside the image
+  (the host need not have it), and the image is built locally by `run.sh` — it cannot be pulled.
+  If it is missing (first run, or after an image prune), `sync-volume.sh` exits with a hint to
+  run `./run.sh` once to build it.
 - **`ccusage` must be available.** `usage.sh` prefers a globally installed `ccusage` and
   otherwise falls back to `npx`. Because the report runs on the host, outside the container's
   firewall, and `npx` executes a third-party package with your user privileges, install and
