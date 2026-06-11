@@ -89,7 +89,10 @@ add_ro_mount "${SCRIPT_DIR}/sound-effects/sounds" "${HOME_IN_CONTAINER}/sounds"
 #    sudo rule scoped to /usr/local/bin/init-firewall.sh — no other escalation
 #    is possible from the non-root runtime user.
 #    "${ARR[@]+...}" keeps it safe under `set -u` on macOS bash 3.2.
-exec docker run \
+# Run without `exec` so control returns to this script after the session ends,
+# allowing the usage archive to be updated below.
+STATUS=0
+docker run \
   --name "${VOLUME}" \
   --interactive --tty --rm \
   --user "$(id -u):$(id -g)" \
@@ -102,4 +105,52 @@ exec docker run \
   ${RO_MOUNTS[@]+"${RO_MOUNTS[@]}"} \
   --workdir "${REPO_IN_CONTAINER}" \
   "${IMAGE}" \
-  claude "$@"
+  claude "$@" || STATUS=$?
+
+# 5. Copy this session's usage records into the shared archive
+#    (~/.claude-docker-usage) so `ccusage` can read them from the host. This is an
+#    allowlist: each record is rebuilt keeping ONLY the cost fields ccusage reads
+#    (timestamp, message.usage, message.model, message.id, requestId, costUSD,
+#    isApiErrorMessage) plus a cwd relabeled to /home/dev/<PROJ> for per-project
+#    reporting; records without token usage are dropped and nothing else is copied,
+#    so conversation text, tool I/O, file snapshots, and attachments never leave the
+#    volume. See usage.sh for the same transform across every volume, plus the
+#    report. Set CLAUDE_AUTO_USAGE=0 (or false/no/off) to skip.
+case "${CLAUDE_AUTO_USAGE:-1}" in 0|false|no|off|FALSE|NO|OFF) AUTO_USAGE=0 ;; *) AUTO_USAGE=1 ;; esac
+if [[ "${AUTO_USAGE}" == "1" ]]; then
+  ARCHIVE="${CLAUDE_USAGE_DIR:-${HOME}/.claude-docker-usage}"
+  # Restrict the archive to the owner (0700) before writing into it.
+  mkdir -p "${ARCHIVE}/projects"
+  chmod 700 "${ARCHIVE}" "${ARCHIVE}/projects"
+  # Allowlist copy: for every *.jsonl, write a copy under /archive/projects/<PROJ>/
+  # keeping ONLY the records that carry token usage, each rebuilt with just the
+  # fields ccusage reads to compute cost (timestamp, message.usage, message.model,
+  # message.id, requestId, costUSD, isApiErrorMessage) and cwd rewritten to
+  # /home/dev/<PROJ>. Every other record and field is left behind, so conversation
+  # text, tool I/O, file snapshots, and attachments never leak. A file with any
+  # unparseable line is skipped wholesale, never copied verbatim.
+  STRIP_SCRIPT='DEST="/archive/projects/${PROJ}"
+export CWD_VAL="/home/dev/${PROJ}"
+mkdir -p "$DEST"
+cd /data/projects 2>/dev/null || exit 0
+find . -name "*.jsonl" -type f | while IFS= read -r f; do
+  b="$(basename "$f")"
+  if jq -c "def clean: with_entries(select(.value != null)); if .message.usage then { timestamp: .timestamp, cwd: env.CWD_VAL, requestId: .requestId, costUSD: .costUSD, isApiErrorMessage: .isApiErrorMessage, message: ({ id: .message.id, model: .message.model, usage: .message.usage } | clean) } | clean else empty end" "$f" > "$DEST/$b.tmp" 2>/dev/null; then
+    mv "$DEST/$b.tmp" "$DEST/$b"
+  else
+    rm -f "$DEST/$b.tmp"
+  fi
+done'
+  if docker run --rm \
+       --user "$(id -u):$(id -g)" \
+       --entrypoint sh \
+       --env PROJ="${SAFE_NAME:-repo}" \
+       --volume "${VOLUME}:/data:ro" \
+       --volume "${ARCHIVE}:/archive" \
+       "${IMAGE}" \
+       -c "${STRIP_SCRIPT}"; then
+    echo ">> usage synced to ${ARCHIVE}  (run ./usage.sh for a report)"
+  fi
+fi
+
+exit "${STATUS}"
