@@ -34,6 +34,12 @@ RUN apt-get update \
 RUN ln -s "$(command -v fdfind)" /usr/local/bin/fd \
  && ln -s "$(command -v batcat)" /usr/local/bin/bat
 
+# The repo is bind-mounted and owned by the host UID, which usually has no
+# /etc/passwd entry; git then flags the worktree as "dubious ownership" and
+# aborts. Mark all mounted repos safe at the system level (doesn't touch the
+# read-only ~/.gitconfig mounted at runtime).
+RUN git config --system --add safe.directory '*'
+
 # Install Claude Code globally as root, into /usr/local (readable/executable by
 # every user). Because the install is root-owned, we disable the self-updater so
 # a non-root runtime user doesn't fail trying to write to it.
