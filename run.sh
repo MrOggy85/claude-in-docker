@@ -64,6 +64,16 @@ SAFE_NAME="$(printf '%s' "${SAFE_NAME}" | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 
 VOLUME="${CLAUDE_VOLUME:-claude-${SAFE_NAME:-repo}-$(path_hash "${PROJECT_DIR}")}"
 echo ">> session volume: ${VOLUME}  (docker volume inspect ${VOLUME})"
 
+# 2b. Container name: human-readable base (no path hash) + a random suffix, so
+#     several sessions can run in the same folder against the SAME shared volume
+#     without colliding on --name. Decoupled from VOLUME on purpose. The
+#     container is removed on exit (--rm), so the suffix is throwaway. $RANDOM is
+#     a bash builtin (no pipe → safe under pipefail); two of them give 30 bits,
+#     ample for a handful of concurrent containers. Override with
+#     CLAUDE_CONTAINER_NAME=... to pin a specific name.
+CONTAINER_NAME="${CLAUDE_CONTAINER_NAME:-claude-${SAFE_NAME:-repo}-$(printf '%04x%04x' "${RANDOM}" "${RANDOM}")}"
+echo ">> container name: ${CONTAINER_NAME}"
+
 # 3. Config mounts, added only if the host path exists.
 RO_MOUNTS=()
 add_ro_mount() {  # <host_path> <container_path>
@@ -112,7 +122,7 @@ done < <(
 # allowing the usage archive to be updated below.
 STATUS=0
 docker run \
-  --name "${VOLUME}" \
+  --name "${CONTAINER_NAME}" \
   --interactive --tty --rm \
   --user "$(id -u):$(id -g)" \
   --cap-add=NET_ADMIN \
