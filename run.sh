@@ -113,6 +113,22 @@ done < <(
   "${SCRIPT_DIR}/scripts/extra-mounts.sh"
 )
 
+# 3c. Published ports. scripts/extra-ports.sh turns CLAUDE_PORTS (a
+#     comma-separated list) into `docker run --publish` specs so the host can
+#     reach a server inside the container. Each line is "<spec>\t<cport/proto>":
+#     the spec becomes a --publish flag; the container ports are collected into
+#     CONTAINER_OPEN_PORTS and passed to the in-container firewall, which must
+#     open them explicitly (its INPUT policy is DROP — publishing alone is not
+#     enough). See that script for the entry syntax.
+PUBLISH_ARGS=()
+OPEN_PORTS=()
+while IFS=$'\t' read -r spec cport; do
+  [[ -z "$spec" ]] && continue
+  PUBLISH_ARGS+=(--publish "$spec")
+  OPEN_PORTS+=("$cport")
+done < <(CLAUDE_PORTS="${CLAUDE_PORTS:-}" "${SCRIPT_DIR}/scripts/extra-ports.sh")
+CONTAINER_OPEN_PORTS="$(IFS=,; printf '%s' "${OPEN_PORTS[*]+${OPEN_PORTS[*]}}")"
+
 # 4. Run as your host UID:GID; HOME forced so "~" resolves for the passwd-less UID.
 #    NET_ADMIN is required for iptables/ipset; it is only exercisable via the
 #    sudo rule scoped to /usr/local/bin/init-firewall.sh — no other escalation
@@ -129,6 +145,8 @@ docker run \
   --env HOME="${HOME_IN_CONTAINER}" \
   --env COLORTERM=truecolor \
   --env MCP_GH_BEARER \
+  --env CONTAINER_OPEN_PORTS="${CONTAINER_OPEN_PORTS}" \
+  ${PUBLISH_ARGS[@]+"${PUBLISH_ARGS[@]}"} \
   --volume "${PROJECT_DIR}:${REPO_IN_CONTAINER}" \
   --volume "${VOLUME}:${HOME_IN_CONTAINER}/.claude" \
   ${RO_MOUNTS[@]+"${RO_MOUNTS[@]}"} \

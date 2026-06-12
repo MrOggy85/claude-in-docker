@@ -8,6 +8,8 @@ if ! getent group "$(id -g)" >/dev/null 2>&1; then
   echo "dev:x:$(id -g):" >> /etc/group
 fi
 
-sudo /usr/local/bin/init-firewall.sh
+# CONTAINER_OPEN_PORTS (set by run.sh from CLAUDE_PORTS) is passed as an argument
+# because sudo resets the environment. Empty when no ports are published.
+sudo /usr/local/bin/init-firewall.sh "${CONTAINER_OPEN_PORTS:-}"
 
 exec "$@"

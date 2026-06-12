@@ -6,6 +6,10 @@ set -euo pipefail
 DOMAINS_FILE="/etc/allowed-domains.txt"
 IPSET_NAME="allowed-ips"
 
+# Comma-separated "<port>/<proto>" list of inbound ports to accept, from
+# CLAUDE_PORTS via run.sh / entrypoint.sh. Optional; empty when unset.
+OPEN_PORTS="${1:-}"
+
 log() { echo "[firewall] $*" >&2; }
 
 if [[ ! -f "$DOMAINS_FILE" ]]; then
@@ -38,6 +42,23 @@ while IFS= read -r domain || [[ -n "$domain" ]]; do
 done < "$DOMAINS_FILE"
 
 iptables -A OUTPUT -m set --match-set "$IPSET_NAME" dst -j ACCEPT
+
+# Inbound ports published to the host (docker run --publish) arrive on this
+# container's INPUT chain as NEW connections, which the DROP policy below would
+# otherwise reject. Open each requested port explicitly. Values come from
+# run.sh as "<port>/<proto>"; validate defensively since this runs as root.
+if [[ -n "$OPEN_PORTS" ]]; then
+  IFS=',' read -r -a _ports <<< "$OPEN_PORTS"
+  for pp in ${_ports[@]+"${_ports[@]}"}; do
+    port="${pp%%/*}"; proto="${pp##*/}"
+    if [[ ! "$port" =~ ^[0-9]+$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
+      log "warn: ignoring invalid port spec '$pp'"; continue
+    fi
+    case "$proto" in tcp|udp) ;; *) log "warn: ignoring invalid proto in '$pp'"; continue ;; esac
+    iptables -A INPUT -p "$proto" --dport "$port" -j ACCEPT
+    log "open inbound: ${port}/${proto}"
+  done
+fi
 
 # Fail fast instead of silently dropping. A bare `-P OUTPUT DROP` makes blocked
 # connections hang until the client's own timeout; an explicit REJECT sends a TCP
