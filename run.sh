@@ -95,7 +95,7 @@ CRED_FILE="${SCRIPT_DIR}/.credentials.json"
 add_ro_mount "${SCRIPT_DIR}/settings.json" "${HOME_IN_CONTAINER}/.claude/settings.json"
 add_rw_mount "${SCRIPT_DIR}/claude.json"   "${HOME_IN_CONTAINER}/.claude.json"
 add_rw_mount "${CRED_FILE}"                 "${HOME_IN_CONTAINER}/.claude/.credentials.json"
-add_ro_mount "${SCRIPT_DIR}/CLAUDE.md"       "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
+add_ro_mount "${SCRIPT_DIR}/container-CLAUDE.md" "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
 add_ro_mount "${SCRIPT_DIR}/.gitconfig"      "${HOME_IN_CONTAINER}/.gitconfig"
 
 # 3b. Extra project mounts. scripts/extra-mounts.sh turns CLAUDE_MOUNTS (a

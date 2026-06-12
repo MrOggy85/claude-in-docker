@@ -1,7 +1,7 @@
 .claude/
 settings.json
 claude.json
-CLAUDE.md
+container-CLAUDE.md
 .gitconfig
 .credentials.json
 allowed-domains.txt

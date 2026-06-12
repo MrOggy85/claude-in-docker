@@ -3,7 +3,7 @@
 # ones that are missing and leaves existing files (your edits) untouched.
 
 .PHONY: init
-init: settings.json claude.json CLAUDE.md allowed-domains.txt .gitconfig install_additional_packages.sh
+init: settings.json claude.json container-CLAUDE.md allowed-domains.txt .gitconfig install_additional_packages.sh
 
 settings.json:
 	cp settings.json.example settings.json
@@ -11,8 +11,8 @@ settings.json:
 claude.json:
 	cp claude.json.example claude.json
 
-CLAUDE.md:
-	cp CLAUDE.md.example CLAUDE.md
+container-CLAUDE.md:
+	cp container-CLAUDE.md.example container-CLAUDE.md
 
 allowed-domains.txt:
 	cp allowed-domains.txt.example allowed-domains.txt
