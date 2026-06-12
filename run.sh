@@ -7,6 +7,9 @@
 #   - $(pwd)    -> /home/dev/repo     (the project you launch this from)
 #   - ~/.claude -> /home/dev/.claude  (your settings/config/credentials)
 #   - $CLAUDE_MOUNTS                   (optional extra folders, see step 3b)
+# By default every node_modules location is backed by a named volume and hidden
+# from the host (step 3d). Add more in-repo paths with $CLAUDE_VOLUME_PATHS, or
+# opt out with $SKIP_CLAUDE_VOLUME_PATHS.
 # Working dir is set to /home/dev/repo, then `claude` runs.
 #
 # All script arguments are forwarded verbatim to `claude`. Extra host folders
@@ -130,6 +133,67 @@ while IFS=$'\t' read -r spec cport; do
 done < <(CLAUDE_PORTS="${CLAUDE_PORTS:-}" "${SCRIPT_DIR}/scripts/extra-ports.sh")
 CONTAINER_OPEN_PORTS="$(IFS=,; printf '%s' "${OPEN_PORTS[*]+${OPEN_PORTS[*]}}")"
 
+# 3d. In-repo paths backed by named volumes — SECURE BY DEFAULT. Each path gets
+#     its own per-project named volume mounted at that path INSIDE the bind-
+#     mounted repo, so the path lives only in the container/volume and NOT on the
+#     host — keeping installed (untrusted) packages off the host disk while
+#     persisting them across runs. Nesting a volume over the repo bind mount is a
+#     standard Docker pattern (no conflict; the deeper mount wins for that
+#     subtree). A fresh volume is root-owned, so we chown it to the runtime UID
+#     once on creation (bypassing the entrypoint, which needs NET_ADMIN it isn't
+#     granted here).
+#
+#     By default every node_modules location is covered automatically: each
+#     directory containing a package.json (scripts/find-node-modules-paths.sh).
+#     Non-JS projects just pay one cheap find. Add more paths (e.g. a Deno cache)
+#     via CLAUDE_VOLUME_PATHS (comma-separated, repo-relative; "auto" re-triggers
+#     the node_modules scan). Opt OUT entirely by setting SKIP_CLAUDE_VOLUME_PATHS
+#     to any non-empty value (e.g. 1 or true).
+VOLUME_PATH_MOUNTS=()
+_seen_vol_paths=" "
+prepare_path_volume() {  # <repo-relative path>
+  local rel="$1" name target
+  case "$rel" in
+    /*|*..*) echo ">> skipping volume path (must be repo-relative, no '..'): $rel" >&2; return ;;
+  esac
+  case "$_seen_vol_paths" in *" ${rel} "*) return ;; esac   # dedup (auto + explicit may overlap)
+  _seen_vol_paths+="${rel} "
+  # If the host already holds files here, the volume masks them inside the
+  # container but the host copy persists — warn so the host can be kept clean.
+  if [ -n "$(ls -A "${PROJECT_DIR}/${rel}" 2>/dev/null)" ]; then
+    echo ">> WARNING: ${rel} already has contents on the host; the volume hides them in the container but the host copy remains — delete it to keep the host clean." >&2
+  fi
+  name="claude-vol-${SAFE_NAME:-repo}-$(path_hash "${PROJECT_DIR}/${rel}")"
+  target="${REPO_IN_CONTAINER}/${rel}"
+  if ! docker volume inspect "$name" >/dev/null 2>&1; then
+    docker volume create "$name" >/dev/null
+    docker run --rm --user 0:0 --entrypoint chown \
+      --volume "${name}:/v" "${IMAGE}" "$(id -u):$(id -g)" /v
+    echo ">> created path volume: ${name} -> ${target}" >&2
+  fi
+  VOLUME_PATH_MOUNTS+=(--volume "${name}:${target}")
+}
+expand_auto() {  # back ./node_modules for every package.json dir in the project
+  while IFS= read -r _p; do
+    [[ -n "$_p" ]] && prepare_path_volume "$_p"
+  done < <("${SCRIPT_DIR}/scripts/find-node-modules-paths.sh" "${PROJECT_DIR}")
+}
+if [[ -n "${SKIP_CLAUDE_VOLUME_PATHS:-}" ]]; then
+  echo ">> SKIP_CLAUDE_VOLUME_PATHS set — not isolating in-repo paths; node_modules etc. will land on the host" >&2
+else
+  expand_auto  # secure by default
+  # plus any user-specified extra paths
+  if [[ -n "${CLAUDE_VOLUME_PATHS:-}" ]]; then
+    IFS=',' read -r -a _vol_paths <<< "${CLAUDE_VOLUME_PATHS}"
+    for rel in ${_vol_paths[@]+"${_vol_paths[@]}"}; do
+      rel="${rel#"${rel%%[![:space:]]*}"}"; rel="${rel%"${rel##*[![:space:]]}"}"  # trim
+      rel="${rel#./}"; rel="${rel%/}"                                              # tidy ./ and trailing /
+      [[ -z "$rel" ]] && continue
+      if [[ "$rel" == "auto" ]]; then expand_auto; else prepare_path_volume "$rel"; fi
+    done
+  fi
+fi
+
 # 4. Run as your host UID:GID; HOME forced so "~" resolves for the passwd-less UID.
 #    NET_ADMIN is required for iptables/ipset; it is only exercisable via the
 #    sudo rule scoped to /usr/local/bin/init-firewall.sh — no other escalation
@@ -149,6 +213,7 @@ docker run \
   --env CONTAINER_OPEN_PORTS="${CONTAINER_OPEN_PORTS}" \
   ${PUBLISH_ARGS[@]+"${PUBLISH_ARGS[@]}"} \
   --volume "${PROJECT_DIR}:${REPO_IN_CONTAINER}" \
+  ${VOLUME_PATH_MOUNTS[@]+"${VOLUME_PATH_MOUNTS[@]}"} \
   --volume "${VOLUME}:${HOME_IN_CONTAINER}/.claude" \
   ${RO_MOUNTS[@]+"${RO_MOUNTS[@]}"} \
   --workdir "${REPO_IN_CONTAINER}" \
