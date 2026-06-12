@@ -38,6 +38,14 @@ while IFS= read -r domain || [[ -n "$domain" ]]; do
 done < "$DOMAINS_FILE"
 
 iptables -A OUTPUT -m set --match-set "$IPSET_NAME" dst -j ACCEPT
+
+# Fail fast instead of silently dropping. A bare `-P OUTPUT DROP` makes blocked
+# connections hang until the client's own timeout; an explicit REJECT sends a TCP
+# RST (-> immediate ECONNREFUSED) or an ICMP unreachable, so the process errors
+# out right away and names the host it failed to reach.
+iptables -A OUTPUT -p tcp -j REJECT --reject-with tcp-reset
+iptables -A OUTPUT       -j REJECT --reject-with icmp-port-unreachable
+
 iptables -P INPUT   DROP
 iptables -P FORWARD DROP
 iptables -P OUTPUT  DROP
