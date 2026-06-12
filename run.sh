@@ -34,6 +34,7 @@ context_hash() {
     "${SCRIPT_DIR}/entrypoint.sh"
     "${SCRIPT_DIR}/init-firewall.sh"
     "${SCRIPT_DIR}/allowed-domains.txt"
+    "${SCRIPT_DIR}/install_additional_packages.sh"
   )
   # Filter to files that actually exist, then hash them
   local existing=()
