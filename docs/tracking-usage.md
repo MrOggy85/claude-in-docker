@@ -17,10 +17,17 @@ cd ~/code/claude-in-docker
 ./usage.sh monthly --json
 ```
 
-The report runs `ccusage` on the host, so it needs to be available there. Install and audit it
-once with `npm i -g ccusage` (requires Node.js); `usage.sh` otherwise falls back to `npx`. The
-script can be re-run at any time — it only reads from the volumes, and `ccusage` deduplicates by
-message ID, so usage is never double-counted.
+`ccusage` is baked into the container image, so **no host Node/npm is required**. `usage.sh`
+uses a host-installed `ccusage` if you happen to have one (a fast path that skips the container);
+otherwise it runs the copy inside the image. The script can be re-run at any time — it only reads
+from the volumes, and `ccusage` deduplicates by message ID, so usage is never double-counted.
+
+The in-image run is fully **network-isolated** (`--network none --offline`): `ccusage`'s only
+network use is downloading the LiteLLM model-pricing table to turn tokens into costs, and
+`--offline` serves that from a snapshot bundled into the image at build time. The one tradeoff is
+that the snapshot can lag the very newest models, which would then report `$0.00` until you
+rebuild the image — though records that already carry Claude Code's precomputed cost stay correct.
+Set `CLAUDE_USAGE_ONLINE=1` to fetch live pricing instead when you need it.
 
 See [usage-sync.md](usage-sync.md) for how the sync works, what is (and isn't) copied,
 and the requirements and caveats (archive protection, volume pruning, project relabeling).
