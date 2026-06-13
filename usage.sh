@@ -22,15 +22,18 @@
 #   ./usage.sh daily          # any ccusage subcommand / flags pass through
 #   ./usage.sh monthly --json
 #
+# ccusage itself comes from the local image (baked in at build time), so no host
+# Node/npm/npx is required. A host-installed `ccusage` is used in preference when
+# present. The report runs fully offline with no network by default.
+#
 # Env:
-#   CLAUDE_USAGE_DIR   where to keep the aggregated logs (default: ~/.claude-docker-usage)
-#   CCUSAGE_VERSION    npm version used for the npx fallback (default: latest). A
-#                      globally installed `ccusage` is preferred over npx when present.
+#   CLAUDE_USAGE_DIR     where to keep the aggregated logs (default: ~/.claude-docker-usage)
+#   CLAUDE_USAGE_ONLINE  set to fetch live LiteLLM pricing instead of the image's
+#                        bundled snapshot (drops --offline and --network none)
 set -euo pipefail
 
 IMAGE="claude-code:local"
 ARCHIVE="${CLAUDE_USAGE_DIR:-${HOME}/.claude-docker-usage}"
-CCUSAGE_VERSION="${CCUSAGE_VERSION:-latest}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # All per-project session volumes created by run.sh are named claude-*. Docker's
@@ -63,11 +66,32 @@ for v in "${VOLUMES[@]}"; do
 done
 
 echo ">> Running ccusage over ${ARCHIVE}"
-# Prefer a globally installed `ccusage` (install once with `npm i -g ccusage` so
-# the package can be audited and is not re-fetched each run). Fall back to npx,
-# pinned to CCUSAGE_VERSION, rather than always pulling the latest release.
+# ccusage's only network use is downloading the LiteLLM model-pricing table to
+# turn token counts into costs (it never uploads your data). --offline serves
+# that from the snapshot bundled into the package at build time, so by default we
+# run fully offline and cut the container off from the network (--network none).
+# Set CLAUDE_USAGE_ONLINE=1 to fetch live pricing instead — useful when a model
+# is so new the bundled snapshot lacks it (such sessions would otherwise show
+# $0.00, though records already carrying Claude Code's costUSD stay correct).
+OFFLINE=(--offline); NET=(--network none)
+[ -n "${CLAUDE_USAGE_ONLINE:-}" ] && OFFLINE=() && NET=()
+
+# Prefer a host ccusage if one is installed (fast path, no container spin-up);
+# otherwise run the copy baked into the image, so no host Node/npm/npx is needed.
 if command -v ccusage >/dev/null 2>&1; then
-  CLAUDE_CONFIG_DIR="${ARCHIVE}" exec ccusage "${@:-monthly}"
-else
-  CLAUDE_CONFIG_DIR="${ARCHIVE}" exec npx --yes "ccusage@${CCUSAGE_VERSION}" "${@:-monthly}"
+  CLAUDE_CONFIG_DIR="${ARCHIVE}" exec ccusage ${OFFLINE[@]+"${OFFLINE[@]}"} "${@:-monthly}"
 fi
+
+# Run ccusage inside the local image. Mirrors sync-volume.sh: --rm, host UID so
+# any cache files ccusage writes are owned by you, and --entrypoint ccusage to
+# skip the firewall-init entrypoint (with --network none the container has no
+# network at all). Allocate a TTY only when stdout is one, so the table renders
+# interactively but piped/--json output isn't corrupted by escape codes.
+TTY=(); [ -t 1 ] && TTY=(-t)
+exec docker run --rm ${TTY[@]+"${TTY[@]}"} ${NET[@]+"${NET[@]}"} \
+  --user "$(id -u):$(id -g)" \
+  --entrypoint ccusage \
+  --env CLAUDE_CONFIG_DIR=/archive \
+  --volume "${ARCHIVE}:/archive" \
+  "${IMAGE}" \
+  ${OFFLINE[@]+"${OFFLINE[@]}"} "${@:-monthly}"

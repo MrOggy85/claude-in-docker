@@ -43,7 +43,14 @@ RUN git config --system --add safe.directory '*'
 # Install Claude Code globally as root, into /usr/local (readable/executable by
 # every user). Because the install is root-owned, we disable the self-updater so
 # a non-root runtime user doesn't fail trying to write to it.
-RUN npm install -g @anthropic-ai/claude-code typescript
+#
+# ccusage ships its platform-native binary without the executable bit and chmods
+# it on first run; that chmod fails with EPERM for the non-root runtime user
+# (chmod requires ownership). Set the bit here as root so the binary is already
+# executable at runtime and ccusage skips the chmod. The path is arch-specific
+# (@ccusage/ccusage-linux-<arch>), so match it by glob.
+RUN npm install -g @anthropic-ai/claude-code typescript ccusage \
+ && find /usr/local/lib/node_modules -type f -path '*@ccusage/*/bin/*' -exec chmod a+rx {} +
 ENV DISABLE_AUTOUPDATER=1
 
 # We run the container with `--user <your-host-uid>:<gid>` (see run.sh). That UID
