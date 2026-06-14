@@ -9,6 +9,7 @@ package usagesync
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/MrOggy85/claude-in-docker/internal/docker"
 )
 
 // SyncVolume copies the usage records from a session volume into archiveDir.
@@ -26,13 +29,15 @@ import (
 // <archiveDir>/projects/<proj>/<filename>.
 //
 // Parameters:
+//   - ctx: context for the docker invocations
+//   - runner: command executor (docker.RealRunner in production, a fake in tests)
 //   - image: Docker image that will be used as the reader container
 //   - volume: Docker volume name (e.g. "claude-myproject-abc123def0")
 //   - proj: human-readable project name used as the destination subdirectory
 //   - archiveDir: host path for the shared usage archive
-func SyncVolume(image, volume, proj, archiveDir string) error {
+func SyncVolume(ctx context.Context, runner docker.Runner, image, volume, proj, archiveDir string) error {
 	// Verify the image exists before trying to run it.
-	if err := exec.Command("docker", "image", "inspect", image).Run(); err != nil {
+	if _, code, err := runner.Output(ctx, "docker", []string{"image", "inspect", image}); err != nil || code != 0 {
 		return fmt.Errorf("image %s not found — run ./run.sh (or ./claude) once to build it", image)
 	}
 
@@ -61,21 +66,22 @@ find . -name '*.jsonl' -type f | sort | while IFS= read -r f; do
 done`
 
 	uidGid := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
-	cmd := exec.Command("docker", "run", "--rm",
+	out, code, err := runner.Output(ctx, "docker", []string{
+		"run", "--rm",
 		"--user", uidGid,
 		"--entrypoint", "sh",
-		"--volume", volume+":/data:ro",
+		"--volume", volume + ":/data:ro",
 		image,
 		"-c", listScript,
-	)
-	cmd.Stderr = os.Stderr
-
-	out, err := cmd.Output()
+	})
 	if err != nil {
 		return fmt.Errorf("read volume %s: %w", volume, err)
 	}
+	if code != 0 {
+		return fmt.Errorf("read volume %s: docker exited with code %d", volume, code)
+	}
 
-	return processOutput(string(out), cwdVal, destDir)
+	return processOutput(out, cwdVal, destDir)
 }
 
 // processOutput parses the delimited output from the container and writes

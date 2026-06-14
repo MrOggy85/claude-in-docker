@@ -20,12 +20,11 @@ import (
 )
 
 func main() {
-	os.Exit(run(os.Args[1:]))
+	os.Exit(run(os.Args[1:], docker.RealRunner{}))
 }
 
-func run(args []string) int {
+func run(args []string, runner docker.Runner) int {
 	ctx := context.Background()
-	runner := docker.RealRunner{}
 
 	// Resolve the binary's own directory as the build context (= SCRIPT_DIR in bash).
 	execPath, err := os.Executable()
@@ -133,7 +132,7 @@ func run(args []string) int {
 
 	// 5. Usage sync (runs after the session regardless of exit code).
 	if cfg.AutoUsage {
-		if err := usagesync.SyncVolume(cfg.Image, volumeName, safeName, cfg.UsageDir); err != nil {
+		if err := usagesync.SyncVolume(ctx, runner, cfg.Image, volumeName, safeName, cfg.UsageDir); err != nil {
 			fmt.Fprintf(os.Stderr, ">> WARNING: usage sync failed — run %s/usage.sh to retry\n", scriptDir)
 		}
 	}
