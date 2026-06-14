@@ -8,6 +8,7 @@ It is **not** an air-gapped, 100% secure setup. It is a solution to mitigate the
 
 ## Prerequisites
 - docker
+- go 1.21+ (for building the host binary; only needed once or after updates)
 
 ## Setup
 
@@ -24,17 +25,31 @@ All of the following files are gitignored and your personal files:
 - `.gitconfig` set your git `user.name` / `user.email` here.
 - `install_additional_packages.sh` runs at image build time as root; add commands here to install extra tools a workflow needs (e.g. Deno). Rebuild the image after changing this file.
 
+## Build the host binary
+
+The main entry point is a Go binary (`./claude`) that replaces the old `run.sh`. Build it once with:
+
+```bash
+make build
+```
+
+This produces two binaries in the repo root:
+- `claude` — the main run command (replaces `run.sh`)
+- `claude-usage` — the usage report command (replaces `usage.sh`)
+
+Both binaries are gitignored. `run.sh` and `usage.sh` are now thin shims that build the binary automatically if it is missing, so your existing shell alias keeps working with no changes.
+
 ## Run
 
 - `cd` to the folder you want to run Claude Code from
-- execute `run.sh` from that folder
+- execute `./claude` (or `./run.sh`) from that folder
 
-Any arguments you pass are forwarded verbatim to `claude` (e.g. `run.sh --model opus "fix the bug"`).
+Any arguments you pass are forwarded verbatim to `claude` (e.g. `./claude --model opus "fix the bug"`).
 
 ## Authentication
 
 The first time you run Claude Code, log in with the `/login` command and complete the OAuth
-flow. Your credentials are written to `.credentials.json` (next to `run.sh`, gitignored) and
+flow. Your credentials are written to `.credentials.json` (next to the binary, gitignored) and
 bind-mounted into the container, so a single login is shared across **every** project you run
 in the container — you only need to do it once.
 
@@ -47,6 +62,14 @@ Add this function to your shell profile (`~/.zshrc`, `~/.bashrc`, etc.) so you c
 ```bash
 function claude {
   ~/code/claude-in-docker/run.sh "$@"
+}
+```
+
+Or point it directly at the binary (skips the shim's build check, slightly faster):
+
+```bash
+function claude {
+  ~/code/claude-in-docker/claude "$@"
 }
 ```
 
