@@ -9,3 +9,8 @@ install_additional_packages.sh
 sound-effects/sounds/*
 !sound-effects/sounds/.gitkeep
 .claude-docker-usage/
+
+# Built Go binaries (produced by `make build` / run.sh shim)
+/claude
+/claude-usage
+/dist/
