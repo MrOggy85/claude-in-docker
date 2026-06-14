@@ -1,0 +1,309 @@
+#!/usr/bin/env bats
+#
+# Integration tests for run.sh
+#
+# These tests stub `docker` so no daemon is needed. The stub writes every
+# `docker run` invocation (one argument per line) to a file, letting us
+# assert which flags run.sh assembled without actually running a container.
+#
+# Run with: bats test/run.bats
+# Install bats: https://bats-core.readthedocs.io/en/stable/installation.html
+
+SCRIPT_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME}")/.." && pwd)"
+RUN_SH="${SCRIPT_DIR}/run.sh"
+
+setup() {
+  # Isolated working directory so PROJECT_DIR is clean per test
+  TEST_PROJECT_DIR="$(mktemp -d)"
+
+  # Scratch space for the docker stub's output files
+  STUB_DIR="$(mktemp -d)"
+  DOCKER_RUN_ARGS="${STUB_DIR}/docker-run-args.txt"
+  DOCKER_ALL_CALLS="${STUB_DIR}/docker-all-calls.txt"
+
+  # Create the docker stub. EOF is unquoted so ${STUB_DIR} vars expand now;
+  # \$1, \$@, etc. are escaped and become real $ in the written script.
+  mkdir -p "${STUB_DIR}/bin"
+  cat > "${STUB_DIR}/bin/docker" << EOF
+#!/usr/bin/env bash
+# Log every call (space-separated) for debugging
+echo "\$*" >> "${DOCKER_ALL_CALLS}"
+
+case "\$1" in
+  image)
+    # image inspect: return exit 1 so run.sh thinks the image is missing and
+    # proceeds to build it. The build call (next case) exits 0.
+    exit 1
+    ;;
+  build)
+    exit 0
+    ;;
+  volume)
+    case "\$2" in
+      inspect) exit 1 ;;   # volume not found -> run.sh will create + chown it
+      create)  exit 0 ;;
+    esac
+    ;;
+  run)
+    # The chown setup call (--entrypoint chown) fires when a new volume is
+    # created; just let it succeed silently.
+    if [[ "\$*" == *"--entrypoint chown"* ]]; then
+      exit 0
+    fi
+    # Main `docker run ... IMAGE claude [args]`: write one arg per line so
+    # tests can grep for exact flag/value pairs.
+    printf '%s\n' "\$@" > "${DOCKER_RUN_ARGS}"
+    exit 0
+    ;;
+esac
+exit 0
+EOF
+  chmod +x "${STUB_DIR}/bin/docker"
+
+  # Prepend stub to PATH
+  export PATH="${STUB_DIR}/bin:${PATH}"
+
+  # Ensure per-run.sh side-effects (credentials file) don't leak between tests
+  CRED_FILE="${SCRIPT_DIR}/.credentials.json"
+  _CRED_PRE_EXISTED=0
+  [ -e "${CRED_FILE}" ] && _CRED_PRE_EXISTED=1
+
+  # Convenience: run run.sh from the isolated project dir with test-safe env vars
+  # SKIP_CLAUDE_VOLUME_PATHS=1  — skip node_modules docker volume creation
+  # CLAUDE_AUTO_USAGE=0         — skip post-run usage sync
+  # MCP_GH_BEARER is unset/empty — avoid any accidental env leak
+  RUN_CMD=(
+    env
+      SKIP_CLAUDE_VOLUME_PATHS=1
+      CLAUDE_AUTO_USAGE=0
+      MCP_GH_BEARER=""
+    bash "${RUN_SH}"
+  )
+}
+
+teardown() {
+  rm -rf "${TEST_PROJECT_DIR}" "${STUB_DIR}"
+  # Remove .credentials.json only if we created it during this test
+  if [[ "${_CRED_PRE_EXISTED}" -eq 0 ]] && [ -e "${SCRIPT_DIR}/.credentials.json" ]; then
+    rm -f "${SCRIPT_DIR}/.credentials.json"
+  fi
+}
+
+# Helper: assert that DOCKER_RUN_ARGS contains a line that is exactly VALUE.
+# Each docker argument is written on its own line by the stub, so -x gives
+# precise per-argument matching with no regex interpretation.
+assert_run_arg() {
+  grep -xqF -- "$1" "${DOCKER_RUN_ARGS}" || {
+    echo "Expected docker run args to contain exactly: $1"
+    echo "Actual args:"
+    cat "${DOCKER_RUN_ARGS}" 2>/dev/null || echo "(args file not found)"
+    return 1
+  }
+}
+
+# Helper: assert a line is absent.
+refute_run_arg() {
+  if grep -xqF -- "$1" "${DOCKER_RUN_ARGS}" 2>/dev/null; then
+    echo "Expected docker run args NOT to contain: $1"
+    echo "Actual args:"
+    cat "${DOCKER_RUN_ARGS}"
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# --resume HASH forwarding
+# ---------------------------------------------------------------------------
+
+@test "--resume HASH is forwarded verbatim to claude" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}" --resume abc123
+  [ "$status" -eq 0 ]
+  assert_run_arg "--resume"
+  assert_run_arg "abc123"
+}
+
+@test "--resume with a longer hash is forwarded correctly" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}" --resume deadbeefcafe1234
+  [ "$status" -eq 0 ]
+  assert_run_arg "--resume"
+  assert_run_arg "deadbeefcafe1234"
+}
+
+# ---------------------------------------------------------------------------
+# CLI arguments forwarding
+# ---------------------------------------------------------------------------
+
+@test "no extra args: docker run ends with 'claude' and no extra flags" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  # 'claude' must appear as an argument (the command to run inside the container)
+  assert_run_arg "claude"
+  # No stray --resume in this run
+  refute_run_arg "--resume"
+}
+
+@test "multiple CLI flags are all forwarded to claude" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}" --dangerously-skip-permissions --no-update
+  [ "$status" -eq 0 ]
+  assert_run_arg "--dangerously-skip-permissions"
+  assert_run_arg "--no-update"
+}
+
+@test "positional argument (print) is forwarded to claude" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}" --print "hello world"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--print"
+  assert_run_arg "hello world"
+}
+
+# ---------------------------------------------------------------------------
+# CLAUDE_PORTS integration
+# ---------------------------------------------------------------------------
+
+@test "CLAUDE_PORTS=3000: docker run includes --publish 3000:3000/tcp" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_PORTS="3000" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--publish"
+  assert_run_arg "3000:3000/tcp"
+}
+
+@test "CLAUDE_PORTS=3000: CONTAINER_OPEN_PORTS env is set to 3000/tcp" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_PORTS="3000" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "CONTAINER_OPEN_PORTS=3000/tcp"
+}
+
+@test "CLAUDE_PORTS with two ports: both --publish flags appear" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_PORTS="3000,4000" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "3000:3000/tcp"
+  assert_run_arg "4000:4000/tcp"
+}
+
+@test "CLAUDE_PORTS with HOSTPORT:CPORT: correct --publish spec forwarded" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_PORTS="8080:3000" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "8080:3000/tcp"
+}
+
+@test "no CLAUDE_PORTS: no --publish flag in docker run" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_PORTS="" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  refute_run_arg "--publish"
+}
+
+# ---------------------------------------------------------------------------
+# CLAUDE_MOUNTS (RO_MOUNTS) integration
+# ---------------------------------------------------------------------------
+
+@test "CLAUDE_MOUNTS with real dir: --volume flag appears in docker run" {
+  local mount_src="${TEST_PROJECT_DIR}/extra"
+  mkdir -p "${mount_src}"
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_MOUNTS="${mount_src}" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--volume=${mount_src}:/home/dev/extra:ro"
+}
+
+@test "CLAUDE_MOUNTS with :rw: read-write volume flag appears" {
+  local mount_src="${TEST_PROJECT_DIR}/writable"
+  mkdir -p "${mount_src}"
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_MOUNTS="${mount_src}:rw" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--volume=${mount_src}:/home/dev/writable:rw"
+}
+
+@test "CLAUDE_MOUNTS with non-existent path: no extra --volume for that path" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_MOUNTS="/nonexistent/path-that-does-not-exist" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  refute_run_arg "--volume=/nonexistent/path-that-does-not-exist"
+}
+
+@test "no CLAUDE_MOUNTS: standard mounts still present, no extra volumes" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  # The primary repo mount is always present
+  assert_run_arg "${TEST_PROJECT_DIR}:/home/dev/repo"
+}
+
+# ---------------------------------------------------------------------------
+# Standard flags always present
+# ---------------------------------------------------------------------------
+
+@test "docker run always uses --rm" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--rm"
+}
+
+@test "docker run always sets HOME env in container" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "HOME=/home/dev"
+}
+
+@test "docker run always sets --cap-add=NET_ADMIN" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--cap-add=NET_ADMIN"
+}
