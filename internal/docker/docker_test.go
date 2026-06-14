@@ -262,19 +262,6 @@ func TestPreparePathVolumes_createsNewVolume(t *testing.T) {
 	}
 }
 
-func TestRunOrchestraton_exitCodePreserved(t *testing.T) {
-	// Test that docker run exit code is captured and returned correctly.
-	// The fake runner returns exit code 42 for the docker run call.
-	runner := &FakeRunner{ExitCodes: []int{42}}
-	code, err := runner.Run(context.Background(), "docker", []string{"run", "..."}, true)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if code != 42 {
-		t.Errorf("exit code = %d, want 42", code)
-	}
-}
-
 // ---- helpers ----
 
 func mustContainArg(t *testing.T, args []string, want string) {

@@ -62,10 +62,14 @@ func (r RealRunner) Output(ctx context.Context, name string, args []string) (str
 // FakeRunner records calls for testing. It never invokes real commands.
 type FakeRunner struct {
 	Commands  []FakeCall
-	ExitCodes []int // exit codes to return in order; 0 for any beyond the list
+	ExitCodes []int    // exit codes to return in order; 0 for any beyond the list
 	Outputs   []string // stdout values for Output calls
-	outIdx    int
-	codeIdx   int
+	// CodeFor, when non-nil, overrides ExitCodes: it returns the exit code for a
+	// given call, letting tests key behaviour off the command (e.g. "the
+	// interactive session run exits 42") instead of fragile call ordering.
+	CodeFor func(name string, args []string, interactive bool) int
+	outIdx  int
+	codeIdx int
 }
 
 // FakeCall records a single command invocation.
@@ -78,6 +82,9 @@ type FakeCall struct {
 
 func (f *FakeRunner) Run(ctx context.Context, name string, args []string, interactive bool) (int, error) {
 	f.Commands = append(f.Commands, FakeCall{Name: name, Args: args, Interactive: interactive})
+	if f.CodeFor != nil {
+		return f.CodeFor(name, args, interactive), nil
+	}
 	return f.nextCode(), nil
 }
 
@@ -87,6 +94,9 @@ func (f *FakeRunner) Output(ctx context.Context, name string, args []string) (st
 	if f.outIdx < len(f.Outputs) {
 		out = f.Outputs[f.outIdx]
 		f.outIdx++
+	}
+	if f.CodeFor != nil {
+		return out, f.CodeFor(name, args, false), nil
 	}
 	return out, f.nextCode(), nil
 }

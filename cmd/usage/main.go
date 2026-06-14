@@ -15,10 +15,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/MrOggy85/claude-in-docker/internal/docker"
 	"github.com/MrOggy85/claude-in-docker/internal/usagesync"
 )
 
@@ -27,6 +29,8 @@ func main() {
 }
 
 func run(args []string) int {
+	ctx := context.Background()
+	runner := docker.RealRunner{}
 	image := "claude-code:local"
 
 	archiveDir := os.Getenv("CLAUDE_USAGE_DIR")
@@ -49,7 +53,7 @@ func run(args []string) int {
 	fmt.Fprintf(os.Stderr, ">> Collecting transcripts from %d session volume(s) into %s\n", len(volumes), archiveDir)
 	for _, v := range volumes {
 		proj := usagesync.ProjNameFromVolume(v)
-		if err := usagesync.SyncVolume(image, v, proj, archiveDir); err != nil {
+		if err := usagesync.SyncVolume(ctx, runner, image, v, proj, archiveDir); err != nil {
 			fmt.Fprintf(os.Stderr, ">> WARNING: sync failed for %s: %v\n", v, err)
 		}
 	}
