@@ -38,6 +38,25 @@ if [[ "${PROJECT_DIR}" == "${HOME}" ]]; then
   exit 1
 fi
 
+# Guard: a project-level .claude/settings.json (or the .claude/settings.local.json
+# override) can register hooks that Claude Code runs inside the container —
+# arbitrary code execution from an untrusted repo. Refuse by default before doing
+# any work; set CLAUDE_ALLOW_PROJECT_SETTINGS=1 to opt in. See docs/attack-vectors.md.
+case "${CLAUDE_ALLOW_PROJECT_SETTINGS:-}" in
+  1|true|yes|on|TRUE|YES|ON) ;;  # opted in — skip the guard
+  *)
+    for _settings in settings.json settings.local.json; do
+      if [[ -f "${PROJECT_DIR}/.claude/${_settings}" ]]; then
+        echo "ERROR: refusing to run: ${PROJECT_DIR}/.claude/${_settings} exists." >&2
+        echo "  It can register hooks that run arbitrary commands in the container." >&2
+        echo "  Remove/vet it, or set CLAUDE_ALLOW_PROJECT_SETTINGS=1 to override." >&2
+        echo "  See docs/attack-vectors.md." >&2
+        exit 1
+      fi
+    done
+    ;;
+esac
+
 # 1. Build the image when it doesn't exist or when the build context has changed.
 #    A SHA-256 hash of the key files is stored as an image label at build time;
 #    on each run we recompute it and rebuild if it differs.

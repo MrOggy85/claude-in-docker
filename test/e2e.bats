@@ -169,61 +169,45 @@ teardown() {
 
 # ---------------------------------------------------------------------------
 # Scenario: malicious
-# A project whose .claude/settings.json contains a PreToolUse hook that tries
-# to execute malicious-file.sh. The test verifies:
-#   1. The project's settings.json is NOT bind-mounted as the global Claude
-#      settings — the container's global settings come from SCRIPT_DIR, not
-#      from the project.
-#   2. malicious-file.sh is NOT executed on the HOST when run.sh is invoked
-#      (the mock docker never runs a container, so the hook cannot fire).
+# A project whose .claude/settings.json registers a PreToolUse hook that runs
+# malicious-file.sh. Claude Code loads project-level settings from the mounted
+# repo and executes their hooks inside the container, so a project that ships
+# its own .claude/settings.json is an arbitrary-code-execution vector.
 #
-# NOTE: With a real Docker container running Claude Code this test would FAIL
-# because Claude Code loads and executes hooks from the project-level
-# .claude/settings.json. This is a known attack vector — see
-# docs/attack-vectors.md. The test is written so it will pass once a
-# mitigation (e.g. --no-project-settings, allowlist enforcement) is in place.
+# run.sh must refuse to launch the container at all when the project carries a
+# .claude/settings.json — that is the only point at which run.sh can intervene,
+# since once the container starts Claude Code would load and fire the hook.
+# Because the test uses mock docker (no real container, so the hook could never
+# fire here regardless), the meaningful assertion is that run.sh aborts with a
+# non-zero status and never issues the `docker run` that would start the
+# container — not a check on the sentinel file, which mock docker leaves untouched.
 # ---------------------------------------------------------------------------
 
-@test "malicious: scenario has preset-claude-settings.json describing the hook" {
-  [ -f "${SCENARIOS_DIR}/malicious/preset-claude-settings.json" ]
-}
-
-@test "malicious: preset-claude-settings.json references malicious-file.sh" {
-  grep -q "malicious-file.sh" "${SCENARIOS_DIR}/malicious/preset-claude-settings.json"
-}
-
-@test "malicious: scenario has malicious-file.sh" {
-  [ -f "${SCENARIOS_DIR}/malicious/malicious-file.sh" ]
-}
-
-@test "malicious: project .claude/settings.json is not bind-mounted as global Claude settings" {
+@test "malicious: run.sh refuses to launch a project containing .claude/settings.json" {
   local settings="${SCENARIOS_DIR}/malicious/preset-claude-settings.json"
   _stage_scenario "malicious" --with-claude-settings "${settings}"
   run_staged "${STAGED_DIR}"
-  [ "$status" -eq 0 ]
-  [ -f "${DOCKER_ARGS_FILE}" ]
 
-  # The malicious project settings must NOT be mounted at the global path.
-  # run.sh only mounts ${SCRIPT_DIR}/settings.json there (if it exists);
-  # the project's .claude/settings.json lands under /home/dev/repo inside
-  # the container, not at /home/dev/.claude/settings.json.
-  local global_target="/home/dev/.claude/settings.json"
-  local malicious_settings="${STAGED_DIR}/.claude/settings.json"
-  ! grep -qF "${malicious_settings}:${global_target}" "${DOCKER_ARGS_FILE}"
+  # The guard must abort run.sh before any container is launched.
+  [ "$status" -ne 0 ]
+  # Mock docker only writes DOCKER_ARGS_FILE when the main `docker run` fires.
+  # If the guard worked, the container was never started, so the file is
+  # absent/empty and malicious-file.sh can never have run.
+  [ ! -s "${DOCKER_ARGS_FILE}" ]
 }
 
-@test "malicious: malicious-file.sh is not executed on the host" {
+@test "malicious: CLAUDE_ALLOW_PROJECT_SETTINGS=1 overrides the guard" {
   local settings="${SCENARIOS_DIR}/malicious/preset-claude-settings.json"
   _stage_scenario "malicious" --with-claude-settings "${settings}"
 
-  local sentinel="${STAGED_DIR}/malicious_was_executed"
-  rm -f "${sentinel}"
+  run --separate-stderr env \
+    PATH="${MOCK_BIN}:${PATH}" \
+    CLAUDE_AUTO_USAGE=0 \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_ALLOW_PROJECT_SETTINGS=1 \
+    bash -c "cd '${STAGED_DIR}' && bash '${RUN_SH}'"
 
-  run_staged "${STAGED_DIR}"
+  # With the opt-in set, run.sh proceeds and launches the container as usual.
   [ "$status" -eq 0 ]
-
-  # The hook in .claude/settings.json would run malicious-file.sh only when
-  # Claude Code executes inside the container. With mock docker no container
-  # runs, so the sentinel file must not exist on the host.
-  [ ! -f "${sentinel}" ]
+  [ -s "${DOCKER_ARGS_FILE}" ]
 }
