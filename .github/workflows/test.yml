@@ -1,6 +1,7 @@
 name: Tests
 on:
   push:
+    branches: [master]
     paths: ['run.sh', 'scripts/**', 'test/**', '.github/workflows/test.yml']
   pull_request:
     paths: ['run.sh', 'scripts/**', 'test/**', '.github/workflows/test.yml']
