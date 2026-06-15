@@ -223,6 +223,16 @@ else
   fi
 fi
 
+# 3e. Optional arbitrary env vars from a gitignored `.env` next to run.sh, via
+#     `docker --env-file`. Emitted before the explicit `--env` flags so it can't
+#     clobber them (last duplicate wins). See docs/passing-env-vars.md.
+ENV_FILE="${SCRIPT_DIR}/.env"
+ENV_FILE_ARGS=()
+if [ -f "$ENV_FILE" ]; then
+  ENV_FILE_ARGS+=(--env-file "$ENV_FILE")
+  echo ">> env file: ${ENV_FILE}"
+fi
+
 # 4. Run as your host UID:GID; HOME forced so "~" resolves for the passwd-less UID.
 #    NET_ADMIN is required for iptables/ipset; it is only exercisable via the
 #    sudo rule scoped to /usr/local/bin/init-firewall.sh — no other escalation
@@ -236,6 +246,7 @@ docker run \
   --interactive --tty --rm \
   --user "$(id -u):$(id -g)" \
   --cap-add=NET_ADMIN \
+  ${ENV_FILE_ARGS[@]+"${ENV_FILE_ARGS[@]}"} \
   --env HOME="${HOME_IN_CONTAINER}" \
   --env COLORTERM=truecolor \
   --env MCP_GH_BEARER \
