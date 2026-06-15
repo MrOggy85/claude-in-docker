@@ -2,7 +2,7 @@
 # Each file is its own target with no prerequisites, so `make init` creates the
 # ones that are missing and leaves existing files (your edits) untouched.
 
-.PHONY: init bats test test-extra-mounts test-extra-ports test-run
+.PHONY: init bats test test-extra-mounts test-extra-ports test-run test-e2e
 init: settings.json claude.json container-CLAUDE.md allowed-domains.txt .gitconfig install_additional_packages.sh
 
 # Install bats. Picks the package manager by platform.
@@ -34,6 +34,9 @@ test-extra-ports:
 
 test-run:
 	bats test/run.bats
+
+test-e2e:
+	bats test/e2e.bats
 
 settings.json:
 	cp settings.json.example settings.json
