@@ -2,9 +2,9 @@ name: Tests
 on:
   push:
     branches: [master]
-    paths: ['run.sh', 'scripts/**', 'test/**', 'e2e/**', '.github/workflows/test.yml']
+    paths: ['run.sh', 'scripts/**', 'test/**', '.github/workflows/test.yml']
   pull_request:
-    paths: ['run.sh', 'scripts/**', 'test/**', 'e2e/**', '.github/workflows/test.yml']
+    paths: ['run.sh', 'scripts/**', 'test/**', '.github/workflows/test.yml']
 jobs:
   bats:
     runs-on: ubuntu-latest
