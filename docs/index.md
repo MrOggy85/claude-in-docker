@@ -1,5 +1,6 @@
 # Additional Information
 
+- [Outbound Firewall](firewall.md) — the default-deny network boundary, the domain allowlist, and how IP rotation is handled
 - [MCP Servers](mcp-servers.md) — configure user-level, project-level, and GitHub MCP servers
 - [Mounting Extra Folders](mounting-extra-folders.md) — mount additional host folders into the container via `CLAUDE_MOUNTS`
 - [Publishing Ports](publishing-ports.md) — expose a server running inside the container to the host via `CLAUDE_PORTS`

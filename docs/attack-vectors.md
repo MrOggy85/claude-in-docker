@@ -6,13 +6,23 @@ These are known attack vectors that are not handled by this solution.
 
 If you run Claude in this folder, Claude can update `allowed-domains.txt` by itself. This is a very narrow threat which only applies if this folder is mounted in the container.
 
-Note that the change does not take effect at runtime. `allowed-domains.txt` is read only at image build time (baked into `/etc/allowed-domains.txt`), and the firewall resolves it to IPs once at container start. So Claude editing the mounted file cannot widen the live firewall — it only stages a new domain that takes effect on the next `./run.sh` rebuild.
+Note that the change does not take effect at runtime. `allowed-domains.txt` is read only at image build time (baked into `/etc/allowed-domains.txt`). The firewall — both its startup resolution and the [background refresher](firewall.md#ip-rotation-and-the-background-refresher) that re-resolves rotating IPs during the session — reads only that baked copy, never the mounted repo file. So Claude editing the mounted file cannot widen the live firewall — it only stages a new domain that takes effect on the next `./run.sh` rebuild.
 
 ## Firewall Boundary Disclosure via Fast-Fail
 
 The firewall REJECTs non-whitelisted outbound connections (TCP RST / ICMP unreachable) rather than silently dropping them, so a blocked connection fails immediately with `ECONNREFUSED` instead of hanging until timeout. This is a deliberate DX tradeoff: it also lets any in-container process map the firewall boundary by probing — attempting connections and observing refused-vs-accepted — quickly and without timeouts.
 
 This does not let a process *reach* a blocked destination; it only reveals which destinations are allowed. The whitelist is not secret (it is committed in `allowed-domains.txt`), so the disclosure is low impact. It is noted here because the prior silent-drop behavior made such probing slow and impractical, and the fast-fail change removes that friction.
+
+## Allowlist Is IP-Based, Not Hostname-Based
+
+The allowlist names **hostnames**, but the firewall enforces on **destination IP**: `init-firewall.sh` resolves each hostname to IPs and matches those in an ipset. It never inspects the TLS SNI or HTTP `Host` header. The actual policy is therefore *"any hostname reachable at an IP currently in the ipset is allowed"* — not *"only the hostnames you listed."*
+
+This matters when an allowed host shares IPs with hosts you did **not** intend to allow — common on CDN/shared infrastructure. If `evil.example` (or another domain on the same provider) is served from an IP that one of your allowed hostnames also resolves to, a process in the container can reach it by connecting to that IP with a different SNI/`Host`; the firewall cannot tell the difference. Equally, a domain you deliberately excluded becomes reachable if it is ever served from an already-allowed IP.
+
+Concrete example: the allowlist intends to permit `api.githubcopilot.com` only, **not** `api.github.com`, `github.com`, or `raw.githubusercontent.com`. As of this writing those happen to sit on separate networks — `api.githubcopilot.com` on GitHub's own range (`140.82.112.0/20`), the web/API on Azure (`20.27.177.0/24`), and `raw`/`objects` on Fastly (`185.199.108.0/22`) — so allowing the Copilot IPs does not grant the others **in practice today**. But that is an artifact of GitHub's current infra split, not something this firewall enforces: if GitHub serves `api.github.com` from a `140.82.112.x` address again (it historically did), or if a Copilot edge IP also answers for the `api.github.com` vhost, that traffic would be permitted. The IP allowlist cannot prevent it.
+
+Enforcing a true per-hostname policy requires moving the check to L7 — e.g. an egress proxy that filters on TLS SNI and is the only permitted outbound destination, with the firewall blocking all direct egress. That is not implemented here; the IP allowlist is a deliberately simpler boundary that is sufficient when allowed hosts do not share infrastructure with untrusted ones. See [Outbound Firewall](firewall.md) for how the allowlist and its IP resolution work.
 
 ## Untrusted Package Artifacts on the Host
 
