@@ -5,6 +5,9 @@
 # Run with: bats test/extra-mounts.bats
 # Install bats: https://bats-core.readthedocs.io/en/stable/installation.html
 
+# `run --separate-stderr` (used to assert on stdout only) needs bats >= 1.5.0.
+bats_require_minimum_version 1.5.0
+
 SCRIPT_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME}")/.." && pwd)"
 EXTRA_MOUNTS="${SCRIPT_DIR}/scripts/extra-mounts.sh"
 
@@ -23,19 +26,19 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "unset CLAUDE_MOUNTS: exits 0 with no output" {
-  run bash "${EXTRA_MOUNTS}"
+  run --separate-stderr bash "${EXTRA_MOUNTS}"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
 
 @test "empty CLAUDE_MOUNTS: exits 0 with no output" {
-  run env CLAUDE_MOUNTS="" bash "${EXTRA_MOUNTS}"
+  run --separate-stderr env CLAUDE_MOUNTS="" bash "${EXTRA_MOUNTS}"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
 
 @test "whitespace-only entry: exits 0 with no output" {
-  run env CLAUDE_MOUNTS="   " bash "${EXTRA_MOUNTS}"
+  run --separate-stderr env CLAUDE_MOUNTS="   " bash "${EXTRA_MOUNTS}"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
@@ -45,7 +48,7 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "absolute path: emits --volume=host:target:ro" {
-  run env \
+  run --separate-stderr env \
     CLAUDE_MOUNTS="${TEST_DIR}" \
     PROJECT_DIR="${TEST_TMP}" \
     HOME_IN_CONTAINER="/home/dev" \
@@ -55,7 +58,7 @@ teardown() {
 }
 
 @test ":ro suffix: emits read-only mount" {
-  run env \
+  run --separate-stderr env \
     CLAUDE_MOUNTS="${TEST_DIR}:ro" \
     PROJECT_DIR="${TEST_TMP}" \
     HOME_IN_CONTAINER="/home/dev" \
@@ -65,7 +68,7 @@ teardown() {
 }
 
 @test ":rw suffix: emits read-write mount" {
-  run env \
+  run --separate-stderr env \
     CLAUDE_MOUNTS="${TEST_DIR}:rw" \
     PROJECT_DIR="${TEST_TMP}" \
     HOME_IN_CONTAINER="/home/dev" \
@@ -75,7 +78,7 @@ teardown() {
 }
 
 @test "whitespace around entry is trimmed" {
-  run env \
+  run --separate-stderr env \
     CLAUDE_MOUNTS="  ${TEST_DIR}  " \
     PROJECT_DIR="${TEST_TMP}" \
     HOME_IN_CONTAINER="/home/dev" \
@@ -89,7 +92,7 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "relative path: resolved against PROJECT_DIR" {
-  run env \
+  run --separate-stderr env \
     CLAUDE_MOUNTS="testdir" \
     PROJECT_DIR="${TEST_TMP}" \
     HOME_IN_CONTAINER="/home/dev" \
@@ -99,7 +102,7 @@ teardown() {
 }
 
 @test "relative path with :rw: resolved and mounted read-write" {
-  run env \
+  run --separate-stderr env \
     CLAUDE_MOUNTS="testdir:rw" \
     PROJECT_DIR="${TEST_TMP}" \
     HOME_IN_CONTAINER="/home/dev" \
@@ -115,7 +118,7 @@ teardown() {
 @test "bare tilde: expands to HOME" {
   local fake_home="${TEST_TMP}/home"
   mkdir -p "${fake_home}"
-  run env \
+  run --separate-stderr env \
     HOME="${fake_home}" \
     CLAUDE_MOUNTS="~" \
     PROJECT_DIR="${TEST_TMP}" \
@@ -129,7 +132,7 @@ teardown() {
   local fake_home="${TEST_TMP}/home"
   local subdir="${fake_home}/myproject"
   mkdir -p "${subdir}"
-  run env \
+  run --separate-stderr env \
     HOME="${fake_home}" \
     CLAUDE_MOUNTS="~/myproject" \
     PROJECT_DIR="${TEST_TMP}" \
@@ -146,7 +149,7 @@ teardown() {
 @test "multiple entries: emit multiple --volume lines" {
   local dir2="${TEST_TMP}/dir2"
   mkdir -p "${dir2}"
-  run env \
+  run --separate-stderr env \
     CLAUDE_MOUNTS="${TEST_DIR},${dir2}" \
     PROJECT_DIR="${TEST_TMP}" \
     HOME_IN_CONTAINER="/home/dev" \
@@ -160,7 +163,7 @@ teardown() {
 @test "multiple entries: mixed rw and ro" {
   local dir2="${TEST_TMP}/dir2"
   mkdir -p "${dir2}"
-  run env \
+  run --separate-stderr env \
     CLAUDE_MOUNTS="${TEST_DIR}:rw,${dir2}:ro" \
     PROJECT_DIR="${TEST_TMP}" \
     HOME_IN_CONTAINER="/home/dev" \
@@ -176,7 +179,7 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "non-existent path: skipped, no --volume output" {
-  run env \
+  run --separate-stderr env \
     CLAUDE_MOUNTS="/nonexistent/does-not-exist" \
     PROJECT_DIR="${TEST_TMP}" \
     HOME_IN_CONTAINER="/home/dev" \
@@ -189,7 +192,7 @@ teardown() {
   # A dir named 'repo' maps to /home/dev/repo which is REPO_IN_CONTAINER
   local repo_dir="${TEST_TMP}/repo"
   mkdir -p "${repo_dir}"
-  run env \
+  run --separate-stderr env \
     CLAUDE_MOUNTS="${repo_dir}" \
     PROJECT_DIR="${TEST_TMP}" \
     HOME_IN_CONTAINER="/home/dev" \
@@ -203,7 +206,7 @@ teardown() {
   # A dir named '.claude' maps to /home/dev/.claude which is the session volume target
   local claude_dir="${TEST_TMP}/.claude"
   mkdir -p "${claude_dir}"
-  run env \
+  run --separate-stderr env \
     CLAUDE_MOUNTS="${claude_dir}" \
     PROJECT_DIR="${TEST_TMP}" \
     HOME_IN_CONTAINER="/home/dev" \
@@ -217,7 +220,7 @@ teardown() {
   local dir1="${TEST_TMP}/a/shared"
   local dir2="${TEST_TMP}/b/shared"
   mkdir -p "${dir1}" "${dir2}"
-  run env \
+  run --separate-stderr env \
     CLAUDE_MOUNTS="${dir1},${dir2}" \
     PROJECT_DIR="${TEST_TMP}" \
     HOME_IN_CONTAINER="/home/dev" \
@@ -230,7 +233,7 @@ teardown() {
 }
 
 @test "valid entry after invalid one: valid entry still emitted" {
-  run env \
+  run --separate-stderr env \
     CLAUDE_MOUNTS="/nonexistent,${TEST_DIR}" \
     PROJECT_DIR="${TEST_TMP}" \
     HOME_IN_CONTAINER="/home/dev" \
