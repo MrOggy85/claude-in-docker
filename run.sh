@@ -28,6 +28,16 @@ HOST_CLAUDE_DIR="${HOME}/.claude"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(pwd)"
 
+# Guard: refuse to run from the user's home directory to prevent accidental
+# exposure of home directory contents to the container.
+if [[ "${PROJECT_DIR}" == "${HOME}" ]]; then
+  echo "ERROR: Running claude-in-docker from your home directory is not allowed." >&2
+  echo "  This would mount your entire home directory into the container," >&2
+  echo "  defeating the purpose of the sandboxed environment." >&2
+  echo "  Please cd into a project subdirectory first." >&2
+  exit 1
+fi
+
 # 1. Build the image when it doesn't exist or when the build context has changed.
 #    A SHA-256 hash of the key files is stored as an image label at build time;
 #    on each run we recompute it and rebuild if it differs.

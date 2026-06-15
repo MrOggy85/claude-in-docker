@@ -33,6 +33,8 @@ All of the following files are gitignored and your personal files:
 
 Any arguments you pass are forwarded verbatim to `claude` (e.g. `run.sh --model opus "fix the bug"`).
 
+> **Note:** Running `run.sh` directly from your home directory (`~`) is blocked on purpose. Doing so would mount your entire home directory into the container, defeating the sandboxing. `cd` into a project subdirectory first.
+
 ## Authentication
 
 The first time you run Claude Code, log in with the `/login` command and complete the OAuth
