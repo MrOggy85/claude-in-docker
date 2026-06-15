@@ -1,0 +1,10 @@
+{
+  "name": "sample-nodejs-project",
+  "version": "1.0.0",
+  "description": "Sample Node.js project for E2E testing",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "license": "MIT"
+}
