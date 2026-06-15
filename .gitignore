@@ -6,6 +6,7 @@ container-CLAUDE.md
 .credentials.json
 allowed-domains.txt
 install_additional_packages.sh
+.env
 sound-effects/sounds/*
 !sound-effects/sounds/.gitkeep
 .claude-docker-usage/

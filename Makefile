@@ -3,7 +3,7 @@
 # ones that are missing and leaves existing files (your edits) untouched.
 
 .PHONY: init bats test test-extra-mounts test-extra-ports test-run test-e2e
-init: settings.json claude.json container-CLAUDE.md allowed-domains.txt .gitconfig install_additional_packages.sh
+init: settings.json claude.json container-CLAUDE.md allowed-domains.txt .gitconfig install_additional_packages.sh .env
 
 # Install bats. Picks the package manager by platform.
 #   macOS:           brew install bats-core
@@ -56,3 +56,6 @@ allowed-domains.txt:
 install_additional_packages.sh:
 	cp install_additional_packages.sh.example install_additional_packages.sh
 	chmod +x install_additional_packages.sh
+
+.env:
+	cp .env.example .env

@@ -68,6 +68,12 @@ EOF
   _CRED_PRE_EXISTED=0
   [ -e "${CRED_FILE}" ] && _CRED_PRE_EXISTED=1
 
+  # The optional .env lives next to run.sh (SCRIPT_DIR). Tests create/remove it
+  # explicitly; never clobber a developer's real .env if one is present.
+  ENV_FILE="${SCRIPT_DIR}/.env"
+  _ENV_PRE_EXISTED=0
+  [ -e "${ENV_FILE}" ] && _ENV_PRE_EXISTED=1
+
   # Convenience: run run.sh from the isolated project dir with test-safe env vars
   # SKIP_CLAUDE_VOLUME_PATHS=1  — skip node_modules docker volume creation
   # CLAUDE_AUTO_USAGE=0         — skip post-run usage sync
@@ -86,6 +92,10 @@ teardown() {
   # Remove .credentials.json only if we created it during this test
   if [[ "${_CRED_PRE_EXISTED}" -eq 0 ]] && [ -e "${SCRIPT_DIR}/.credentials.json" ]; then
     rm -f "${SCRIPT_DIR}/.credentials.json"
+  fi
+  # Remove .env only if it did not pre-exist (a test created it)
+  if [[ "${_ENV_PRE_EXISTED}" -eq 0 ]] && [ -e "${ENV_FILE}" ]; then
+    rm -f "${ENV_FILE}"
   fi
 }
 
@@ -281,6 +291,46 @@ refute_run_arg() {
   [ "$status" -eq 0 ]
   # The primary repo mount is always present
   assert_run_arg "${TEST_PROJECT_DIR}:/home/dev/repo"
+}
+
+# ---------------------------------------------------------------------------
+# .env / --env-file integration
+# ---------------------------------------------------------------------------
+
+@test ".env present: docker run includes --env-file pointing at it" {
+  printf 'FOO=bar\n' > "${ENV_FILE}"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--env-file"
+  assert_run_arg "${ENV_FILE}"
+}
+
+@test ".env present: --env-file precedes --env HOME so it cannot clobber HOME" {
+  printf 'HOME=/tmp/evil\n' > "${ENV_FILE}"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  # The explicit HOME env must still be set...
+  assert_run_arg "HOME=/home/dev"
+  # ...and --env-file must appear on an earlier line than that explicit --env.
+  local envfile_line home_line
+  envfile_line="$(grep -nxF -- '--env-file' "${DOCKER_RUN_ARGS}" | head -1 | cut -d: -f1)"
+  home_line="$(grep -nxF -- 'HOME=/home/dev' "${DOCKER_RUN_ARGS}" | head -1 | cut -d: -f1)"
+  [ -n "${envfile_line}" ]
+  [ -n "${home_line}" ]
+  [ "${envfile_line}" -lt "${home_line}" ]
+}
+
+@test "no .env: no --env-file flag in docker run" {
+  if [[ "${_ENV_PRE_EXISTED}" -eq 1 ]]; then
+    skip "developer .env present at ${ENV_FILE}; cannot test the absent case"
+  fi
+  rm -f "${ENV_FILE}"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  refute_run_arg "--env-file"
 }
 
 # ---------------------------------------------------------------------------
