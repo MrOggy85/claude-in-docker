@@ -2,14 +2,23 @@
 # Each file is its own target with no prerequisites, so `make init` creates the
 # ones that are missing and leaves existing files (your edits) untouched.
 
-.PHONY: init test test-extra-mounts test-extra-ports test-run
+.PHONY: init bats test test-extra-mounts test-extra-ports test-run
 init: settings.json claude.json container-CLAUDE.md allowed-domains.txt .gitconfig install_additional_packages.sh
 
+# Install bats. Picks the package manager by platform.
+#   macOS:           brew install bats-core
+#   Debian/Ubuntu:   sudo apt install bats
+bats:
+	@if [ "$$(uname)" = "Darwin" ]; then \
+	  brew install bats-core; \
+	else \
+	  sudo apt install bats; \
+	fi
+
 # Run all bats unit tests.
-# Install bats first: https://bats-core.readthedocs.io/en/stable/installation.html
-#   macOS:  brew install bats-core
-#   Linux:  npm install -g bats  OR  apt install bats  OR  pip install bats-core
-#   CI:     uses .github/workflows/test.yml (bats-core/bats-action)
+# Install bats first with `make bats`, or see
+# https://bats-core.readthedocs.io/en/stable/installation.html
+#   CI: uses .github/workflows/test.yml (bats-core/bats-action)
 test:
 	@command -v bats >/dev/null 2>&1 || { \
 	  echo "bats not found. Install from https://bats-core.readthedocs.io/en/stable/installation.html"; \
