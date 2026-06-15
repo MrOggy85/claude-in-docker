@@ -27,6 +27,7 @@ RUN apt-get update \
   iptables \
   ipset \
   shellcheck \
+  nano \
   sudo \
     && rm -rf /var/lib/apt/lists/*
 
