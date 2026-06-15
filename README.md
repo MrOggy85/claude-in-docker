@@ -1,3 +1,5 @@
+[![Tests](https://github.com/MrOggy85/claude-in-docker/actions/workflows/test.yml/badge.svg)](https://github.com/MrOggy85/claude-in-docker/actions/workflows/test.yml)
+
 # Claude Code in Docker Container
 
 This is a solution for running Claude Code in a Docker container. It assumes you are on macOS.
