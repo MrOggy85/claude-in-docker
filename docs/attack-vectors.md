@@ -1,6 +1,24 @@
 # Known Attack Vectors
 
-These are known attack vectors that are not handled by this solution.
+These are known attack vectors. Some are mitigated by this solution (noted as
+such); the rest are not handled and are documented so you can assess the risk.
+
+## Project-Level Claude Settings (mitigated by default)
+
+Claude Code loads project-level settings from the working directory it runs in —
+`.claude/settings.json` and the gitignored `.claude/settings.local.json`
+override. Because the project is bind-mounted into the container, a committed
+settings file from an untrusted repo is loaded there, and any hooks it defines
+(e.g. a `PreToolUse` `command` hook) run arbitrary commands inside the container.
+
+**Mitigation:** `run.sh` refuses to launch when the project contains
+`.claude/settings.json` or `.claude/settings.local.json`, before any build,
+volume, or container work happens. The container's settings come from
+`${SCRIPT_DIR}` (mounted at `~/.claude/settings.json`), never from the project.
+
+To run a project you trust that ships its own settings, opt in with
+`CLAUDE_ALLOW_PROJECT_SETTINGS=1` (accepts `1`/`true`/`yes`/`on`), which skips
+the guard and honors the project settings as-is.
 
 ## Update of Allowed Domains
 
