@@ -22,7 +22,7 @@ All of the following files are gitignored and your personal files:
 - `settings.json` add your own settings here that will be used by Claude Code
 - `claude.json` contains onboarding state and your user-level MCP server config
 - `container-CLAUDE.md` add your personal instructions for Claude Code here; mounted into the container as `~/.claude/CLAUDE.md` (user-global). Distinct from the repo's own `CLAUDE.md`, which holds project instructions for working on this tool.
-- `allowed-domains.txt` domains listed here are baked into the Docker image and are the only outbound destinations the container can reach. Rebuild the image after changing this file.
+- `allowed-domains.txt` domains listed here are baked into the Docker image and are the only outbound destinations the container can reach. Rebuild the image after changing this file. See [Outbound Firewall](docs/firewall.md) for how the allowlist and IP-rotation handling work.
 - `.gitconfig` set your git `user.name` / `user.email` here.
 - `install_additional_packages.sh` runs at image build time as root; add commands here to install extra tools a workflow needs (e.g. Deno). Rebuild the image after changing this file.
 
