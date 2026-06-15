@@ -1,0 +1,13 @@
+name: Tests
+on:
+  push:
+    paths: ['run.sh', 'scripts/**', 'test/**', '.github/workflows/test.yml']
+  pull_request:
+    paths: ['run.sh', 'scripts/**', 'test/**', '.github/workflows/test.yml']
+jobs:
+  bats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bats-core/bats-action@3.0.0
+      - run: bats test/
