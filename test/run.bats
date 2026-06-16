@@ -334,6 +334,26 @@ refute_run_arg() {
 }
 
 # ---------------------------------------------------------------------------
+# CLAUDE_VOLUME_PATHS guard: tilde-prefixed paths are rejected
+# ---------------------------------------------------------------------------
+
+@test "CLAUDE_VOLUME_PATHS with ~ path: skipped, no '~' volume target created" {
+  cd "${TEST_PROJECT_DIR}"
+  # Note: SKIP_CLAUDE_VOLUME_PATHS is intentionally NOT set, so the guard runs.
+  run env \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_VOLUME_PATHS="~/claude-macbook-help/claude-in-docker" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  # The guard emits a skip notice...
+  [[ "$output" == *"skipping volume path"* ]]
+  # ...and no docker run arg contains a literal '~' (which would have become a
+  # stray directory on the host via the bidirectional project bind mount).
+  ! grep -qF '~' "${DOCKER_RUN_ARGS}"
+}
+
+# ---------------------------------------------------------------------------
 # Standard flags always present
 # ---------------------------------------------------------------------------
 
