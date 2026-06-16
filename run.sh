@@ -183,7 +183,7 @@ _seen_vol_paths=" "
 prepare_path_volume() {  # <repo-relative path>
   local rel="$1" name target
   case "$rel" in
-    /*|*..*) echo ">> skipping volume path (must be repo-relative, no '..'): $rel" >&2; return ;;
+    /*|*..*|"~"*) echo ">> skipping volume path (must be repo-relative, no '..' or '~'): $rel" >&2; return ;;
   esac
   case "$_seen_vol_paths" in *" ${rel} "*) return ;; esac   # dedup (auto + explicit may overlap)
   _seen_vol_paths+="${rel} "
