@@ -40,7 +40,7 @@ jobs:
           additional_permissions: |
             actions: read
           claude_args: '--allowedTools "Bash(git checkout:*),Bash(git switch:*),Bash(git branch:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh pr create:*),Bash(gh pr view:*)"'
-          custom_instructions: |
+          prompt: |
             After completing your changes:
             1. Create a new branch with a descriptive name (e.g. feat/short-description or fix/short-description)
             2. Commit and push your changes to that branch
