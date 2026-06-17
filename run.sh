@@ -71,8 +71,12 @@ context_hash() {
   # Filter to files that actually exist, then hash them
   local existing=()
   for f in "${files[@]}"; do [ -f "$f" ] && existing+=("$f"); done
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum "${existing[@]}"
-  else shasum -a 256 "${existing[@]}"; fi | sha256sum | cut -c1-16
+  # Include caller identity: the image embeds the host UID/GID/username via
+  # --build-arg, so a different user must get a fresh image.
+  { if command -v sha256sum >/dev/null 2>&1; then sha256sum "${existing[@]}"
+    else shasum -a 256 "${existing[@]}"; fi
+    printf 'uid=%s gid=%s user=%s\n' "$(id -u)" "$(id -g)" "$(id -un)"
+  } | sha256sum | cut -c1-16
 }
 
 CURRENT_HASH="$(context_hash)"
@@ -81,7 +85,13 @@ IMAGE_HASH="$(docker image inspect "${IMAGE}" --format '{{index .Config.Labels "
 if [[ "$IMAGE_HASH" != "$CURRENT_HASH" ]]; then
   [[ -n "$IMAGE_HASH" ]] && echo ">> Build context changed — rebuilding ${IMAGE}..." \
                           || echo ">> Building ${IMAGE}..."
-  docker build --tag "${IMAGE}" --label "build.context-hash=${CURRENT_HASH}" "${SCRIPT_DIR}"
+  docker build \
+    --tag "${IMAGE}" \
+    --label "build.context-hash=${CURRENT_HASH}" \
+    --build-arg "USER_ID=$(id -u)" \
+    --build-arg "GROUP_ID=$(id -g)" \
+    --build-arg "USERNAME=$(id -un)" \
+    "${SCRIPT_DIR}"
 fi
 
 # 2. Stable per-project volume name: claude-<dirname>-<short hash of full path>.
