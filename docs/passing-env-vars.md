@@ -6,7 +6,7 @@ it to `docker run --env-file`, so every `KEY=VALUE` line becomes an env var
 inside the container.
 
 ```bash
-make init          # creates .env from .env.example (comments only, a no-op)
+make init          # creates .env from templates/.env (comments only, a no-op)
 # edit .env:
 # DATABASE_URL=postgres://user:pass@localhost:5432/app
 # MY_API_KEY=sk-xxxxxxxx
