@@ -3,7 +3,7 @@
 /claude.json
 /container-CLAUDE.md
 /.gitconfig
-.credentials.json
+/.credentials.json
 /allowed-domains.txt
 /install_additional_packages.sh
 /.env

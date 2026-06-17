@@ -199,17 +199,11 @@ add_rw_mount() {  # <host_path> <container_path>
   if [ -e "$1" ]; then RO_MOUNTS+=(--volume "$1:$2")
   else echo ">> skipping (not found on host): $1" >&2; fi
 }
-# Credentials persist across all projects via a single host file bind-mounted
-# read-write over ~/.claude/.credentials.json (the rest of ~/.claude stays
-# per-project). Pre-create it (seeded "{}", mode 600) so Docker mounts it as a
-# file, not a directory, and `/login` writes the real token in place.
-CRED_FILE="${SCRIPT_DIR}/.credentials.json"
-[ -e "$CRED_FILE" ] || { printf '{}' > "$CRED_FILE"; chmod 600 "$CRED_FILE"; }
-
 # --- harmless config to share (edit as needed) ---
+# Each file is seeded by `make init` (run once) and mounted only if present.
 add_ro_mount "${SCRIPT_DIR}/settings.json" "${HOME_IN_CONTAINER}/.claude/settings.json"
 add_rw_mount "${SCRIPT_DIR}/claude.json"   "${HOME_IN_CONTAINER}/.claude.json"
-add_rw_mount "${CRED_FILE}"                 "${HOME_IN_CONTAINER}/.claude/.credentials.json"
+add_rw_mount "${SCRIPT_DIR}/.credentials.json" "${HOME_IN_CONTAINER}/.claude/.credentials.json"
 add_ro_mount "${SCRIPT_DIR}/container-CLAUDE.md" "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
 add_ro_mount "${SCRIPT_DIR}/.gitconfig"      "${HOME_IN_CONTAINER}/.gitconfig"
 

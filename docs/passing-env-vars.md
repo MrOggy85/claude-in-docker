@@ -5,15 +5,17 @@ gitignored `.env` file next to `run.sh`. When that file exists, `run.sh` passes
 it to `docker run --env-file`, so every `KEY=VALUE` line becomes an env var
 inside the container.
 
+The file is entirely optional, so it is **not** created by `make init` — create
+it yourself only if you need it:
+
 ```bash
-make init          # creates .env from templates/.env (comments only, a no-op)
-# edit .env:
+# create .env next to run.sh:
 # DATABASE_URL=postgres://user:pass@localhost:5432/app
 # MY_API_KEY=sk-xxxxxxxx
 ```
 
 The file is optional and absent-safe: with no `.env`, no `--env-file` flag is
-emitted. A comments-only `.env` (as created by `make init`) injects nothing.
+emitted. A comments-only `.env` injects nothing.
 
 ## `docker --env-file` parsing caveats
 

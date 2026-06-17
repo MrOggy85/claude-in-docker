@@ -68,11 +68,16 @@ EOF
   _CRED_PRE_EXISTED=0
   [ -e "${CRED_FILE}" ] && _CRED_PRE_EXISTED=1
 
-  # The optional .env lives next to run.sh (SCRIPT_DIR). Tests create/remove it
-  # explicitly; never clobber a developer's real .env if one is present.
+  # The optional .env lives next to run.sh (SCRIPT_DIR) — a path baked into
+  # run.sh that we cannot redirect. The .env tests below write to it directly, so
+  # to avoid destroying a developer's real .env we back up any existing file here
+  # and restore it byte-for-byte in teardown.
   ENV_FILE="${SCRIPT_DIR}/.env"
-  _ENV_PRE_EXISTED=0
-  [ -e "${ENV_FILE}" ] && _ENV_PRE_EXISTED=1
+  ENV_BACKUP=""
+  if [ -e "${ENV_FILE}" ]; then
+    ENV_BACKUP="$(mktemp)"
+    cp -p "${ENV_FILE}" "${ENV_BACKUP}"
+  fi
 
   # Convenience: run run.sh from the isolated project dir with test-safe env vars
   # SKIP_CLAUDE_VOLUME_PATHS=1  — skip node_modules docker volume creation
@@ -93,9 +98,12 @@ teardown() {
   if [[ "${_CRED_PRE_EXISTED}" -eq 0 ]] && [ -e "${SCRIPT_DIR}/.credentials.json" ]; then
     rm -f "${SCRIPT_DIR}/.credentials.json"
   fi
-  # Remove .env only if it did not pre-exist (a test created it)
-  if [[ "${_ENV_PRE_EXISTED}" -eq 0 ]] && [ -e "${ENV_FILE}" ]; then
-    rm -f "${ENV_FILE}"
+  # Restore the developer's real .env byte-for-byte (the tests overwrite it), or
+  # remove a .env that a test created where none existed before.
+  rm -f "${ENV_FILE}"
+  if [ -n "${ENV_BACKUP}" ]; then
+    cp -p "${ENV_BACKUP}" "${ENV_FILE}"
+    rm -f "${ENV_BACKUP}"
   fi
 }
 
@@ -323,9 +331,6 @@ refute_run_arg() {
 }
 
 @test "no .env: no --env-file flag in docker run" {
-  if [[ "${_ENV_PRE_EXISTED}" -eq 1 ]]; then
-    skip "developer .env present at ${ENV_FILE}; cannot test the absent case"
-  fi
   rm -f "${ENV_FILE}"
   cd "${TEST_PROJECT_DIR}"
   run "${RUN_CMD[@]}"

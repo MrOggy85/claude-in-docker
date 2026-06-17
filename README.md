@@ -38,12 +38,12 @@ Any arguments you pass are forwarded verbatim to `claude` (e.g. `run.sh --model 
 
 ## Authentication
 
-The first time you run Claude Code, log in with the `/login` command and complete the OAuth
-flow. Your credentials are written to `.credentials.json` (next to `run.sh`, gitignored) and
-bind-mounted into the container, so a single login is shared across **every** project you run
-in the container — you only need to do it once.
+`make init` seeds an empty `.credentials.json` (next to `run.sh`, gitignored) which `run.sh`
+bind-mounts into the container. The first time you run Claude Code, log in with the `/login`
+command and complete the OAuth flow; your credentials are written to that file, so a single
+login is shared across **every** project you run in the container — you only need to do it once.
 
-To force a re-login, delete `.credentials.json` (it is re-created empty on the next run).
+To force a re-login, delete `.credentials.json` and re-run `make init` to recreate it empty.
 
 ### Shell profile alias
 
