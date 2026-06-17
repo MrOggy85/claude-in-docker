@@ -69,7 +69,7 @@ if [[ -n "${MCP_GH_BEARER:-}" ]]; then
       -H "Authorization: Bearer ${MCP_GH_BEARER}" \
       -H "X-GitHub-Api-Version: 2022-11-28" \
       https://api.github.com/user 2>/dev/null) || true
-    _gh_status=$(printf '%s' "$_gh_headers" | grep -m1 -i '^HTTP/' | awk '{print $2}' | tr -d '\r')
+    _gh_status=$(printf '%s' "$_gh_headers" | grep -m1 -i '^HTTP/' | awk '{print $2}' | tr -d '\r') || true
     case "${_gh_status}" in
       401)
         echo "ERROR: GitHub token (MCP_GH_BEARER) is invalid (401 Unauthorized)." >&2
@@ -79,7 +79,7 @@ if [[ -n "${MCP_GH_BEARER:-}" ]]; then
       2*)
         # Classic OAuth tokens expose their scopes in X-OAuth-Scopes.
         _gh_scopes=$(printf '%s' "$_gh_headers" | grep -im1 '^x-oauth-scopes:' \
-          | cut -d: -f2- | tr -d ' \r\n')
+          | cut -d: -f2- | tr -d ' \r\n') || true
         if [[ -n "$_gh_scopes" ]]; then
           # Classic token: reject if any write-capable scope is present.
           _bad_scope=""
