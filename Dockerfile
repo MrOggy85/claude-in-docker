@@ -67,7 +67,9 @@ RUN git config --system --add safe.directory '*'
 # non-root runtime user doesn't fail trying to write to it.
 #
 # Packages are declared in package.json; both branches below install them to
-# /usr/local/node_modules/ and symlink binaries into /usr/local/bin/. Once
+# /usr/local/node_modules/. npm v10 (shipped with Node 22) places bin symlinks
+# in /usr/local/node_modules/.bin/ rather than /usr/local/bin/ for non-global
+# installs; PATH is extended below to include that directory. Once
 # package-lock.json is committed (`make lockfile`), the build automatically
 # switches to `npm ci` for integrity-verified reproducible installs.
 #
@@ -77,8 +79,9 @@ RUN git config --system --add safe.directory '*'
 # executable at runtime and ccusage skips the chmod. The path is arch-specific
 # (@ccusage/ccusage-linux-<arch>), so match it by glob.
 COPY package.json package-lock.json* /tmp/npm-install/
-# Both paths below install to /usr/local/node_modules/ and symlink binaries to
-# /usr/local/bin/. npm ci additionally verifies integrity from the lockfile.
+# Both paths below install to /usr/local/node_modules/ (bin symlinks land in
+# /usr/local/node_modules/.bin/, see PATH below). npm ci additionally verifies
+# integrity from the lockfile.
 # To upgrade from the unlocked fallback to the fully verified path:
 #   1. Run `make lockfile` to generate package-lock.json
 #   2. Commit it — on the next `docker build`, npm ci will be used automatically.
@@ -91,6 +94,10 @@ RUN if [ -f /tmp/npm-install/package-lock.json ]; then \
  && find /usr/local/node_modules -type f -path '*@ccusage/*/bin/*' -exec chmod a+rx {} + \
  && rm -rf /tmp/npm-install
 ENV DISABLE_AUTOUPDATER=1
+# npm v10 (Node 22) places bin symlinks for non-global installs in
+# node_modules/.bin/ rather than /usr/local/bin/. Extend PATH so that `claude`,
+# `ccusage`, `tsc`, etc. are reachable without a full path.
+ENV PATH="/usr/local/node_modules/.bin:${PATH}"
 
 # We run the container with `--user <your-host-uid>:<gid>` (see run.sh). That UID
 # usually has no /etc/passwd entry, so we give it a HOME that any UID can write
