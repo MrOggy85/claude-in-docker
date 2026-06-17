@@ -11,14 +11,19 @@ override. Because the project is bind-mounted into the container, a committed
 settings file from an untrusted repo is loaded there, and any hooks it defines
 (e.g. a `PreToolUse` `command` hook) run arbitrary commands inside the container.
 
-**Mitigation:** `run.sh` refuses to launch when the project contains
-`.claude/settings.json` or `.claude/settings.local.json`, before any build,
-volume, or container work happens. The container's settings come from
-`${SCRIPT_DIR}` (mounted at `~/.claude/settings.json`), never from the project.
+**Mitigation:** when the project contains `.claude/settings.json` or
+`.claude/settings.local.json`, `run.sh` stops before any build, volume, or
+container work happens (via `guards/project-settings.sh`) and prompts you: first
+to view the file(s), then to confirm whether to proceed. Declining either prompt
+aborts with a non-zero status. If stdin is not a terminal (`/dev/tty`
+unavailable), both prompts are treated as declined and the run aborts, so
+non-interactive invocations remain secure by default. The container's settings
+come from `${SCRIPT_DIR}` (mounted at `~/.claude/settings.json`), never from the
+project.
 
-To run a project you trust that ships its own settings, opt in with
-`CLAUDE_ALLOW_PROJECT_SETTINGS=1` (accepts `1`/`true`/`yes`/`on`), which skips
-the guard and honors the project settings as-is.
+To run a project you trust that ships its own settings without the prompt, opt
+in with `CLAUDE_ALLOW_PROJECT_SETTINGS=1` (accepts `1`/`true`/`yes`/`on`), which
+skips the flow and honors the project settings as-is.
 
 ## Update of Allowed Domains
 
