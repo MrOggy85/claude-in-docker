@@ -1,4 +1,26 @@
-FROM node:22-trixie-slim
+# Pin the base image digest for supply-chain security.
+# To update after an upstream security patch:
+#   docker manifest inspect debian:trixie-slim \
+#     | jq -r '.manifests[] | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest'
+# Then replace the @sha256:... suffix on the FROM line (or run `make pin-digest`).
+# Leave blank (FROM debian:trixie-slim) only in development; always pin in production.
+FROM debian:trixie-slim
+
+# Install Node.js 22 from NodeSource (GPG-verified signed apt repository).
+# Keeps the Node version under our control rather than inherited from the base image.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    gnupg \
+ && install -m 0755 -d /etc/apt/keyrings \
+ && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+ && printf 'deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main\n' \
+    > /etc/apt/sources.list.d/nodesource.list \
+ && apt-get update \
+ && apt-get install -y nodejs \
+ && rm -rf /var/lib/apt/lists/*
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -7,7 +29,6 @@ RUN apt-get update \
   jq \
   curl \
   ca-certificates \
-  build-essential \
   python3 \
   less \
   procps \
@@ -41,17 +62,34 @@ RUN ln -s "$(command -v fdfind)" /usr/local/bin/fd \
 # read-only ~/.gitconfig mounted at runtime).
 RUN git config --system --add safe.directory '*'
 
-# Install Claude Code globally as root, into /usr/local (readable/executable by
-# every user). Because the install is root-owned, we disable the self-updater so
-# a non-root runtime user doesn't fail trying to write to it.
+# Install Claude Code into /usr/local (readable/executable by every user) as
+# root. Because the install is root-owned, the self-updater is disabled so a
+# non-root runtime user doesn't fail trying to write to it.
+#
+# Packages are declared in package.json; both branches below install them to
+# /usr/local/node_modules/ and symlink binaries into /usr/local/bin/. Once
+# package-lock.json is committed (`make lockfile`), the build automatically
+# switches to `npm ci` for integrity-verified reproducible installs.
 #
 # ccusage ships its platform-native binary without the executable bit and chmods
 # it on first run; that chmod fails with EPERM for the non-root runtime user
 # (chmod requires ownership). Set the bit here as root so the binary is already
 # executable at runtime and ccusage skips the chmod. The path is arch-specific
 # (@ccusage/ccusage-linux-<arch>), so match it by glob.
-RUN npm install -g @anthropic-ai/claude-code typescript ccusage \
- && find /usr/local/lib/node_modules -type f -path '*@ccusage/*/bin/*' -exec chmod a+rx {} +
+COPY package.json package-lock.json* /tmp/npm-install/
+# Both paths below install to /usr/local/node_modules/ and symlink binaries to
+# /usr/local/bin/. npm ci additionally verifies integrity from the lockfile.
+# To upgrade from the unlocked fallback to the fully verified path:
+#   1. Run `make lockfile` to generate package-lock.json
+#   2. Commit it — on the next `docker build`, npm ci will be used automatically.
+RUN if [ -f /tmp/npm-install/package-lock.json ]; then \
+      cd /tmp/npm-install && npm ci --prefix /usr/local; \
+    else \
+      jq -r '.dependencies | to_entries[] | "\(.key)@\(.value)"' /tmp/npm-install/package.json \
+        | xargs npm install --prefix /usr/local; \
+    fi \
+ && find /usr/local/node_modules -type f -path '*@ccusage/*/bin/*' -exec chmod a+rx {} + \
+ && rm -rf /tmp/npm-install
 ENV DISABLE_AUTOUPDATER=1
 
 # We run the container with `--user <your-host-uid>:<gid>` (see run.sh). That UID
