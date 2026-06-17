@@ -116,19 +116,23 @@ teardown() {
 
 @test "curl not in PATH: prints warning and continues" {
   cd "${TEST_PROJECT_DIR}"
-  # Build a PATH that has the docker stub but excludes every directory that
-  # contains a real curl binary so command -v curl fails inside run.sh.
-  local no_curl_path="${STUB_DIR}/no-curl-bin"
-  local IFS=':'
-  for _dir in ${ORIGINAL_PATH}; do
-    [[ -n "$_dir" && ! -x "${_dir}/curl" ]] && no_curl_path="${no_curl_path}:${_dir}"
+  # Symlink exactly the external commands run.sh needs into no-curl-bin,
+  # intentionally omitting curl, then set PATH to that directory alone so
+  # that `command -v curl` fails inside run.sh.  Invoke bash by its resolved
+  # absolute path so env can find it even though /usr/bin (where curl also
+  # lives) is absent from PATH.
+  local _cmd _bin
+  for _cmd in bash dirname basename tr sed cut id sha256sum shasum; do
+    _bin="$(command -v "$_cmd" 2>/dev/null)" || true
+    [[ -n "$_bin" && ! -e "${STUB_DIR}/no-curl-bin/${_cmd}" ]] && \
+      ln -sf "$_bin" "${STUB_DIR}/no-curl-bin/${_cmd}"
   done
   run env \
-    PATH="${no_curl_path}" \
+    PATH="${STUB_DIR}/no-curl-bin" \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
     MCP_GH_BEARER="ghp_testtoken" \
-    bash "${RUN_SH}"
+    "${STUB_DIR}/no-curl-bin/bash" "${RUN_SH}"
   [ "$status" -eq 0 ]
   [[ "$output" == *"WARNING"* ]]
   [[ "$output" == *"curl not found"* ]]
