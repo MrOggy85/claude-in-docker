@@ -3,7 +3,7 @@
 # ones that are missing and leaves existing files (your edits) untouched.
 
 .PHONY: init bats test test-extra-mounts test-extra-ports test-run test-e2e lockfile pin-digest
-init: settings.json claude.json container-CLAUDE.md allowed-domains.txt .gitconfig install_additional_packages.sh .env
+init: settings.json claude.json .credentials.json container-CLAUDE.md allowed-domains.txt .gitconfig install_additional_packages.sh
 
 # Install bats. Picks the package manager by platform.
 #   macOS:           brew install bats-core
@@ -62,6 +62,14 @@ settings.json:
 claude.json:
 	cp templates/claude.json claude.json
 
+# Credentials persist across projects via this single file, bind-mounted
+# read-write into the container by run.sh. Seeded "{}" (mode 600) so Docker
+# mounts it as a file; `/login` writes the real token in place. Delete it to
+# force a re-login — `make init` re-creates it empty.
+.credentials.json:
+	cp templates/.credentials.json .credentials.json
+	chmod 600 .credentials.json
+
 container-CLAUDE.md:
 	cp templates/container-CLAUDE.md container-CLAUDE.md
 
@@ -74,6 +82,3 @@ allowed-domains.txt:
 install_additional_packages.sh:
 	cp templates/install_additional_packages.sh install_additional_packages.sh
 	chmod +x install_additional_packages.sh
-
-.env:
-	cp templates/.env .env
