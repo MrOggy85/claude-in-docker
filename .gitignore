@@ -10,3 +10,4 @@
 sound-effects/sounds/*
 !sound-effects/sounds/.gitkeep
 .claude-docker-usage/
+/projects/*/

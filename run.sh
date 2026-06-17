@@ -98,6 +98,33 @@ echo ">> session volume: ${VOLUME}  (docker volume inspect ${VOLUME})"
 CONTAINER_NAME="${CLAUDE_CONTAINER_NAME:-claude-${SAFE_NAME:-repo}-$(printf '%04x%04x' "${RANDOM}" "${RANDOM}")}"
 echo ">> container name: ${CONTAINER_NAME}"
 
+# 2c. Per-project config directory: projects/<safe-name>-<path-hash>/ inside the
+#     claude-in-docker repo. Files placed here override the root-level defaults on
+#     a file-by-file basis (more specific wins). The directory is created
+#     automatically on first run for this project.
+#     Supported overrides: allowed-domains.txt, .env, container-CLAUDE.md,
+#     install_additional_packages.sh
+PROJECT_KEY="${SAFE_NAME:-repo}-$(path_hash "${PROJECT_DIR}")"
+PROJECT_CONFIG_DIR="${SCRIPT_DIR}/projects/${PROJECT_KEY}"
+if [[ ! -d "${PROJECT_CONFIG_DIR}" ]]; then
+  mkdir -p "${PROJECT_CONFIG_DIR}"
+  echo ">> created per-project config dir: ${PROJECT_CONFIG_DIR}"
+  echo ">>   place allowed-domains.txt, .env, container-CLAUDE.md, or"
+  echo ">>   install_additional_packages.sh here to override root-level defaults"
+else
+  echo ">> per-project config dir: ${PROJECT_CONFIG_DIR}"
+fi
+
+# Returns the per-project path if the file exists there, otherwise the root path.
+resolve_config_file() {  # <filename>
+  local fname="$1"
+  if [[ -f "${PROJECT_CONFIG_DIR}/${fname}" ]]; then
+    echo "${PROJECT_CONFIG_DIR}/${fname}"
+  else
+    echo "${SCRIPT_DIR}/${fname}"
+  fi
+}
+
 # 3. Config mounts, added only if the host path exists.
 RO_MOUNTS=()
 add_ro_mount() {  # <host_path> <container_path>
@@ -113,7 +140,7 @@ add_rw_mount() {  # <host_path> <container_path>
 add_ro_mount "${SCRIPT_DIR}/settings.json" "${HOME_IN_CONTAINER}/.claude/settings.json"
 add_rw_mount "${SCRIPT_DIR}/claude.json"   "${HOME_IN_CONTAINER}/.claude.json"
 add_rw_mount "${SCRIPT_DIR}/.credentials.json" "${HOME_IN_CONTAINER}/.claude/.credentials.json"
-add_ro_mount "${SCRIPT_DIR}/container-CLAUDE.md" "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
+add_ro_mount "$(resolve_config_file container-CLAUDE.md)" "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
 add_ro_mount "${SCRIPT_DIR}/.gitconfig"      "${HOME_IN_CONTAINER}/.gitconfig"
 
 # 3b. Extra project mounts. scripts/extra-mounts.sh turns CLAUDE_MOUNTS (a
@@ -209,13 +236,30 @@ else
 fi
 
 # 3e. Optional arbitrary env vars from a gitignored `.env` next to run.sh, via
-#     `docker --env-file`. Emitted before the explicit `--env` flags so it can't
-#     clobber them (last duplicate wins). See docs/passing-env-vars.md.
-ENV_FILE="${SCRIPT_DIR}/.env"
+#     `docker --env-file`. Per-project .env in projects/<key>/.env takes
+#     precedence when present. Emitted before the explicit `--env` flags so it
+#     can't clobber them (last duplicate wins). See docs/passing-env-vars.md.
+ENV_FILE="$(resolve_config_file .env)"
 ENV_FILE_ARGS=()
 if [ -f "$ENV_FILE" ]; then
   ENV_FILE_ARGS+=(--env-file "$ENV_FILE")
   echo ">> env file: ${ENV_FILE}"
+fi
+
+# 3f. Per-project allowed-domains.txt: if present, mount it over the baked-in
+#     /etc/allowed-domains.txt so the firewall uses the project-specific list.
+_PROJECT_DOMAINS="${PROJECT_CONFIG_DIR}/allowed-domains.txt"
+if [[ -f "${_PROJECT_DOMAINS}" ]]; then
+  RO_MOUNTS+=(--volume "${_PROJECT_DOMAINS}:/etc/allowed-domains.txt:ro")
+  echo ">> per-project allowed-domains.txt: ${_PROJECT_DOMAINS}"
+fi
+
+# 3g. Per-project install_additional_packages.sh: if present, mount it at the
+#     path the entrypoint will run via sudo on container start.
+_PROJECT_INSTALL="${PROJECT_CONFIG_DIR}/install_additional_packages.sh"
+if [[ -f "${_PROJECT_INSTALL}" ]]; then
+  RO_MOUNTS+=(--volume "${_PROJECT_INSTALL}:/usr/local/bin/project-install.sh:ro")
+  echo ">> per-project install_additional_packages.sh: ${_PROJECT_INSTALL}"
 fi
 
 # 4. Run as your host UID:GID; HOME forced so "~" resolves for the passwd-less UID.

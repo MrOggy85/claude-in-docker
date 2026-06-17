@@ -141,12 +141,16 @@ RUN if ! getent passwd "${USER_ID}" >/dev/null 2>&1; then \
 
 # Outbound firewall: allowed domains are baked in at build time; rules are
 # applied on each container start via a sudo-scoped call in the entrypoint.
-# The sudo rule is restricted to this one script so no other root escalation
-# is possible.
+# A second sudo rule allows running a per-project install script mounted by
+# run.sh at container start; both rules are path-locked to specific scripts.
 COPY allowed-domains.txt /etc/allowed-domains.txt
 COPY init-firewall.sh /usr/local/bin/init-firewall.sh
+# Also grant sudo for project-install.sh: run.sh mounts per-project
+# install_additional_packages.sh at this path when the project-specific file
+# exists, and entrypoint.sh invokes it via sudo bash so it can install packages
+# without requiring the host file to have the executable bit set.
 RUN chmod +x /usr/local/bin/init-firewall.sh \
- && printf 'Defaults!/usr/local/bin/init-firewall.sh !pam_acct_mgmt\nALL ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh\n' \
+ && printf 'Defaults!/usr/local/bin/init-firewall.sh !pam_acct_mgmt\nALL ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh\nALL ALL=(root) NOPASSWD: /bin/bash /usr/local/bin/project-install.sh\n' \
       > /etc/sudoers.d/firewall \
  && chmod 0440 /etc/sudoers.d/firewall
 

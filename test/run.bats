@@ -90,6 +90,17 @@ EOF
       MCP_GH_BEARER=""
     bash "${RUN_SH}"
   )
+
+  # Compute the per-project config dir path that run.sh will use for TEST_PROJECT_DIR.
+  # Mirror the SAFE_NAME + path_hash logic from run.sh.
+  _SAFE_NAME="$(printf '%s' "$(basename "${TEST_PROJECT_DIR}")" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-')"
+  _SAFE_NAME="$(printf '%s' "${_SAFE_NAME}" | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$//')"
+  if command -v sha256sum >/dev/null 2>&1; then
+    _PATH_HASH="$(printf '%s' "${TEST_PROJECT_DIR}" | sha256sum | cut -c1-10)"
+  else
+    _PATH_HASH="$(printf '%s' "${TEST_PROJECT_DIR}" | shasum -a 256 | cut -c1-10)"
+  fi
+  PROJECT_CONFIG_DIR="${SCRIPT_DIR}/projects/${_SAFE_NAME:-repo}-${_PATH_HASH}"
 }
 
 teardown() {
@@ -105,6 +116,8 @@ teardown() {
     cp -p "${ENV_BACKUP}" "${ENV_FILE}"
     rm -f "${ENV_BACKUP}"
   fi
+  # Remove any per-project config dir created during this test
+  rm -rf "${PROJECT_CONFIG_DIR}"
 }
 
 # Helper: assert that DOCKER_RUN_ARGS contains a line that is exactly VALUE.
@@ -381,4 +394,75 @@ refute_run_arg() {
   run "${RUN_CMD[@]}"
   [ "$status" -eq 0 ]
   assert_run_arg "--cap-add=NET_ADMIN"
+}
+
+# ---------------------------------------------------------------------------
+# Per-project config directory
+# ---------------------------------------------------------------------------
+
+@test "per-project config dir is created on first run" {
+  rm -rf "${PROJECT_CONFIG_DIR}"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  [ -d "${PROJECT_CONFIG_DIR}" ]
+}
+
+@test "per-project .env is used when present (overrides root .env)" {
+  mkdir -p "${PROJECT_CONFIG_DIR}"
+  printf 'PROJECT_VAR=from-project\n' > "${PROJECT_CONFIG_DIR}/.env"
+  rm -f "${ENV_FILE}"  # ensure root .env is absent
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--env-file"
+  assert_run_arg "${PROJECT_CONFIG_DIR}/.env"
+}
+
+@test "root .env is used when no per-project .env exists" {
+  mkdir -p "${PROJECT_CONFIG_DIR}"
+  rm -f "${PROJECT_CONFIG_DIR}/.env"
+  printf 'ROOT_VAR=from-root\n' > "${ENV_FILE}"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--env-file"
+  assert_run_arg "${ENV_FILE}"
+}
+
+@test "per-project allowed-domains.txt is mounted over /etc/allowed-domains.txt" {
+  mkdir -p "${PROJECT_CONFIG_DIR}"
+  printf 'example.com\n' > "${PROJECT_CONFIG_DIR}/allowed-domains.txt"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--volume"
+  grep -qF "${PROJECT_CONFIG_DIR}/allowed-domains.txt:/etc/allowed-domains.txt:ro" "${DOCKER_RUN_ARGS}"
+}
+
+@test "no per-project allowed-domains.txt: /etc/allowed-domains.txt is not bind-mounted" {
+  mkdir -p "${PROJECT_CONFIG_DIR}"
+  rm -f "${PROJECT_CONFIG_DIR}/allowed-domains.txt"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  ! grep -qF "/etc/allowed-domains.txt" "${DOCKER_RUN_ARGS}"
+}
+
+@test "per-project install_additional_packages.sh is mounted at /usr/local/bin/project-install.sh" {
+  mkdir -p "${PROJECT_CONFIG_DIR}"
+  printf '#!/bin/bash\necho "project packages"\n' > "${PROJECT_CONFIG_DIR}/install_additional_packages.sh"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  grep -qF "${PROJECT_CONFIG_DIR}/install_additional_packages.sh:/usr/local/bin/project-install.sh:ro" "${DOCKER_RUN_ARGS}"
+}
+
+@test "no per-project install_additional_packages.sh: project-install.sh is not mounted" {
+  mkdir -p "${PROJECT_CONFIG_DIR}"
+  rm -f "${PROJECT_CONFIG_DIR}/install_additional_packages.sh"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  ! grep -qF "project-install.sh" "${DOCKER_RUN_ARGS}"
 }
