@@ -28,104 +28,13 @@ HOST_CLAUDE_DIR="${HOME}/.claude"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(pwd)"
 
-# Guard: refuse to run from the user's home directory to prevent accidental
-# exposure of home directory contents to the container.
-if [[ "${PROJECT_DIR}" == "${HOME}" ]]; then
-  echo "ERROR: Running claude-in-docker from your home directory is not allowed." >&2
-  echo "  This would mount your entire home directory into the container," >&2
-  echo "  defeating the purpose of the sandboxed environment." >&2
-  echo "  Please cd into a project subdirectory first." >&2
-  exit 1
-fi
-
-# Guard: a project-level .claude/settings.json (or the .claude/settings.local.json
-# override) can register hooks that Claude Code runs inside the container —
-# arbitrary code execution from an untrusted repo. Refuse by default before doing
-# any work; set CLAUDE_ALLOW_PROJECT_SETTINGS=1 to opt in. See docs/attack-vectors.md.
-case "${CLAUDE_ALLOW_PROJECT_SETTINGS:-}" in
-  1|true|yes|on|TRUE|YES|ON) ;;  # opted in — skip the guard
-  *)
-    for _settings in settings.json settings.local.json; do
-      if [[ -f "${PROJECT_DIR}/.claude/${_settings}" ]]; then
-        echo "ERROR: cowardly refusing to run: ${PROJECT_DIR}/.claude/${_settings} exists." >&2
-        echo "  It can register hooks that run arbitrary commands in the container." >&2
-        echo "  Remove/vet it, or set CLAUDE_ALLOW_PROJECT_SETTINGS=1 to override." >&2
-        echo "  See docs/attack-vectors.md." >&2
-        exit 1
-      fi
-    done
-    ;;
-esac
-
-# Guard: verify that MCP_GH_BEARER, if set, is a read-only GitHub token.
-# A write-capable token could allow Claude to mutate repositories, defeating
-# the container's security model. Use a fine-grained PAT with read-only scopes.
-# See docs/mcp-servers.md.
-if [[ -n "${MCP_GH_BEARER:-}" ]]; then
-  if ! command -v curl >/dev/null 2>&1; then
-    echo ">> WARNING: curl not found; skipping GitHub token write-access check." >&2
-  else
-    _gh_headers=$(curl -sI \
-      -H "Authorization: Bearer ${MCP_GH_BEARER}" \
-      -H "X-GitHub-Api-Version: 2022-11-28" \
-      https://api.github.com/user 2>/dev/null) || true
-    _gh_status=$(printf '%s' "$_gh_headers" | grep -m1 -i '^HTTP/' | awk '{print $2}' | tr -d '\r') || true
-    case "${_gh_status}" in
-      401)
-        echo "ERROR: GitHub token (MCP_GH_BEARER) is invalid (401 Unauthorized)." >&2
-        echo "  Check your token and try again." >&2
-        exit 1
-        ;;
-      2*)
-        # Classic OAuth tokens expose their scopes in X-OAuth-Scopes.
-        _gh_scopes=$(printf '%s' "$_gh_headers" | grep -im1 '^x-oauth-scopes:' \
-          | cut -d: -f2- | tr -d ' \r\n') || true
-        if [[ -n "$_gh_scopes" ]]; then
-          # Classic token: reject if any write-capable scope is present.
-          _bad_scope=""
-          for _s in repo public_repo workflow delete_repo \
-                    write:org admin:org \
-                    write:packages delete:packages \
-                    admin:repo_hook write:repo_hook; do
-            if echo ",$_gh_scopes," | grep -qF ",${_s},"; then
-              _bad_scope="$_s"; break
-            fi
-          done
-          if [[ -n "$_bad_scope" ]]; then
-            echo "ERROR: GitHub token (MCP_GH_BEARER) has write scope '${_bad_scope}'." >&2
-            echo "  The container requires a read-only token. Replace it with a" >&2
-            echo "  fine-grained PAT scoped to read-only repository access." >&2
-            echo "  See docs/mcp-servers.md for details." >&2
-            exit 1
-          fi
-        else
-          # Fine-grained PAT (X-OAuth-Scopes is empty): check push permission
-          # in the repo list — each entry's permissions.push shows whether the
-          # token can write to that repo.
-          _gh_repos=$(curl -s \
-            -H "Authorization: Bearer ${MCP_GH_BEARER}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/user/repos?type=all&per_page=100&affiliation=owner,collaborator,organization_member" \
-            2>/dev/null) || true
-          if printf '%s' "$_gh_repos" | grep -q '"push": true'; then
-            echo "ERROR: GitHub token (MCP_GH_BEARER) has write (push) access to one or more repositories." >&2
-            echo "  The container requires a read-only token. Replace it with a" >&2
-            echo "  fine-grained PAT scoped to read-only repository access." >&2
-            echo "  See docs/mcp-servers.md for details." >&2
-            exit 1
-          fi
-        fi
-        echo ">> GitHub token (MCP_GH_BEARER) verified read-only."
-        ;;
-      "")
-        echo ">> WARNING: Could not reach GitHub API — skipping token read-only check." >&2
-        ;;
-      *)
-        echo ">> WARNING: GitHub API returned HTTP ${_gh_status} — skipping token read-only check." >&2
-        ;;
-    esac
-  fi
-fi
+# Pre-flight security guards. Each lives in guards/ and is sourced (not run as a
+# subprocess) so it can abort the whole run with `exit` before any build, volume,
+# or container work happens. They read PROJECT_DIR / HOME / MCP_GH_BEARER /
+# CLAUDE_ALLOW_PROJECT_SETTINGS from this scope. See each file for details.
+source "${SCRIPT_DIR}/guards/no-home-dir.sh"
+source "${SCRIPT_DIR}/guards/project-settings.sh"
+source "${SCRIPT_DIR}/guards/mcp-bearer-readonly.sh"
 
 # 1. Build the image when it doesn't exist or when the build context has changed.
 #    A SHA-256 hash of the key files is stored as an image label at build time;

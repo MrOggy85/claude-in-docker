@@ -14,6 +14,9 @@ See `README.md` for setup, usage, and a fuller description of the project.
 - `Dockerfile`, `entrypoint.sh`, `init-firewall.sh`, `allowed-domains.txt` —
   image build context; their hash gates rebuilds (`run.sh` `context_hash`).
 - `scripts/extra-mounts.sh` — turns `CLAUDE_MOUNTS` into `--volume` tokens.
+- `guards/` — pre-flight security gates, each `source`d by `run.sh` so it can
+  `exit` the run before any build/container work (home-dir, project-settings,
+  MCP token read-only check). Add new guards here, not inline in `run.sh`.
 - `sync-volume.sh` / `usage.sh` — copy per-session usage records out of the
   volume for `ccusage`, keeping only cost fields (no conversation content).
 - `templates/` + `Makefile` (`make init`) — user-local config is copied from the
