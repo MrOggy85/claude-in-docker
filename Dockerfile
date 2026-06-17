@@ -81,9 +81,18 @@ RUN chmod -R 777 /home/dev
 
 # The container runs as the host UID (see run.sh --user flag), which usually
 # has no /etc/passwd entry. That breaks whoami, Node's os.userInfo(), and any
-# code calling getpwuid(). Make /etc/passwd writable and inject an entry for
-# the runtime UID at container start.
-RUN chmod 666 /etc/passwd /etc/group
+# code calling getpwuid(). Inject the entry at build time (as root) using the
+# caller's UID/GID/username passed via --build-arg, so /etc/passwd and
+# /etc/group stay at their default 644 permissions and are never world-writable.
+ARG USER_ID=1000
+ARG GROUP_ID=1000
+ARG USERNAME=dev
+RUN if ! getent passwd "${USER_ID}" >/dev/null 2>&1; then \
+      echo "${USERNAME}:x:${USER_ID}:${GROUP_ID}:${USERNAME}:/home/dev:/bin/bash" >> /etc/passwd; \
+    fi \
+ && if ! getent group "${GROUP_ID}" >/dev/null 2>&1; then \
+      echo "${USERNAME}:x:${GROUP_ID}:" >> /etc/group; \
+    fi
 
 # Outbound firewall: allowed domains are baked in at build time; rules are
 # applied on each container start via a sudo-scoped call in the entrypoint.
