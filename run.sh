@@ -47,7 +47,7 @@ case "${CLAUDE_ALLOW_PROJECT_SETTINGS:-}" in
   *)
     for _settings in settings.json settings.local.json; do
       if [[ -f "${PROJECT_DIR}/.claude/${_settings}" ]]; then
-        echo "ERROR: refusing to run: ${PROJECT_DIR}/.claude/${_settings} exists." >&2
+        echo "ERROR: cowardly refusing to run: ${PROJECT_DIR}/.claude/${_settings} exists." >&2
         echo "  It can register hooks that run arbitrary commands in the container." >&2
         echo "  Remove/vet it, or set CLAUDE_ALLOW_PROJECT_SETTINGS=1 to override." >&2
         echo "  See docs/attack-vectors.md." >&2
