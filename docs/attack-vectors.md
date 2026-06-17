@@ -42,6 +42,27 @@ Concrete example: the allowlist intends to permit `api.githubcopilot.com` only, 
 
 Enforcing a true per-hostname policy requires moving the check to L7 — e.g. an egress proxy that filters on TLS SNI and is the only permitted outbound destination, with the firewall blocking all direct egress. That is not implemented here; the IP allowlist is a deliberately simpler boundary that is sufficient when allowed hosts do not share infrastructure with untrusted ones. See [Outbound Firewall](firewall.md) for how the allowlist and its IP resolution work.
 
+## DNS Exfiltration (Unmitigated)
+
+The firewall allows unrestricted outbound DNS (UDP/TCP port 53) to **any destination**, not just the container's configured resolver. This is required so `init-firewall.sh`'s `dig`-based startup resolution and the background refresher can reach a working resolver before the ipset is populated:
+
+```sh
+# init-firewall.sh lines 74-75
+iptables -A OUTPUT -p udp --dport 53  -j ACCEPT
+iptables -A OUTPUT -p tcp --dport 53  -j ACCEPT
+```
+
+Because these rules carry no destination restriction, any process can send a DNS query to an IP of its own choosing — including an attacker-controlled authoritative nameserver. Data is encoded in hostname labels (`exfil-chunk.attacker.example`), sent directly as a UDP/TCP packet to port 53 of the attacker's IP, and received by their NS daemon. The IP allowlist never sees it: DNS traffic is accepted before the ipset match rule is evaluated. No privilege escalation is needed — the unprivileged runtime user can open a UDP socket to port 53 on any IP.
+
+Restricting these rules to the container's configured resolver IP (typically the Docker bridge gateway, `172.17.0.1`) blocks direct-to-authoritative queries but does not close the channel: a standard recursive resolver will forward any query it receives up the DNS hierarchy, so `exfil.attacker.example` still reaches the attacker's NS — one hop removed. Fully closing DNS exfiltration requires:
+
+- **L7 DNS proxy** — run a local allowlist-only resolver (e.g. Unbound, CoreDNS) that resolves only the names in `allowed-domains.txt` and returns NXDOMAIN for everything else, then restrict port 53 to that resolver's loopback address only. Queries for unlisted names fail without ever leaving the host.
+- **DNS egress monitoring** — log all outgoing DNS queries and alert or block on suspicious patterns (high query rate, high-entropy labels, queries for unlisted second-level domains, unusual TLDs).
+
+Neither is implemented here. At minimum, restricting DNS to the resolver IP raises the bar from trivial to one-hop-proxied. See [Outbound Firewall](firewall.md) for the full rule sequence and the reasoning behind the unrestricted DNS rule.
+
+This is a larger practical gap than the [fast-fail disclosure](#firewall-boundary-disclosure-via-fast-fail) already documented: fast-fail reveals which IPs are allowed (low-sensitivity, since the allowlist is committed to the repo), while DNS exfiltration creates an unrestricted outbound channel that bypasses the allowlist entirely with no privilege requirement.
+
 ## Untrusted Package Artifacts on the Host
 
 The project directory is bind-mounted read-write, so anything an in-container install writes (e.g. `node_modules/`, lockfiles, dotfiles) lands on the host disk. Those files are harmless at rest, but the container cannot prevent the host from later executing or interpreting them. The blast radius is whatever you mount (the repo plus any `CLAUDE_MOUNTS`); mitigation is host-side op-sec — never run project tooling on the host, and gate the unsafe path behind a deliberate action (e.g. a `claude-bare` alias).
