@@ -8,6 +8,7 @@
 - [Volume-Backed Paths](volume-backed-paths.md) — `node_modules` is kept off the host disk by default; add paths via `CLAUDE_VOLUME_PATHS`, opt out via `SKIP_CLAUDE_VOLUME_PATHS`
 - [Installing Additional Packages](installing-packages.md) — install extra tools a workflow needs (e.g. Deno) at image build time
 - [Sound Effects](sound-effects.md) — play sounds on the host when Claude Code events fire
+- [Devcontainers Alternative](devcontainers.md) — using Dev Containers / Codespaces with a squid proxy sidecar instead of `run.sh`
 - [Known Attack Vectors](attack-vectors.md) — threats not handled by this solution
 - [Tracking Usage (ccusage)](tracking-usage.md) — report token usage across all projects with `ccusage`
 - [Usage Log Synchronization](usage-sync.md) — how transcript logs reach `~/.claude-docker-usage/` for `ccusage`
