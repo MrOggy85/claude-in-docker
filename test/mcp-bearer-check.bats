@@ -122,7 +122,7 @@ teardown() {
   # absolute path so env can find it even though /usr/bin (where curl also
   # lives) is absent from PATH.
   local _cmd _bin
-  for _cmd in bash dirname basename tr sed cut id sha256sum shasum; do
+  for _cmd in bash dirname basename tr sed cut id sha256sum shasum mkdir; do
     _bin="$(command -v "$_cmd" 2>/dev/null)" || true
     [[ -n "$_bin" && ! -e "${STUB_DIR}/no-curl-bin/${_cmd}" ]] && \
       ln -sf "$_bin" "${STUB_DIR}/no-curl-bin/${_cmd}"
