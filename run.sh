@@ -67,6 +67,8 @@ context_hash() {
     "${SCRIPT_DIR}/init-firewall.sh"
     "${SCRIPT_DIR}/allowed-domains.txt"
     "${SCRIPT_DIR}/install_additional_packages.sh"
+    "${SCRIPT_DIR}/package.json"
+    "${SCRIPT_DIR}/package-lock.json"
   )
   # Filter to files that actually exist, then hash them
   local existing=()

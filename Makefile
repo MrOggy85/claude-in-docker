@@ -2,7 +2,7 @@
 # Each file is its own target with no prerequisites, so `make init` creates the
 # ones that are missing and leaves existing files (your edits) untouched.
 
-.PHONY: init bats test test-extra-mounts test-extra-ports test-run test-e2e
+.PHONY: init bats test test-extra-mounts test-extra-ports test-run test-e2e lockfile pin-digest
 init: settings.json claude.json container-CLAUDE.md allowed-domains.txt .gitconfig install_additional_packages.sh .env
 
 # Install bats. Picks the package manager by platform.
@@ -37,6 +37,24 @@ test-run:
 
 test-e2e:
 	bats test/e2e.bats
+
+# Generate / refresh package-lock.json from package.json.
+# Run this after adding or changing a package in package.json, then commit
+# the result. Once package-lock.json is present the Docker build uses
+# `npm ci` for integrity-checked reproducible installs.
+lockfile:
+	npm install --package-lock-only
+
+# Fetch the current amd64 digest of debian:trixie-slim and write it into the
+# FROM line of the Dockerfile. Run after upstream security patches, then rebuild.
+# Requires docker (or skopeo: replace the command below with
+#   skopeo inspect --no-creds docker://debian:trixie-slim | jq -r '.Digest'
+# if docker is not available).
+pin-digest:
+	@DIGEST=$$(docker manifest inspect debian:trixie-slim \
+	  | jq -r '.manifests[] | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest') && \
+	  sed -i "s|FROM debian:trixie-slim.*|FROM debian:trixie-slim@$$DIGEST|" Dockerfile && \
+	  echo "Pinned to $$DIGEST"
 
 settings.json:
 	cp settings.json.example settings.json
