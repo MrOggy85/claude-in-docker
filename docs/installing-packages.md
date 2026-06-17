@@ -4,7 +4,7 @@ The image ships a fixed toolchain (Node, git, ripgrep, Python, etc.). When a wor
 something extra — e.g. Claude wants to run `deno` to check tests pass — add it via
 `install_additional_packages.sh`.
 
-`make init` creates the script from `install_additional_packages.sh.example`; it is gitignored,
+`make init` creates the script from `templates/install_additional_packages.sh`; it is gitignored,
 so your additions stay local. The default is a no-op:
 
 ```bash

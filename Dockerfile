@@ -151,7 +151,7 @@ RUN chmod +x /usr/local/bin/init-firewall.sh \
  && chmod 0440 /etc/sudoers.d/firewall
 
 # User-supplied extra packages. The script is gitignored and created from
-# install_additional_packages.sh.example by `make init`; edit it to install
+# templates/install_additional_packages.sh by `make init`; edit it to install
 # whatever a workflow needs (e.g. Deno), then rebuild the image. Kept near the
 # end so editing it only rebuilds this layer onward.
 COPY install_additional_packages.sh /usr/local/bin/install_additional_packages.sh

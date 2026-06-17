@@ -16,6 +16,7 @@ See `README.md` for setup, usage, and a fuller description of the project.
 - `scripts/extra-mounts.sh` — turns `CLAUDE_MOUNTS` into `--volume` tokens.
 - `sync-volume.sh` / `usage.sh` — copy per-session usage records out of the
   volume for `ccusage`, keeping only cost fields (no conversation content).
-- `*.example` + `Makefile` (`make init`) — user-local config is copied from
-  committed templates and gitignored. Edit the `.example` when changing defaults.
+- `templates/` + `Makefile` (`make init`) — user-local config is copied from the
+  committed templates in `templates/` into the repo root and gitignored. Edit the
+  file in `templates/` when changing defaults.
 - `docs/` — feature guides.

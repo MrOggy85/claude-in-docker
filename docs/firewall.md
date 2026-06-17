@@ -27,7 +27,7 @@ There are three copies of this file, and the distinction matters:
 
 | File                          | Tracked? | Role                                                            |
 | ----------------------------- | -------- | --------------------------------------------------------------- |
-| `allowed-domains.txt.example` | yes      | committed template / default set — edit this to change defaults |
+| `templates/allowed-domains.txt` | yes      | committed template / default set — edit this to change defaults |
 | `allowed-domains.txt`         | no       | your gitignored local copy (`make init` seeds it from the template) |
 | `/etc/allowed-domains.txt`    | —        | baked into the image from your local copy at build time         |
 
@@ -125,7 +125,7 @@ rebuilt after the edit.
 ## Changing the allowlist
 
 1. Edit `allowed-domains.txt` (your local copy) — or
-   `allowed-domains.txt.example` to change the committed default.
+   `templates/allowed-domains.txt` to change the committed default.
 2. Re-run `run.sh`; it rebuilds the image because the build context changed.
 
 See also: [Known Attack Vectors → Update of Allowed Domains](attack-vectors.md#update-of-allowed-domains).

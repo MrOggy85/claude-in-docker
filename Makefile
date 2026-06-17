@@ -1,4 +1,4 @@
-# Config files are created from their committed *.example templates.
+# Config files are created from their committed templates in templates/.
 # Each file is its own target with no prerequisites, so `make init` creates the
 # ones that are missing and leaves existing files (your edits) untouched.
 
@@ -57,23 +57,23 @@ pin-digest:
 	  echo "Pinned to $$DIGEST"
 
 settings.json:
-	cp settings.json.example settings.json
+	cp templates/settings.json settings.json
 
 claude.json:
-	cp claude.json.example claude.json
+	cp templates/claude.json claude.json
 
 container-CLAUDE.md:
-	cp container-CLAUDE.md.example container-CLAUDE.md
+	cp templates/container-CLAUDE.md container-CLAUDE.md
 
 allowed-domains.txt:
-	cp allowed-domains.txt.example allowed-domains.txt
+	cp templates/allowed-domains.txt allowed-domains.txt
 
 .gitconfig:
-	cp .gitconfig.example .gitconfig
+	cp templates/.gitconfig .gitconfig
 
 install_additional_packages.sh:
-	cp install_additional_packages.sh.example install_additional_packages.sh
+	cp templates/install_additional_packages.sh install_additional_packages.sh
 	chmod +x install_additional_packages.sh
 
 .env:
-	cp .env.example .env
+	cp templates/.env .env

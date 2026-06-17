@@ -16,7 +16,7 @@ It is **not** an air-gapped, 100% secure setup. It is a solution to mitigate the
 **tl;dr**
 Run `make init`
 
-This copies every `*.example` template to its target in one step (existing files are left untouched), then edit the copies.
+This copies every template in `templates/` to its target in the repo root in one step (existing files are left untouched), then edit the copies.
 All of the following files are gitignored and your personal files:
 
 - `settings.json` add your own settings here that will be used by Claude Code
