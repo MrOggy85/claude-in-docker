@@ -23,7 +23,6 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
-      actions: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -32,17 +31,6 @@ jobs:
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@v1.0.150
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          additional_permissions: |
-            actions: read
-          claude_args: '--allowedTools "Bash(git checkout:*),Bash(git switch:*),Bash(git branch:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh pr create:*),Bash(gh pr view:*)"'
-          prompt: |
-            After completing your changes:
-            1. Create a new branch with a descriptive name (e.g. feat/short-description or fix/short-description)
-            2. Commit and push your changes to that branch
-            3. Automatically create a PR using `gh pr create` — do not ask for confirmation
-            4. Link the PR back to the original issue
