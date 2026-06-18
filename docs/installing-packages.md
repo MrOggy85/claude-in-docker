@@ -32,22 +32,34 @@ commands reach must be listed in `allowed-domains.txt`.
 
 ## Per-project packages
 
-If different projects need different packages, place an
-`install_additional_packages.sh` inside the project's config directory instead
-of the root copy. `run.sh` prints the config directory on each run:
+If different projects need different packages, use the project's own
+`install_additional_packages.sh`. On first run, `run.sh` creates a per-project
+config directory and seeds it with an inert stub of this file (plus a copy of
+`allowed-domains.txt`). It prints the directory on each run:
 
 ```
 >> per-project config dir: …/projects/<key>
 ```
 
-Create `projects/<key>/install_additional_packages.sh` — it runs as **root**
-(via `sudo`) in the entrypoint on every container start, after the firewall is
-up. The root-level script is still run at image build time; the per-project
-script adds to it at runtime. If your install command needs a domain that isn't
-in the root allowlist, also add a `projects/<key>/allowed-domains.txt`.
+Edit `projects/<key>/install_additional_packages.sh` and add your install
+commands. The next run builds a **per-project image** layered `FROM` the shared
+base image, baking those packages in at **build time** — so they install once,
+not on every container start. `run.sh` reports the image it uses:
 
-> **Note:** because the per-project script runs on every start (not just the
-> first), keep it idempotent (e.g. check before installing).
+```
+>> building per-project image claude-code:<key>...
+>> per-project image: claude-code:<key>
+```
+
+The image is only rebuilt when the base image or the project script changes.
+While the script holds only comments and blank lines (the seeded state) it is
+treated as empty and the project just runs the shared base image directly — no
+extra image is built.
+
+Because the install runs as **root** at build time, no `sudo` is needed (the
+runtime user is unprivileged). If a project needs a domain the root allowlist
+omits, edit `projects/<key>/allowed-domains.txt`; it is mounted over
+`/etc/allowed-domains.txt` at container start, so domain changes need no rebuild.
 
 To promote a per-project script to the global default, copy it to the root
-`install_additional_packages.sh` and trigger a rebuild.
+`install_additional_packages.sh`.

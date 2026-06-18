@@ -21,6 +21,10 @@ setup() {
   DOCKER_RUN_ARGS="${STUB_DIR}/docker-run-args.txt"
   DOCKER_ALL_CALLS="${STUB_DIR}/docker-all-calls.txt"
 
+  # Point per-project config dirs at throwaway scratch so test runs never write
+  # into the repo's projects/. Cleaned up with STUB_DIR in teardown.
+  export CLAUDE_PROJECTS_DIR="${STUB_DIR}/projects"
+
   # Create the docker stub. EOF is unquoted so ${STUB_DIR} vars expand now;
   # \$1, \$@, etc. are escaped and become real $ in the written script.
   mkdir -p "${STUB_DIR}/bin"
@@ -100,7 +104,7 @@ EOF
   else
     _PATH_HASH="$(printf '%s' "${TEST_PROJECT_DIR}" | shasum -a 256 | cut -c1-10)"
   fi
-  PROJECT_CONFIG_DIR="${SCRIPT_DIR}/projects/${_SAFE_NAME:-repo}-${_PATH_HASH}"
+  PROJECT_CONFIG_DIR="${CLAUDE_PROJECTS_DIR}/${_SAFE_NAME:-repo}-${_PATH_HASH}"
 }
 
 teardown() {
@@ -449,20 +453,40 @@ refute_run_arg() {
   ! grep -qF "/etc/allowed-domains.txt" "${DOCKER_RUN_ARGS}"
 }
 
-@test "per-project install_additional_packages.sh is mounted at /usr/local/bin/project-install.sh" {
-  mkdir -p "${PROJECT_CONFIG_DIR}"
-  printf '#!/bin/bash\necho "project packages"\n' > "${PROJECT_CONFIG_DIR}/install_additional_packages.sh"
+@test "first run seeds an install stub and an allowed-domains.txt copy" {
+  rm -rf "${PROJECT_CONFIG_DIR}"
   cd "${TEST_PROJECT_DIR}"
   run "${RUN_CMD[@]}"
   [ "$status" -eq 0 ]
-  grep -qF "${PROJECT_CONFIG_DIR}/install_additional_packages.sh:/usr/local/bin/project-install.sh:ro" "${DOCKER_RUN_ARGS}"
+  [ -f "${PROJECT_CONFIG_DIR}/install_additional_packages.sh" ]
+  [ -f "${PROJECT_CONFIG_DIR}/allowed-domains.txt" ]
+  # The seeded stub is all comments -> inert -> base image, no derived build.
+  assert_run_arg "claude-code:local"
 }
 
-@test "no per-project install_additional_packages.sh: project-install.sh is not mounted" {
+@test "per-project install script bakes a derived image and run uses it" {
   mkdir -p "${PROJECT_CONFIG_DIR}"
-  rm -f "${PROJECT_CONFIG_DIR}/install_additional_packages.sh"
+  printf '#!/bin/bash\napt-get install -y cowsay\n' > "${PROJECT_CONFIG_DIR}/install_additional_packages.sh"
   cd "${TEST_PROJECT_DIR}"
   run "${RUN_CMD[@]}"
   [ "$status" -eq 0 ]
+  local _img="claude-code:${_SAFE_NAME:-repo}-${_PATH_HASH}"
+  # A derived image was built on the fly (FROM the base) ...
+  grep -qF "build --tag ${_img}" "${DOCKER_ALL_CALLS}"
+  # ... and the container runs that derived image, not the base.
+  assert_run_arg "${_img}"
+  # No runtime install mount remains.
   ! grep -qF "project-install.sh" "${DOCKER_RUN_ARGS}"
+}
+
+@test "stub-only install script: base image is used and no derived image is built" {
+  mkdir -p "${PROJECT_CONFIG_DIR}"
+  # Only comments / blank lines -> treated as empty.
+  printf '#!/bin/bash\n# nothing to install\n\n' > "${PROJECT_CONFIG_DIR}/install_additional_packages.sh"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "claude-code:local"
+  local _img="claude-code:${_SAFE_NAME:-repo}-${_PATH_HASH}"
+  ! grep -qF "build --tag ${_img}" "${DOCKER_ALL_CALLS}"
 }

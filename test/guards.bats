@@ -16,6 +16,9 @@ setup() {
   TEST_PROJECT_DIR="$(mktemp -d)"
   STUB_DIR="$(mktemp -d)"
 
+  # Keep per-project config dirs out of the repo's projects/ (cleaned with STUB_DIR).
+  export CLAUDE_PROJECTS_DIR="${STUB_DIR}/projects"
+
   # Minimal docker stub: succeed at everything so a clean run reaches (a no-op)
   # `docker run` and exits 0. Guards that abort exit before any docker call.
   mkdir -p "${STUB_DIR}/bin"
@@ -48,6 +51,24 @@ EOF
 
 teardown() {
   rm -rf "${TEST_PROJECT_DIR}" "${STUB_DIR}"
+}
+
+# Run run.sh detached from any controlling terminal. The project-settings guard
+# prompts by reading /dev/tty; with no tty (as in CI) the read fails and the
+# guard auto-declines. Without this, running `bats test/` from an interactive
+# shell blocks on that prompt. A fresh, tty-less session makes the /dev/tty open
+# fail so the guard declines deterministically.
+#   - Linux/CI: `setsid -w` (util-linux); -w forwards the child's exit status.
+#   - macOS (no setsid): Perl's core POSIX::setsid after a fork (Perl ships with
+#     macOS); the parent waits and re-exports the child's status.
+run_no_tty() {
+  if command -v setsid >/dev/null 2>&1; then
+    run setsid -w "$@"
+  elif command -v perl >/dev/null 2>&1; then
+    run perl -MPOSIX -e 'my $p=fork; if($p==0){POSIX::setsid(); exec @ARGV; exit 127} waitpid($p,0); exit($? >> 8)' -- "$@"
+  else
+    run "$@"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -84,7 +105,7 @@ teardown() {
   mkdir -p "${TEST_PROJECT_DIR}/.claude"
   echo '{}' > "${TEST_PROJECT_DIR}/.claude/settings.json"
   cd "${TEST_PROJECT_DIR}"
-  run env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  run_no_tty env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
   [ "$status" -eq 1 ]
   [[ "$output" == *"settings.json"* ]]
 }
@@ -93,7 +114,7 @@ teardown() {
   mkdir -p "${TEST_PROJECT_DIR}/.claude"
   echo '{}' > "${TEST_PROJECT_DIR}/.claude/settings.local.json"
   cd "${TEST_PROJECT_DIR}"
-  run env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  run_no_tty env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
   [ "$status" -eq 1 ]
   [[ "$output" == *"settings.local.json"* ]]
 }

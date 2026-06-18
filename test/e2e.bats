@@ -78,12 +78,26 @@ _stage_scenario() {
 
 # Run run.sh from a staged scenario directory using the mock docker.
 # Sets $status, $output, $lines (bats run semantics).
+#
+# Detach the run from any controlling terminal: the project-settings guard
+# prompts by reading /dev/tty, and with no tty the read fails so the guard
+# auto-declines (as in CI) instead of blocking. Without it, the malicious-
+# settings scenario hangs when `bats test/` is run from an interactive shell.
+#   - Linux/CI: `setsid -w` (util-linux); -w forwards the child's exit status.
+#   - macOS (no setsid): Perl's core POSIX::setsid after a fork (ships with macOS).
 run_staged() {
   local dir="$1"
-  run --separate-stderr env \
+  local tty_wrap=()
+  if command -v setsid >/dev/null 2>&1; then
+    tty_wrap=(setsid -w)
+  elif command -v perl >/dev/null 2>&1; then
+    tty_wrap=(perl -MPOSIX -e 'my $p=fork; if($p==0){POSIX::setsid(); exec @ARGV; exit 127} waitpid($p,0); exit($? >> 8)' --)
+  fi
+  run --separate-stderr "${tty_wrap[@]}" env \
     PATH="${MOCK_BIN}:${PATH}" \
     CLAUDE_AUTO_USAGE=0 \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_PROJECTS_DIR="${CLAUDE_PROJECTS_DIR}" \
     bash -c "cd '${dir}' && bash '${RUN_SH}'"
 }
 
@@ -97,7 +111,9 @@ setup() {
   DOCKER_ARGS_FILE="${TEST_TMP}/docker_run_args"
   mkdir -p "${MOCK_BIN}"
   _make_mock_docker "${MOCK_BIN}/docker"
-  export DOCKER_ARGS_FILE MOCK_BIN TEST_TMP
+  # Keep per-project config dirs out of the repo's projects/ (cleaned with TEST_TMP).
+  CLAUDE_PROJECTS_DIR="${TEST_TMP}/projects"
+  export DOCKER_ARGS_FILE MOCK_BIN TEST_TMP CLAUDE_PROJECTS_DIR
 }
 
 teardown() {
