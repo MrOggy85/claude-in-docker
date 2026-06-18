@@ -32,7 +32,7 @@ jobs:
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@v1.0.150
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
