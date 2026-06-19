@@ -339,6 +339,7 @@ docker run \
   ${ENV_FILE_ARGS[@]+"${ENV_FILE_ARGS[@]}"} \
   --env HOME="${HOME_IN_CONTAINER}" \
   --env COLORTERM=truecolor \
+  --env CLAUDE_HOST_PROJECT_DIR="${PROJECT_DIR}" \
   --env MCP_GH_BEARER \
   --env CONTAINER_OPEN_PORTS="${CONTAINER_OPEN_PORTS}" \
   ${PUBLISH_ARGS[@]+"${PUBLISH_ARGS[@]}"} \

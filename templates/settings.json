@@ -1,1 +1,6 @@
-{}
+{
+  "statusLine": {
+    "type": "command",
+    "command": "printf '\\033[2m📁 %s\\033[0m' \"${CLAUDE_HOST_PROJECT_DIR:-$(pwd)}\""
+  }
+}
