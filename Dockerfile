@@ -48,6 +48,7 @@ RUN apt-get update \
   iptables \
   ipset \
   shellcheck \
+  yamllint \
   nano \
   sudo \
     && rm -rf /var/lib/apt/lists/*
