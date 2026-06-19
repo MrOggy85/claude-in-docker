@@ -127,10 +127,13 @@ if [[ ! -d "${PROJECT_CONFIG_DIR}" ]]; then
 #   set -euo pipefail
 #   curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh -s v2.3.1
 STUB
-  # Seed allowed-domains.txt as a copy of the root list. It is mounted over
-  # /etc/allowed-domains.txt at runtime (see 3f) — edit freely, no rebuild.
-  [[ -f "${SCRIPT_DIR}/allowed-domains.txt" ]] && \
-    cp "${SCRIPT_DIR}/allowed-domains.txt" "${PROJECT_CONFIG_DIR}/allowed-domains.txt"
+  # Seed allowed-domains.txt: prefer the active root list, else the committed
+  # template (the root copy is gitignored and absent on a fresh checkout). It is
+  # mounted over /etc/allowed-domains.txt at runtime (see 3f) — edit, no rebuild.
+  _seed_domains="${SCRIPT_DIR}/allowed-domains.txt"
+  [[ -f "${_seed_domains}" ]] || _seed_domains="${SCRIPT_DIR}/templates/allowed-domains.txt"
+  [[ -f "${_seed_domains}" ]] && \
+    cp "${_seed_domains}" "${PROJECT_CONFIG_DIR}/allowed-domains.txt"
   echo ">> created per-project config dir: ${PROJECT_CONFIG_DIR}"
   echo ">>   edit install_additional_packages.sh / allowed-domains.txt there to"
   echo ">>   override defaults; .env and container-CLAUDE.md also work"
