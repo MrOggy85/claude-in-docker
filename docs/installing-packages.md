@@ -29,3 +29,37 @@ a rare activity, so the rebuild cost is acceptable.
 
 Outbound network access during the build is constrained by the firewall: any host your install
 commands reach must be listed in `allowed-domains.txt`.
+
+## Per-project packages
+
+If different projects need different packages, use the project's own
+`install_additional_packages.sh`. On first run, `run.sh` creates a per-project
+config directory and seeds it with an inert stub of this file (plus a copy of
+`allowed-domains.txt`). It prints the directory on each run:
+
+```
+>> per-project config dir: …/projects/<key>
+```
+
+Edit `projects/<key>/install_additional_packages.sh` and add your install
+commands. The next run builds a **per-project image** layered `FROM` the shared
+base image, baking those packages in at **build time** — so they install once,
+not on every container start. `run.sh` reports the image it uses:
+
+```
+>> building per-project image claude-code:<key>...
+>> per-project image: claude-code:<key>
+```
+
+The image is only rebuilt when the base image or the project script changes.
+While the script holds only comments and blank lines (the seeded state) it is
+treated as empty and the project just runs the shared base image directly — no
+extra image is built.
+
+Because the install runs as **root** at build time, no `sudo` is needed (the
+runtime user is unprivileged). If a project needs a domain the root allowlist
+omits, edit `projects/<key>/allowed-domains.txt`; it is mounted over
+`/etc/allowed-domains.txt` at container start, so domain changes need no rebuild.
+
+To promote a per-project script to the global default, copy it to the root
+`install_additional_packages.sh`.

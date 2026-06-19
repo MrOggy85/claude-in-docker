@@ -18,7 +18,7 @@
 
 set -euo pipefail
 
-IMAGE="claude-code:local"
+BASE_IMAGE="claude-code:local"
 HOME_IN_CONTAINER="/home/dev"
 REPO_IN_CONTAINER="${HOME_IN_CONTAINER}/repo"
 HOST_CLAUDE_DIR="${HOME}/.claude"
@@ -61,13 +61,13 @@ context_hash() {
 }
 
 CURRENT_HASH="$(context_hash)"
-IMAGE_HASH="$(docker image inspect "${IMAGE}" --format '{{index .Config.Labels "build.context-hash"}}' 2>/dev/null || true)"
+BASE_IMAGE_HASH="$(docker image inspect "${BASE_IMAGE}" --format '{{index .Config.Labels "build.context-hash"}}' 2>/dev/null || true)"
 
-if [[ "$IMAGE_HASH" != "$CURRENT_HASH" ]]; then
-  [[ -n "$IMAGE_HASH" ]] && echo ">> Build context changed — rebuilding ${IMAGE}..." \
-                          || echo ">> Building ${IMAGE}..."
+if [[ "$BASE_IMAGE_HASH" != "$CURRENT_HASH" ]]; then
+  [[ -n "$BASE_IMAGE_HASH" ]] && echo ">> Build context changed — rebuilding ${BASE_IMAGE}..." \
+                              || echo ">> Building ${BASE_IMAGE}..."
   docker build \
-    --tag "${IMAGE}" \
+    --tag "${BASE_IMAGE}" \
     --label "build.context-hash=${CURRENT_HASH}" \
     --build-arg "USER_ID=$(id -u)" \
     --build-arg "GROUP_ID=$(id -g)" \
@@ -98,6 +98,99 @@ echo ">> session volume: ${VOLUME}  (docker volume inspect ${VOLUME})"
 CONTAINER_NAME="${CLAUDE_CONTAINER_NAME:-claude-${SAFE_NAME:-repo}-$(printf '%04x%04x' "${RANDOM}" "${RANDOM}")}"
 echo ">> container name: ${CONTAINER_NAME}"
 
+# 2c. Per-project config directory: projects/<safe-name>-<path-hash>/ inside the
+#     claude-in-docker repo. Files placed here override the root-level defaults on
+#     a file-by-file basis (more specific wins). The directory is created — and
+#     seeded with editable starting points — automatically on first run.
+#     Supported overrides: allowed-domains.txt, .env, container-CLAUDE.md,
+#     install_additional_packages.sh
+PROJECT_KEY="${SAFE_NAME:-repo}-$(path_hash "${PROJECT_DIR}")"
+# Base dir holding all per-project config dirs. Defaults to projects/ next to
+# run.sh; override with CLAUDE_PROJECTS_DIR (the test suite points this at a
+# throwaway dir so test runs never write into the repo's projects/).
+PROJECTS_DIR="${CLAUDE_PROJECTS_DIR:-${SCRIPT_DIR}/projects}"
+PROJECT_CONFIG_DIR="${PROJECTS_DIR}/${PROJECT_KEY}"
+if [[ ! -d "${PROJECT_CONFIG_DIR}" ]]; then
+  mkdir -p "${PROJECT_CONFIG_DIR}"
+  # Seed an install_additional_packages.sh stub. While it holds only comments /
+  # blank lines it counts as empty (see 2d) and the shared base image is used
+  # as-is; add real commands and the next run bakes them into a per-project image.
+  cat > "${PROJECT_CONFIG_DIR}/install_additional_packages.sh" <<'STUB'
+#!/bin/bash
+#
+# Per-project packages. Add commands below and the next run bakes them into a
+# per-project Docker image (FROM the shared base), so they install once at build
+# time instead of on every container start. While this file holds only comments
+# and blank lines it is treated as empty and the base image is used unchanged.
+#
+# Example:
+#   set -euo pipefail
+#   curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh -s v2.3.1
+STUB
+  # Seed allowed-domains.txt: prefer the active root list, else the committed
+  # template (the root copy is gitignored and absent on a fresh checkout). It is
+  # mounted over /etc/allowed-domains.txt at runtime (see 3f) — edit, no rebuild.
+  _seed_domains="${SCRIPT_DIR}/allowed-domains.txt"
+  [[ -f "${_seed_domains}" ]] || _seed_domains="${SCRIPT_DIR}/templates/allowed-domains.txt"
+  [[ -f "${_seed_domains}" ]] && \
+    cp "${_seed_domains}" "${PROJECT_CONFIG_DIR}/allowed-domains.txt"
+  echo ">> created per-project config dir: ${PROJECT_CONFIG_DIR}"
+  echo ">>   edit install_additional_packages.sh / allowed-domains.txt there to"
+  echo ">>   override defaults; .env and container-CLAUDE.md also work"
+else
+  echo ">> per-project config dir: ${PROJECT_CONFIG_DIR}"
+fi
+
+# Returns the per-project path if the file exists there, otherwise the root path.
+resolve_config_file() {  # <filename>
+  local fname="$1"
+  if [[ -f "${PROJECT_CONFIG_DIR}/${fname}" ]]; then
+    echo "${PROJECT_CONFIG_DIR}/${fname}"
+  else
+    echo "${SCRIPT_DIR}/${fname}"
+  fi
+}
+
+# 2d. Per-project image. The base image (built above) already carries the
+#     root-level install_additional_packages.sh. When a project supplies its OWN
+#     install script, bake those packages into a thin image FROM the base — once,
+#     at build time — so they persist instead of being reinstalled by the
+#     entrypoint on every container start. The Dockerfile is generated on the fly
+#     and piped in via `--file -`; nothing is written into the project dir. A
+#     project whose script is still the all-comments stub counts as empty and
+#     runs the base image directly.
+IMAGE="${BASE_IMAGE}"
+_PROJECT_INSTALL="${PROJECT_CONFIG_DIR}/install_additional_packages.sh"
+# "active" = at least one line that is neither blank nor a pure comment.
+if [[ -f "${_PROJECT_INSTALL}" ]] && grep -qvE '^[[:space:]]*(#.*)?$' "${_PROJECT_INSTALL}"; then
+  DERIVED_IMAGE="claude-code:${PROJECT_KEY}"
+  # Rebuild when either the base context or the project script changes.
+  DERIVED_HASH="$(
+    { printf '%s\n' "${CURRENT_HASH}"
+      if command -v sha256sum >/dev/null 2>&1; then sha256sum "${_PROJECT_INSTALL}"
+      else shasum -a 256 "${_PROJECT_INSTALL}"; fi
+    } | sha256sum | cut -c1-16
+  )"
+  DERIVED_IMAGE_HASH="$(docker image inspect "${DERIVED_IMAGE}" --format '{{index .Config.Labels "build.context-hash"}}' 2>/dev/null || true)"
+  if [[ "${DERIVED_IMAGE_HASH}" != "${DERIVED_HASH}" ]]; then
+    [[ -n "${DERIVED_IMAGE_HASH}" ]] && echo ">> project install script changed — rebuilding ${DERIVED_IMAGE}..." \
+                                      || echo ">> building per-project image ${DERIVED_IMAGE}..."
+    docker build \
+      --tag "${DERIVED_IMAGE}" \
+      --label "build.context-hash=${DERIVED_HASH}" \
+      --file - \
+      "${PROJECT_CONFIG_DIR}" <<DOCKERFILE
+FROM ${BASE_IMAGE}
+COPY install_additional_packages.sh /usr/local/bin/project-install.sh
+RUN chmod +x /usr/local/bin/project-install.sh \\
+ && /usr/local/bin/project-install.sh \\
+ && rm -f /usr/local/bin/project-install.sh
+DOCKERFILE
+  fi
+  IMAGE="${DERIVED_IMAGE}"
+  echo ">> per-project image: ${IMAGE}"
+fi
+
 # 3. Config mounts, added only if the host path exists.
 RO_MOUNTS=()
 add_ro_mount() {  # <host_path> <container_path>
@@ -113,7 +206,7 @@ add_rw_mount() {  # <host_path> <container_path>
 add_ro_mount "${SCRIPT_DIR}/settings.json" "${HOME_IN_CONTAINER}/.claude/settings.json"
 add_rw_mount "${SCRIPT_DIR}/claude.json"   "${HOME_IN_CONTAINER}/.claude.json"
 add_rw_mount "${SCRIPT_DIR}/.credentials.json" "${HOME_IN_CONTAINER}/.claude/.credentials.json"
-add_ro_mount "${SCRIPT_DIR}/container-CLAUDE.md" "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
+add_ro_mount "$(resolve_config_file container-CLAUDE.md)" "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
 add_ro_mount "${SCRIPT_DIR}/.gitconfig"      "${HOME_IN_CONTAINER}/.gitconfig"
 
 # 3b. Extra project mounts. scripts/extra-mounts.sh turns CLAUDE_MOUNTS (a
@@ -209,14 +302,26 @@ else
 fi
 
 # 3e. Optional arbitrary env vars from a gitignored `.env` next to run.sh, via
-#     `docker --env-file`. Emitted before the explicit `--env` flags so it can't
-#     clobber them (last duplicate wins). See docs/passing-env-vars.md.
-ENV_FILE="${SCRIPT_DIR}/.env"
+#     `docker --env-file`. Per-project .env in projects/<key>/.env takes
+#     precedence when present. Emitted before the explicit `--env` flags so it
+#     can't clobber them (last duplicate wins). See docs/passing-env-vars.md.
+ENV_FILE="$(resolve_config_file .env)"
 ENV_FILE_ARGS=()
 if [ -f "$ENV_FILE" ]; then
   ENV_FILE_ARGS+=(--env-file "$ENV_FILE")
   echo ">> env file: ${ENV_FILE}"
 fi
+
+# 3f. Per-project allowed-domains.txt: if present, mount it over the baked-in
+#     /etc/allowed-domains.txt so the firewall uses the project-specific list.
+_PROJECT_DOMAINS="${PROJECT_CONFIG_DIR}/allowed-domains.txt"
+if [[ -f "${_PROJECT_DOMAINS}" ]]; then
+  RO_MOUNTS+=(--volume "${_PROJECT_DOMAINS}:/etc/allowed-domains.txt:ro")
+  echo ">> per-project allowed-domains.txt: ${_PROJECT_DOMAINS}"
+fi
+
+# (Per-project install packages are baked into a derived image at build time;
+#  see 2d. There is no longer a runtime install mount.)
 
 # 4. Run as your host UID:GID; HOME forced so "~" resolves for the passwd-less UID.
 #    NET_ADMIN is required for iptables/ipset; it is only exercisable via the

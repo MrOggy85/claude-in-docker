@@ -1,6 +1,7 @@
 #!/bin/bash
 # Configures outbound firewall at container start (runs as root, before privilege drop).
-# Allowed domains are baked into the image at /etc/allowed-domains.txt — rebuild to change them.
+# Allowed domains come from /etc/allowed-domains.txt — baked into the image by default,
+# or overridden per-project by run.sh mounting a project-specific file there.
 set -euo pipefail
 
 DOMAINS_FILE="/etc/allowed-domains.txt"

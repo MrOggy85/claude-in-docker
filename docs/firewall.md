@@ -23,18 +23,22 @@ api.anthropic.com
 api.githubcopilot.com
 ```
 
-There are three copies of this file, and the distinction matters:
+There are four copies of this file, and the distinction matters:
 
-| File                          | Tracked? | Role                                                            |
-| ----------------------------- | -------- | --------------------------------------------------------------- |
-| `templates/allowed-domains.txt` | yes      | committed template / default set — edit this to change defaults |
-| `allowed-domains.txt`         | no       | your gitignored local copy (`make init` seeds it from the template) |
-| `/etc/allowed-domains.txt`    | —        | baked into the image from your local copy at build time         |
+| File                                            | Tracked? | Role                                                                      |
+| ----------------------------------------------- | -------- | ------------------------------------------------------------------------- |
+| `templates/allowed-domains.txt`                 | yes      | committed template / default set — edit this to change defaults           |
+| `allowed-domains.txt`                           | no       | your gitignored root copy (`make init` seeds it from the template)        |
+| `projects/<key>/allowed-domains.txt`            | no       | optional per-project override — takes precedence over the root copy       |
+| `/etc/allowed-domains.txt`                      | —        | what the firewall reads; baked in at build time, or bind-mounted at start |
 
-The firewall reads only the **baked** `/etc/allowed-domains.txt`. The file is
-copied into the image at build time, so **changes take effect on the next image
-rebuild, not at runtime.** `run.sh` rebuilds automatically when the build context
-(including `allowed-domains.txt` and `init-firewall.sh`) changes.
+The firewall reads `/etc/allowed-domains.txt`. Normally that file is baked into
+the image at build time, so **changes to the root `allowed-domains.txt` take
+effect on the next image rebuild.** However, if a per-project
+`projects/<key>/allowed-domains.txt` exists, `run.sh` mounts it over
+`/etc/allowed-domains.txt` at container start — **no rebuild required.** This
+lets individual projects restrict or extend the default allowlist without
+touching the shared root copy.
 
 ## How it works
 
@@ -124,8 +128,17 @@ rebuilt after the edit.
 
 ## Changing the allowlist
 
+**Root-level (applies to all projects):**
+
 1. Edit `allowed-domains.txt` (your local copy) — or
    `templates/allowed-domains.txt` to change the committed default.
 2. Re-run `run.sh`; it rebuilds the image because the build context changed.
+
+**Per-project (overrides the root list for a specific project):**
+
+1. Find your project's config directory: `run.sh` prints it on each run as
+   `>> per-project config dir: …/projects/<key>`.
+2. Create `projects/<key>/allowed-domains.txt` with the domains that project needs.
+3. Re-run `run.sh` — no rebuild required; the file is bind-mounted at runtime.
 
 See also: [Known Attack Vectors → Update of Allowed Domains](attack-vectors.md#update-of-allowed-domains).

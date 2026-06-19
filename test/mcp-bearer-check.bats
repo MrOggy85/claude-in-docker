@@ -25,6 +25,9 @@ setup() {
   # can build a sanitised PATH that excludes any real curl binary.
   ORIGINAL_PATH="${PATH}"
 
+  # Keep per-project config dirs out of the repo's projects/ (cleaned with STUB_DIR).
+  export CLAUDE_PROJECTS_DIR="${STUB_DIR}/projects"
+
   mkdir -p "${STUB_DIR}/bin" "${STUB_DIR}/no-curl-bin"
 
   # --- docker stub (minimal: enough for run.sh to reach and pass the guard) ---
@@ -122,7 +125,7 @@ teardown() {
   # absolute path so env can find it even though /usr/bin (where curl also
   # lives) is absent from PATH.
   local _cmd _bin
-  for _cmd in bash dirname basename tr sed cut id sha256sum shasum; do
+  for _cmd in bash dirname basename tr sed cut id sha256sum shasum mkdir cat cp grep; do
     _bin="$(command -v "$_cmd" 2>/dev/null)" || true
     [[ -n "$_bin" && ! -e "${STUB_DIR}/no-curl-bin/${_cmd}" ]] && \
       ln -sf "$_bin" "${STUB_DIR}/no-curl-bin/${_cmd}"
