@@ -96,6 +96,11 @@ function claude {
 
 See [docs/index.md](docs/index.md) for guides on optional features.
 
+## Contributors 
+
+- @j-svensmark
+- @a-gravy
+
 ## Credits
 
 This solution is heavily inspired by Anthropic's own approach to running Claude Code in a [devcontainer](https://containers.dev/):
