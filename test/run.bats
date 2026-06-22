@@ -83,6 +83,18 @@ EOF
     cp -p "${ENV_FILE}" "${ENV_BACKUP}"
   fi
 
+  # mcp-servers.json also lives at SCRIPT_DIR (a path baked into run.sh we cannot
+  # redirect). Back it up and remove it so each test starts with a known-absent
+  # root file; per-project copies go in the isolated CLAUDE_PROJECTS_DIR instead.
+  # Restored byte-for-byte in teardown.
+  MCP_ROOT="${SCRIPT_DIR}/mcp-servers.json"
+  MCP_BACKUP=""
+  if [ -e "${MCP_ROOT}" ]; then
+    MCP_BACKUP="$(mktemp)"
+    cp -p "${MCP_ROOT}" "${MCP_BACKUP}"
+    rm -f "${MCP_ROOT}"
+  fi
+
   # Convenience: run run.sh from the isolated project dir with test-safe env vars
   # SKIP_CLAUDE_VOLUME_PATHS=1  — skip node_modules docker volume creation
   # CLAUDE_AUTO_USAGE=0         — skip post-run usage sync
@@ -119,6 +131,12 @@ teardown() {
   if [ -n "${ENV_BACKUP}" ]; then
     cp -p "${ENV_BACKUP}" "${ENV_FILE}"
     rm -f "${ENV_BACKUP}"
+  fi
+  # Restore the developer's real mcp-servers.json, or remove one a test created.
+  rm -f "${MCP_ROOT}"
+  if [ -n "${MCP_BACKUP}" ]; then
+    cp -p "${MCP_BACKUP}" "${MCP_ROOT}"
+    rm -f "${MCP_BACKUP}"
   fi
   # Remove any per-project config dir created during this test
   rm -rf "${PROJECT_CONFIG_DIR}"
@@ -489,4 +507,35 @@ refute_run_arg() {
   assert_run_arg "claude-code:local"
   local _img="claude-code:${_SAFE_NAME:-repo}-${_PATH_HASH}"
   ! grep -qF "build --tag ${_img}" "${DOCKER_ALL_CALLS}"
+}
+
+# ---------------------------------------------------------------------------
+# mcp-servers.json (--mcp-config) integration
+# ---------------------------------------------------------------------------
+
+@test "no mcp-servers.json: no --mcp-config flag in docker run" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  refute_run_arg "--mcp-config"
+}
+
+@test "per-project mcp-servers.json: --mcp-config flag and read-only mount appear" {
+  mkdir -p "${PROJECT_CONFIG_DIR}"
+  printf '{"mcpServers":{}}\n' > "${PROJECT_CONFIG_DIR}/mcp-servers.json"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--mcp-config"
+  assert_run_arg "/home/dev/.mcp-servers.json"
+  assert_run_arg "${PROJECT_CONFIG_DIR}/mcp-servers.json:/home/dev/.mcp-servers.json:ro"
+}
+
+@test "root mcp-servers.json: --mcp-config points at the mounted file" {
+  printf '{"mcpServers":{}}\n' > "${MCP_ROOT}"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--mcp-config"
+  assert_run_arg "${MCP_ROOT}:/home/dev/.mcp-servers.json:ro"
 }

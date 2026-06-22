@@ -3,7 +3,7 @@
 # ones that are missing and leaves existing files (your edits) untouched.
 
 .PHONY: init bats test test-extra-mounts test-extra-ports test-run test-e2e lockfile pin-digest
-init: settings.json claude.json .credentials.json container-CLAUDE.md allowed-domains.txt .gitconfig install_additional_packages.sh
+init: settings.json claude.json mcp-servers.json .credentials.json container-CLAUDE.md allowed-domains.txt .gitconfig install_additional_packages.sh
 
 # Install bats. Picks the package manager by platform.
 #   macOS:           brew install bats-core
@@ -61,6 +61,12 @@ settings.json:
 
 claude.json:
 	cp templates/claude.json claude.json
+
+# MCP server definitions, kept separate from the mutable claude.json state file
+# and injected at runtime via `claude --mcp-config` (run.sh step 3a). Edit this
+# file to add/remove servers; changes apply on the next container start.
+mcp-servers.json:
+	cp templates/mcp-servers.json mcp-servers.json
 
 # Credentials persist across projects via this single file, bind-mounted
 # read-write into the container by run.sh. Seeded "{}" (mode 600) so Docker
