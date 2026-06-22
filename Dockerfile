@@ -51,7 +51,12 @@ RUN apt-get update \
   yamllint \
   nano \
   sudo \
+  chromium \
+  fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
+
+# chromium binary for chrome-devtools-mcp (arm64-compatible, respects container firewall)
+ENV CHROME_BIN=/usr/bin/chromium
 
 # Debian ships fd-find and bat under non-canonical names; add the usual aliases.
 RUN ln -s "$(command -v fdfind)" /usr/local/bin/fd \

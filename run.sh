@@ -336,6 +336,7 @@ docker run \
   --interactive --tty --rm \
   --user "$(id -u):$(id -g)" \
   --cap-add=NET_ADMIN \
+  --shm-size=1g \
   ${ENV_FILE_ARGS[@]+"${ENV_FILE_ARGS[@]}"} \
   --env HOME="${HOME_IN_CONTAINER}" \
   --env COLORTERM=truecolor \
