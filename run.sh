@@ -209,6 +209,21 @@ add_rw_mount "${SCRIPT_DIR}/.credentials.json" "${HOME_IN_CONTAINER}/.claude/.cr
 add_ro_mount "$(resolve_config_file container-CLAUDE.md)" "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
 add_ro_mount "${SCRIPT_DIR}/.gitconfig"      "${HOME_IN_CONTAINER}/.gitconfig"
 
+# 3a. MCP servers from a dedicated file, kept OUT of the mutable claude.json
+#     state blob. mcp-servers.json holds just {"mcpServers": {...}}; we mount it
+#     read-only and point `claude --mcp-config` at it, so it's the single source
+#     of truth — edit it and the next container start picks up the change, no
+#     rebuild. A per-project projects/<key>/mcp-servers.json overrides the root
+#     copy. ${MCP_GH_BEARER} inside the file is still expanded by claude from the
+#     container env. See docs/mcp-servers.md.
+MCP_ARGS=()
+_MCP_FILE="$(resolve_config_file mcp-servers.json)"
+if [[ -f "${_MCP_FILE}" ]]; then
+  add_ro_mount "${_MCP_FILE}" "${HOME_IN_CONTAINER}/.mcp-servers.json"
+  MCP_ARGS=(--mcp-config "${HOME_IN_CONTAINER}/.mcp-servers.json")
+  echo ">> mcp config: ${_MCP_FILE}"
+fi
+
 # 3b. Extra project mounts. scripts/extra-mounts.sh turns CLAUDE_MOUNTS (a
 #     comma-separated list of host folders) into `--volume=...` tokens, one per
 #     line, which we append to the mount list. See that script for the syntax
@@ -349,7 +364,7 @@ docker run \
   ${RO_MOUNTS[@]+"${RO_MOUNTS[@]}"} \
   --workdir "${REPO_IN_CONTAINER}" \
   "${IMAGE}" \
-  claude "$@" || STATUS=$?
+  claude ${MCP_ARGS[@]+"${MCP_ARGS[@]}"} "$@" || STATUS=$?
 
 # 5. Copy this session's usage records into the shared archive
 #    (~/.claude-docker-usage) so `ccusage` can read them from the host. The

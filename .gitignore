@@ -1,6 +1,7 @@
 .claude/
 /settings.json
 /claude.json
+/mcp-servers.json
 /container-CLAUDE.md
 /.gitconfig
 /.credentials.json
