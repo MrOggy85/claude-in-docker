@@ -98,8 +98,8 @@ See [docs/index.md](docs/index.md) for guides on optional features.
 
 ## Contributors 
 
-- @j-svensmark
-- @a-gravy
+- [j-svensmark](https://github.com/j-svensmark)
+- [a-gravy](https://github.com/a-gravy)
 
 ## Credits
 
