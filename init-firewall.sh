@@ -59,6 +59,10 @@ fi
 # CLAUDE_PORTS via run.sh / entrypoint.sh. Optional; empty when unset.
 OPEN_PORTS="${1:-}"
 
+# Host-side sound-server port to allow OUTBOUND to (see the host rule below),
+# from SOUND_PORT via run.sh / entrypoint.sh. Defaults to 4767.
+SOUND_PORT="${2:-4767}"
+
 if [[ ! -f "$DOMAINS_FILE" ]]; then
   log "no domains file at $DOMAINS_FILE — skipping"
   exit 0
@@ -95,6 +99,23 @@ if [[ -n "$OPEN_PORTS" ]]; then
     iptables -A INPUT -p "$proto" --dport "$port" -j ACCEPT
     log "open inbound: ${port}/${proto}"
   done
+fi
+
+# Allow OUTBOUND to the Docker host (host.docker.internal) on the sound-server
+# port only, so container hooks can reach the host-side sound daemon. The host
+# is published into /etc/hosts by Docker (not DNS), so it can't ride the
+# dig-based allowlist above — add it as an explicit rule. Narrowly scoped to one
+# tcp port so the container stays unable to reach any other host service.
+if [[ "$SOUND_PORT" =~ ^[0-9]+$ ]] && (( 10#$SOUND_PORT >= 1 && 10#$SOUND_PORT <= 65535 )); then
+  HOST_IP="$(getent hosts host.docker.internal 2>/dev/null | awk '{print $1; exit}')"
+  if [[ -n "$HOST_IP" ]]; then
+    iptables -A OUTPUT -d "$HOST_IP" -p tcp --dport "$SOUND_PORT" -j ACCEPT
+    log "allow host: ${HOST_IP}:${SOUND_PORT}/tcp (sound server)"
+  else
+    log "warn: host.docker.internal did not resolve — sound server unreachable from container"
+  fi
+else
+  log "warn: invalid SOUND_PORT '$SOUND_PORT' — not opening host sound port"
 fi
 
 # Fail fast instead of silently dropping. A bare `-P OUTPUT DROP` makes blocked

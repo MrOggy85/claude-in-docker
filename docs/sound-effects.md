@@ -16,8 +16,12 @@ Docker containers have no access to audio hardware. The workaround is a small HT
    Or install it as a launchd service so it starts automatically:
    ```bash
    cp sound-effects/com.user.claude-sound-server.plist ~/Library/LaunchAgents/
-   launchctl load ~/Library/LaunchAgents/com.user.claude-sound-server.plist
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.user.claude-sound-server.plist
+   launchctl kickstart -k gui/$(id -u)/com.user.claude-sound-server
    ```
+   The plist assumes the repo lives at `~/code/claude-in-docker`; edit the path in
+   `ProgramArguments` if yours is elsewhere. To reload after editing the plist,
+   `bootout` first: `launchctl bootout gui/$(id -u)/com.user.claude-sound-server`.
 3. Add hooks to your `settings.json` that `curl` the server (see example below).
 
 ## settings.json example
