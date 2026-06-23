@@ -25,6 +25,42 @@ To run a project you trust that ships its own settings without the prompt, opt
 in with `CLAUDE_ALLOW_PROJECT_SETTINGS=1` (accepts `1`/`true`/`yes`/`on`), which
 skips the flow and honors the project settings as-is.
 
+## In-Container Privilege Escalation (Partially Mitigated)
+
+The main process runs as your unprivileged host UID:GID (`run.sh` `--user
+"$(id -u):$(id -g)"`), and root escalation along the *intended* path is locked
+down: `sudo` is restricted by `/etc/sudoers.d/firewall` to exactly one command,
+`/usr/local/bin/init-firewall.sh` (`Dockerfile` lines 146-153), and that script
+is `COPY`'d to a root-owned path the runtime user cannot edit. You cannot `sudo
+bash`, and you cannot swap the script for your own. `NET_ADMIN` is only
+exercisable through it.
+
+What is **not** mitigated is the rest of the escalation surface, because the
+container runs without two hardening flags:
+
+- **Default capabilities are not dropped.** `run.sh` passes `--cap-add=NET_ADMIN`
+  (line 353) but no `--cap-drop=ALL`. `--cap-add` *adds* to Docker's default
+  capability set rather than replacing it, so the container holds the full
+  default set (`CHOWN`, `SETUID`, `SETGID`, `DAC_OVERRIDE`, `NET_RAW`, …) **plus**
+  `NET_ADMIN`. A root-level compromise inside the container therefore wields the
+  whole default cap set, widening the blast radius.
+- **`no-new-privileges` is off.** There is no `--security-opt
+  no-new-privileges`, and `sudo` (a setuid-root binary) is installed
+  (`Dockerfile` line 54). Any setuid-root vulnerability — the Baron Samedit
+  (CVE-2021-3156) and PwnKit (CVE-2021-4034) class, several of which need no
+  sudoers entry — is a live root path **independent of** the scoped sudoers
+  rule. With `no-new-privileges` set, such bugs are inert; without it, they are
+  not.
+
+The scoped sudoers rule and the unprivileged runtime user defend the intended
+escalation path; they do **not** defend against setuid bugs or limit the
+capability blast radius after a root compromise. Closing this requires
+`--cap-drop=ALL` (re-adding only `NET_ADMIN`) and `--security-opt
+no-new-privileges` on the `docker run` invocation. Note that the comment at
+`run.sh` lines 342-344 — "no other escalation is possible from the non-root
+runtime user" — is accurate only for the intended path; it overstates the
+guarantee for the setuid surface described above.
+
 ## Update of Allowed Domains
 
 If you run Claude in this folder, Claude can update `allowed-domains.txt` by itself. This is a very narrow threat which only applies if this folder is mounted in the container.
