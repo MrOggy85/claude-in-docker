@@ -50,6 +50,7 @@ RUN apt-get update \
   shellcheck \
   yamllint \
   nano \
+  make \
   sudo \
     && rm -rf /var/lib/apt/lists/*
 
