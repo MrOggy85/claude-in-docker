@@ -11,6 +11,42 @@ override. Because the project is bind-mounted into the container, a committed
 settings file from an untrusted repo is loaded there, and any hooks it defines
 (e.g. a `PreToolUse` `command` hook) run arbitrary commands inside the container.
 
+Hooks are the best-known vector but **not the only one**. Several settings keys
+run a shell command automatically, with no permission prompt and no deny rule
+that can stop them. Any of these in an untrusted settings file is arbitrary code
+execution on the same footing as a hook:
+
+- **`statusLine`** (with `{"type": "command"}`) — runs on every UI render cycle,
+  so it fires immediately on session start and repeatedly thereafter. The most
+  easily overlooked vector, because it executes before you take any action.
+- **`apiKeyHelper`** — runs on an interval to mint auth headers.
+- **`awsCredentialExport`**, **`awsAuthRefresh`**, **`gcpAuthRefresh`** — run on
+  demand when cloud credentials are needed or expire.
+- **`otelHeadersHelper`** — runs on startup and on a periodic refresh.
+- **`fileSuggestion`** — runs when the user types `@` for file autocomplete.
+
+A second class does not execute commands itself but disables the prompt layer
+that is the last line of defense, turning otherwise-gated tool calls into silent
+ones:
+
+- **`permissions.defaultMode`** set to `bypassPermissions`, `acceptEdits`, or
+  `auto` — auto-approves tool calls.
+- **`permissions.allow`** — pre-approves matching tool calls (e.g. `Bash(*)`).
+- **`enableAllProjectMcpServers`** — combined with a project `.mcp.json`,
+  auto-launches the `command` of every MCP server defined there (command
+  execution sourced from a sibling file; `guards/mcp-bearer-readonly.sh` only
+  vets the GitHub token, not arbitrary `.mcp.json` server commands).
+
+(`env` is a softer, indirect risk: it injects variables into every subprocess
+and can subvert downstream commands without executing anything itself.)
+
+Because this set is broad and includes keys that appear in ordinary,
+legitimately-configured settings files (auth helpers, status lines, permission
+modes), a fine-grained guard that parses the file and prompts only on "dangerous"
+keys would add complexity while still prompting on nearly every real settings
+file. The guard therefore treats the **presence** of any project settings file as
+the trigger, not the specific keys inside it.
+
 **Mitigation:** when the project contains `.claude/settings.json` or
 `.claude/settings.local.json`, `run.sh` stops before any build, volume, or
 container work happens (via `guards/project-settings.sh`) and prompts you: first
@@ -24,6 +60,26 @@ project.
 To run a project you trust that ships its own settings without the prompt, opt
 in with `CLAUDE_ALLOW_PROJECT_SETTINGS=1` (accepts `1`/`true`/`yes`/`on`), which
 skips the flow and honors the project settings as-is.
+
+## Project-Level MCP Servers (mitigated by Claude Code)
+
+A committed `.mcp.json` can define a stdio MCP server whose `command` is executed
+to launch it — another way an untrusted repo could run code in the container.
+This is **not** an unguarded path: Claude Code prompts for approval before
+launching any project-scoped server from `.mcp.json`, so a server from an
+untrusted repo is not started until you accept it. The approval is per-project
+and persisted (in the mounted `~/.claude.json`), so you are asked once and not
+re-prompted on later runs. In a non-interactive invocation there is no prompt and
+unapproved servers are simply skipped.
+
+The one way to turn this into a silent launch is `enableAllProjectMcpServers` (or
+`enabledMcpjsonServers`) in a project settings file, which auto-approves without
+prompting — but that route is already caught by the [project settings
+guard](#project-level-claude-settings-mitigated-by-default) above, which trips on
+the presence of any `.claude/settings.json`. Note that
+`guards/mcp-bearer-readonly.sh` only vets the GitHub MCP token; it does not
+inspect `.mcp.json` server commands — Claude Code's own approval prompt is what
+covers them.
 
 ## In-Container Privilege Escalation (Partially Mitigated)
 
