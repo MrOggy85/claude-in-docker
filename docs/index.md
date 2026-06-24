@@ -13,3 +13,4 @@
 - [Known Attack Vectors](attack-vectors.md) — threats not handled by this solution
 - [Tracking Usage (ccusage)](tracking-usage.md) — report token usage across all projects with `ccusage`
 - [Usage Log Synchronization](usage-sync.md) — how transcript logs reach `~/.claude-docker-usage/` for `ccusage`
+- [Environment Variables](environment-variables.md) — reference for every environment variable this project reads or sets
