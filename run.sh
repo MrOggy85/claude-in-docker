@@ -208,6 +208,10 @@ add_rw_mount "${SCRIPT_DIR}/claude.json"   "${HOME_IN_CONTAINER}/.claude.json"
 add_rw_mount "${SCRIPT_DIR}/.credentials.json" "${HOME_IN_CONTAINER}/.claude/.credentials.json"
 add_ro_mount "$(resolve_config_file container-CLAUDE.md)" "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
 add_ro_mount "${SCRIPT_DIR}/.gitconfig"      "${HOME_IN_CONTAINER}/.gitconfig"
+# Convention-based global gitignore: git reads ~/.config/git/ignore automatically
+# when core.excludesFile is unset (XDG default), so this needs no .gitconfig entry.
+# Mounted only if the user has created one (gitignored; seeded by `make init`).
+add_ro_mount "${SCRIPT_DIR}/.gitignore_global" "${HOME_IN_CONTAINER}/.config/git/ignore"
 
 # 3a. MCP servers from a dedicated file, kept OUT of the mutable claude.json
 #     state blob. mcp-servers.json holds just {"mcpServers": {...}}; we mount it

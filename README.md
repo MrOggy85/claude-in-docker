@@ -24,6 +24,7 @@ All of the following files are gitignored and your personal files:
 - `container-CLAUDE.md` add your personal instructions for Claude Code here; mounted into the container as `~/.claude/CLAUDE.md` (user-global). Distinct from the repo's own `CLAUDE.md`, which holds project instructions for working on this tool.
 - `allowed-domains.txt` domains listed here are baked into the Docker image and are the only outbound destinations the container can reach. Rebuild the image after changing this file. See [Outbound Firewall](docs/firewall.md) for how the allowlist and IP-rotation handling work.
 - `.gitconfig` set your git `user.name` / `user.email` here.
+- `.gitignore_global` optional global (user-level) gitignore; mounted read-only at `~/.config/git/ignore`, which git reads automatically (no `.gitconfig` entry needed). Patterns apply to every repo you work in inside the container.
 - `install_additional_packages.sh` runs at image build time as root; add commands here to install extra tools a workflow needs (e.g. Deno). Rebuild the image after changing this file.
 - `.env` optional; arbitrary `KEY=VALUE` environment variables injected into the container via `docker --env-file`. See [Passing environment variables](docs/passing-env-vars.md).
 

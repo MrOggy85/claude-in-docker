@@ -3,7 +3,7 @@
 # ones that are missing and leaves existing files (your edits) untouched.
 
 .PHONY: init bats test test-extra-mounts test-extra-ports test-run test-e2e lockfile pin-digest
-init: settings.json claude.json mcp-servers.json .credentials.json container-CLAUDE.md allowed-domains.txt .gitconfig install_additional_packages.sh
+init: settings.json claude.json mcp-servers.json .credentials.json container-CLAUDE.md allowed-domains.txt .gitconfig .gitignore_global install_additional_packages.sh
 
 # Install bats. Picks the package manager by platform.
 #   macOS:           brew install bats-core
@@ -84,6 +84,11 @@ allowed-domains.txt:
 
 .gitconfig:
 	cp templates/.gitconfig .gitconfig
+
+# Global (user-level) gitignore, mounted read-only at ~/.config/git/ignore inside
+# the container (git's XDG convention — no core.excludesFile entry needed).
+.gitignore_global:
+	cp templates/.gitignore_global .gitignore_global
 
 install_additional_packages.sh:
 	cp templates/install_additional_packages.sh install_additional_packages.sh
