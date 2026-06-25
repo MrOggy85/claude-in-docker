@@ -5,6 +5,7 @@
 - [Mounting Extra Folders](mounting-extra-folders.md) — mount additional host folders into the container via `CLAUDE_MOUNTS`
 - [Publishing Ports](publishing-ports.md) — expose a server running inside the container to the host via `CLAUDE_PORTS`
 - [Passing Environment Variables](passing-env-vars.md) — inject arbitrary env vars into the container via a gitignored `.env` file
+- [Per-Project Launch Config](per-project-env.md) — keep per-repo mounts, ports, and secrets in a gitignored `.claude-env` sourced at launch
 - [Volume-Backed Paths](volume-backed-paths.md) — `node_modules` is kept off the host disk by default; add paths via `CLAUDE_VOLUME_PATHS`, opt out via `SKIP_CLAUDE_VOLUME_PATHS`
 - [Installing Additional Packages](installing-packages.md) — install extra tools a workflow needs (e.g. Deno) at image build time
 - [Host Path in the Status Line](host-path-statusline.md) — show which host folder a session belongs to via `CLAUDE_HOST_PROJECT_DIR`
