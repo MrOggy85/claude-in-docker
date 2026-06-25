@@ -1,9 +1,8 @@
 # Config files are created from their committed templates in templates/.
 # Each file is its own target with no prerequisites, so `make init` creates the
 # ones that are missing and leaves existing files (your edits) untouched.
-
 .PHONY: init bats test test-extra-mounts test-extra-ports test-run test-e2e test-ext-allowlist lockfile pin-digest proxy-up proxy-down
-init: settings.json claude.json mcp-servers.json .credentials.json container-CLAUDE.md allowed-domains.txt .gitconfig install_additional_packages.sh
+init: settings.json claude.json mcp-servers.json .credentials.json container-CLAUDE.md allowed-domains.txt .gitconfig .gitignore_global install_additional_packages.sh
 
 # Bring up / tear down the centralized egress proxy (opt-in; see
 # docs/egress-proxy.md). proxy-up is idempotent and re-applies config edits.
@@ -96,6 +95,11 @@ allowed-domains.txt:
 
 .gitconfig:
 	cp templates/.gitconfig .gitconfig
+
+# Global (user-level) gitignore, mounted read-only at ~/.config/git/ignore inside
+# the container (git's XDG convention — no core.excludesFile entry needed).
+.gitignore_global:
+	cp templates/.gitignore_global .gitignore_global
 
 install_additional_packages.sh:
 	cp templates/install_additional_packages.sh install_additional_packages.sh

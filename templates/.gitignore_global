@@ -1,0 +1,20 @@
+# Global (user-level) gitignore. Mounted read-only into the container at
+# ~/.config/git/ignore, which git reads automatically when core.excludesFile is
+# unset (the XDG convention) — so no .gitconfig entry is required.
+#
+# Patterns here apply to every repository you work in inside the container. Use
+# it for personal/editor/OS cruft you never want committed anywhere; keep
+# project-specific ignores in each project's own .gitignore.
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+*.swp
+*~
+.idea/
+.vscode/
+
+# Direnv / local env
+.envrc

@@ -4,6 +4,7 @@
 /mcp-servers.json
 /container-CLAUDE.md
 /.gitconfig
+/.gitignore_global
 /.credentials.json
 /allowed-domains.txt
 /install_additional_packages.sh
