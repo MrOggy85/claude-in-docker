@@ -63,26 +63,62 @@ OPEN_PORTS="${1:-}"
 # from SOUND_PORT via run.sh / entrypoint.sh. Defaults to 4767.
 SOUND_PORT="${2:-4767}"
 
-if [[ ! -f "$DOMAINS_FILE" ]]; then
+# Egress-proxy host (e.g. "squid"), from EGRESS_PROXY_HOST via run.sh /
+# entrypoint.sh. When set, this container runs in PROXY MODE: instead of
+# allowing direct egress to the resolved allowlist IPs, it allows egress ONLY to
+# the central Squid proxy (plus DNS to Docker's embedded resolver). All policy
+# then lives in Squid, keyed by the project's proxy-auth username. Empty => the
+# default per-container IP-allowlist mode below. See docs/egress-proxy.md.
+PROXY_HOST="${3:-}"
+
+# Port the central Squid proxy listens on. Kept in sync with proxy/squid.conf.
+PROXY_PORT=3128
+
+# The domains file is only consumed by IP-allowlist mode. In proxy mode the
+# allowlist lives in Squid, so its absence here must NOT short-circuit the
+# firewall — that would leave the OUTPUT policy at ACCEPT and defeat the point.
+if [[ -z "$PROXY_HOST" && ! -f "$DOMAINS_FILE" ]]; then
   log "no domains file at $DOMAINS_FILE — skipping"
   exit 0
 fi
-
-ipset destroy "$IPSET_NAME" 2>/dev/null || true
-ipset create "$IPSET_NAME" hash:net
 
 iptables -F
 iptables -A INPUT  -i lo                                -j ACCEPT
 iptables -A OUTPUT -o lo                                -j ACCEPT
 iptables -A INPUT  -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-iptables -A OUTPUT -p udp --dport 53                    -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 53                    -j ACCEPT
 
-# Initial synchronous resolution so connectivity is up before claude starts.
-refresh_allowlist 1
+if [[ -n "$PROXY_HOST" ]]; then
+  # --- PROXY MODE -----------------------------------------------------------
+  # DNS only to Docker's embedded resolver (127.0.0.11) so the container can
+  # resolve the proxy's network alias; external DNS is closed (Squid resolves
+  # upstream names), which also removes the port-53 exfiltration channel.
+  iptables -A OUTPUT -d 127.0.0.11 -p udp --dport 53 -j ACCEPT
+  iptables -A OUTPUT -d 127.0.0.11 -p tcp --dport 53 -j ACCEPT
 
-iptables -A OUTPUT -m set --match-set "$IPSET_NAME" dst -j ACCEPT
+  # Resolve the proxy alias and allow egress ONLY to it on the proxy port.
+  PROXY_IP="$(getent hosts "$PROXY_HOST" 2>/dev/null | awk '{print $1; exit}')"
+  if [[ -z "$PROXY_IP" ]]; then
+    # Fail closed: with no proxy reachable and a DROP policy below, the
+    # container simply has no egress — better than silently widening access.
+    log "FATAL: egress proxy '$PROXY_HOST' did not resolve — no outbound access"
+    exit 1
+  fi
+  iptables -A OUTPUT -d "$PROXY_IP" -p tcp --dport "$PROXY_PORT" -j ACCEPT
+  log "proxy egress: ${PROXY_HOST} (${PROXY_IP}):${PROXY_PORT} — all other egress denied"
+else
+  # --- IP-ALLOWLIST MODE (default) ------------------------------------------
+  ipset destroy "$IPSET_NAME" 2>/dev/null || true
+  ipset create "$IPSET_NAME" hash:net
+
+  iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+  iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+
+  # Initial synchronous resolution so connectivity is up before claude starts.
+  refresh_allowlist 1
+
+  iptables -A OUTPUT -m set --match-set "$IPSET_NAME" dst -j ACCEPT
+fi
 
 # Inbound ports published to the host (docker run --publish) arrive on this
 # container's INPUT chain as NEW connections, which the DROP policy below would
@@ -134,8 +170,10 @@ iptables -P OUTPUT  DROP
 # the entrypoint exec's claude; it dies with the container. Its output goes to a
 # logfile (not the terminal, which would corrupt claude's TUI; not /dev/null, so
 # rotations stay inspectable) and stdin is detached so it never holds anything open.
+# Proxy mode has no ipset to top up (Squid owns the allowlist), so the refresher
+# only runs in IP-allowlist mode.
 REFRESH_LOG="/tmp/firewall-refresh.log"
-if (( REFRESH_SECS > 0 )); then
+if [[ -z "$PROXY_HOST" ]] && (( REFRESH_SECS > 0 )); then
   setsid "$0" --refresh-loop "$REFRESH_SECS" </dev/null >>"$REFRESH_LOG" 2>&1 &
   disown 2>/dev/null || true
   log "refresher started (every ${REFRESH_SECS}s) → $REFRESH_LOG"
