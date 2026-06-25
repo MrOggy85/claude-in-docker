@@ -2,8 +2,17 @@
 # Each file is its own target with no prerequisites, so `make init` creates the
 # ones that are missing and leaves existing files (your edits) untouched.
 
-.PHONY: init bats test test-extra-mounts test-extra-ports test-run test-e2e lockfile pin-digest
+.PHONY: init bats test test-extra-mounts test-extra-ports test-run test-e2e test-ext-allowlist lockfile pin-digest proxy-up proxy-down
 init: settings.json claude.json mcp-servers.json .credentials.json container-CLAUDE.md allowed-domains.txt .gitconfig install_additional_packages.sh
+
+# Bring up / tear down the centralized egress proxy (opt-in; see
+# docs/egress-proxy.md). proxy-up is idempotent and re-applies config edits.
+# Run claude through it with CLAUDE_EGRESS_PROXY=1 ./run.sh
+proxy-up:
+	./proxy/up.sh
+
+proxy-down:
+	docker rm -f "$${CLAUDE_EGRESS_PROXY_NAME:-claude-egress-proxy}" 2>/dev/null || true
 
 # Install bats. Picks the package manager by platform.
 #   macOS:           brew install bats-core
@@ -37,6 +46,9 @@ test-run:
 
 test-e2e:
 	bats test/e2e.bats
+
+test-ext-allowlist:
+	bats test/ext-allowlist.bats
 
 # Generate / refresh package-lock.json from package.json.
 # Run this after adding or changing a package in package.json, then commit
