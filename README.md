@@ -4,6 +4,9 @@
 
 This is a solution for running Claude Code in a Docker container. It assumes you are on macOS.
 
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/b55b3975-9adf-4c28-9778-fdb799f64d6c" />
+
+
 It is **not** an air-gapped, 100% secure setup. It is a solution to mitigate the obvious risks — both from within the container and from outside it. Inside, we run a non-deterministic AI agent we cannot fully trust; this adds guard rails around it. From outside, if your host gets pwned, your conversations and credentials here won't be trivially reachable to a non-determined attacker.
 
 > You don't have to run faster than the bear to get away. You just have to run faster than the guy next to you.
