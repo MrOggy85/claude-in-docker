@@ -28,6 +28,15 @@ HOST_CLAUDE_DIR="${HOME}/.claude"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(pwd)"
 
+# User-managed config lives OUTSIDE the repo, under a dedicated XDG-style dir
+# (~/.config/claude-in-docker by default; override with CLAUDE_DOCKER_CONFIG_DIR
+# or XDG_CONFIG_HOME). scripts/paths.sh is the single source of truth for that
+# location and for the per-project key below, shared with proxy/up.sh and the
+# config CLI (config.sh). `make init` seeds the config dir; `make migrate` moves
+# a pre-existing repo-root config into it.
+source "${SCRIPT_DIR}/scripts/paths.sh"
+CONFIG_DIR="$(config_dir)"
+
 # Pre-flight security guards. Each lives in guards/ and is sourced (not run as a
 # subprocess) so it can abort the whole run with `exit` before any build, volume,
 # or container work happens. They read PROJECT_DIR / HOME / MCP_GH_BEARER /
@@ -78,12 +87,8 @@ fi
 #    The hash disambiguates same-named dirs in different locations; the name is
 #    stable so re-running in this folder reuses the same volume (enables resume).
 #    Override with CLAUDE_VOLUME=... if you want a specific/throwaway one.
-path_hash() {
-  if command -v sha256sum >/dev/null 2>&1; then printf '%s' "$1" | sha256sum | cut -c1-10
-  else printf '%s' "$1" | shasum -a 256 | cut -c1-10; fi
-}
-SAFE_NAME="$(printf '%s' "$(basename "${PROJECT_DIR}")" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-')"
-SAFE_NAME="$(printf '%s' "${SAFE_NAME}" | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$//')"
+# path_hash() and safe_name() come from scripts/paths.sh (sourced above).
+SAFE_NAME="$(safe_name "${PROJECT_DIR}")"
 VOLUME="${CLAUDE_VOLUME:-claude-${SAFE_NAME:-repo}-$(path_hash "${PROJECT_DIR}")}"
 echo ">> session volume: ${VOLUME}  (docker volume inspect ${VOLUME})"
 
@@ -97,17 +102,17 @@ echo ">> session volume: ${VOLUME}  (docker volume inspect ${VOLUME})"
 CONTAINER_NAME="${CLAUDE_CONTAINER_NAME:-claude-${SAFE_NAME:-repo}-$(printf '%04x%04x' "${RANDOM}" "${RANDOM}")}"
 echo ">> container name: ${CONTAINER_NAME}"
 
-# 2c. Per-project config directory: projects/<safe-name>-<path-hash>/ inside the
-#     claude-in-docker repo. Files placed here override the root-level defaults on
-#     a file-by-file basis (more specific wins). The directory is created — and
-#     seeded with editable starting points — automatically on first run.
-#     Supported overrides: allowed-domains.txt, .env, container-CLAUDE.md,
-#     install_additional_packages.sh
-PROJECT_KEY="${SAFE_NAME:-repo}-$(path_hash "${PROJECT_DIR}")"
-# Base dir holding all per-project config dirs. Defaults to projects/ next to
-# run.sh; override with CLAUDE_PROJECTS_DIR (the test suite points this at a
-# throwaway dir so test runs never write into the repo's projects/).
-PROJECTS_DIR="${CLAUDE_PROJECTS_DIR:-${SCRIPT_DIR}/projects}"
+# 2c. Per-project config directory: <config-dir>/projects/<safe-name>-<path-hash>/.
+#     Files placed here override the root-level defaults on a file-by-file basis
+#     (more specific wins). The directory is created — and seeded with editable
+#     starting points — automatically on first run. Supported overrides:
+#     allowed-domains.txt, .env, container-CLAUDE.md, install_additional_packages.sh.
+#     Inspect it with `config.sh project`.
+PROJECT_KEY="$(project_key "${PROJECT_DIR}")"
+# Base dir holding all per-project config dirs (see scripts/paths.sh). Defaults
+# to projects/ under the config dir; override with CLAUDE_PROJECTS_DIR (the test
+# suite points this at a throwaway dir so test runs never write into it).
+PROJECTS_DIR="$(projects_dir)"
 PROJECT_CONFIG_DIR="${PROJECTS_DIR}/${PROJECT_KEY}"
 if [[ ! -d "${PROJECT_CONFIG_DIR}" ]]; then
   mkdir -p "${PROJECT_CONFIG_DIR}"
@@ -130,7 +135,7 @@ STUB
   # template (the root copy is gitignored and absent on a fresh checkout). The
   # Squid proxy reads it live as this project's egress allowlist (see step 3f and
   # docs/egress-proxy.md) — edit it and the change applies within ~30s, no rebuild.
-  _seed_domains="${SCRIPT_DIR}/allowed-domains.txt"
+  _seed_domains="${CONFIG_DIR}/allowed-domains.txt"
   [[ -f "${_seed_domains}" ]] || _seed_domains="${SCRIPT_DIR}/templates/allowed-domains.txt"
   [[ -f "${_seed_domains}" ]] && \
     cp "${_seed_domains}" "${PROJECT_CONFIG_DIR}/allowed-domains.txt"
@@ -147,7 +152,7 @@ resolve_config_file() {  # <filename>
   if [[ -f "${PROJECT_CONFIG_DIR}/${fname}" ]]; then
     echo "${PROJECT_CONFIG_DIR}/${fname}"
   else
-    echo "${SCRIPT_DIR}/${fname}"
+    echo "${CONFIG_DIR}/${fname}"
   fi
 }
 
@@ -202,16 +207,17 @@ add_rw_mount() {  # <host_path> <container_path>
   else echo ">> skipping (not found on host): $1" >&2; fi
 }
 # --- harmless config to share (edit as needed) ---
-# Each file is seeded by `make init` (run once) and mounted only if present.
-add_ro_mount "${SCRIPT_DIR}/settings.json" "${HOME_IN_CONTAINER}/.claude/settings.json"
-add_rw_mount "${SCRIPT_DIR}/claude.json"   "${HOME_IN_CONTAINER}/.claude.json"
-add_rw_mount "${SCRIPT_DIR}/.credentials.json" "${HOME_IN_CONTAINER}/.claude/.credentials.json"
+# Each file lives in the config dir, seeded by `make init` (run once) and mounted
+# only if present. View them with `config.sh list` / `config.sh show <file>`.
+add_ro_mount "${CONFIG_DIR}/settings.json" "${HOME_IN_CONTAINER}/.claude/settings.json"
+add_rw_mount "${CONFIG_DIR}/claude.json"   "${HOME_IN_CONTAINER}/.claude.json"
+add_rw_mount "${CONFIG_DIR}/.credentials.json" "${HOME_IN_CONTAINER}/.claude/.credentials.json"
 add_ro_mount "$(resolve_config_file container-CLAUDE.md)" "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
-add_ro_mount "${SCRIPT_DIR}/.gitconfig"      "${HOME_IN_CONTAINER}/.gitconfig"
+add_ro_mount "${CONFIG_DIR}/.gitconfig"      "${HOME_IN_CONTAINER}/.gitconfig"
 # Convention-based global gitignore: git reads ~/.config/git/ignore automatically
 # when core.excludesFile is unset (XDG default), so this needs no .gitconfig entry.
-# Mounted only if the user has created one (gitignored; seeded by `make init`).
-add_ro_mount "${SCRIPT_DIR}/.gitignore_global" "${HOME_IN_CONTAINER}/.config/git/ignore"
+# Mounted only if the user has created one (seeded by `make init`).
+add_ro_mount "${CONFIG_DIR}/.gitignore_global" "${HOME_IN_CONTAINER}/.config/git/ignore"
 
 # 3a. MCP servers from a dedicated file, kept OUT of the mutable claude.json
 #     state blob. mcp-servers.json holds just {"mcpServers": {...}}; we mount it
@@ -346,8 +352,12 @@ PROXY_URL="http://${PROJECT_KEY}:x@squid:3128"
 # Bring the shared proxy up if it isn't already running (up.sh is idempotent).
 if [[ "$(docker container inspect -f '{{.State.Running}}' "${EGRESS_PROXY_NAME}" 2>/dev/null || true)" != "true" ]]; then
   echo ">> egress proxy '${EGRESS_PROXY_NAME}' not running — starting it"
+  # Forward the config/projects locations so the proxy reads the SAME baseline
+  # allowlist and per-project dirs that run.sh mounts from.
   CLAUDE_EGRESS_NETWORK="${EGRESS_NETWORK}" \
   CLAUDE_EGRESS_PROXY_NAME="${EGRESS_PROXY_NAME}" \
+  CLAUDE_DOCKER_CONFIG_DIR="${CONFIG_DIR}" \
+  CLAUDE_PROJECTS_DIR="${PROJECTS_DIR}" \
     "${SCRIPT_DIR}/proxy/up.sh"
 fi
 PROXY_NET_ARGS=(--network "${EGRESS_NETWORK}")

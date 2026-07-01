@@ -106,6 +106,7 @@ run_staged() {
     PATH="${MOCK_BIN}:${PATH}" \
     CLAUDE_AUTO_USAGE=0 \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_DOCKER_CONFIG_DIR="${CLAUDE_DOCKER_CONFIG_DIR}" \
     CLAUDE_PROJECTS_DIR="${CLAUDE_PROJECTS_DIR}" \
     bash -c "cd '${dir}' && bash '${RUN_SH}'"
 }
@@ -120,9 +121,11 @@ setup() {
   DOCKER_ARGS_FILE="${TEST_TMP}/docker_run_args"
   mkdir -p "${MOCK_BIN}"
   _make_mock_docker "${MOCK_BIN}/docker"
-  # Keep per-project config dirs out of the repo's projects/ (cleaned with TEST_TMP).
+  # Keep the config dir and per-project dirs out of the developer's real config
+  # and the repo (both under TEST_TMP, cleaned in teardown).
+  CLAUDE_DOCKER_CONFIG_DIR="${TEST_TMP}/config"
   CLAUDE_PROJECTS_DIR="${TEST_TMP}/projects"
-  export DOCKER_ARGS_FILE MOCK_BIN TEST_TMP CLAUDE_PROJECTS_DIR
+  export DOCKER_ARGS_FILE MOCK_BIN TEST_TMP CLAUDE_DOCKER_CONFIG_DIR CLAUDE_PROJECTS_DIR
 }
 
 teardown() {

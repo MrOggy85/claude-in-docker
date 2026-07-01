@@ -1,7 +1,8 @@
 # MCP Servers
 
 ## User-level servers
-Define servers in `mcp-servers.json` next to `run.sh` (created by `make init`
+Define servers in `mcp-servers.json` in the config dir
+(`~/.config/claude-in-docker/`, created by `make init`
 from `templates/mcp-servers.json`). It holds a single `mcpServers` object and
 applies to every project you run in the container:
 
@@ -22,8 +23,8 @@ editing MCP config there means hand-merging one key into a large, churning file.
 `run.sh` mounts `mcp-servers.json` read-only and points `claude --mcp-config` at
 it, making it the single source of truth: add or remove a server and the change
 applies on the next container start — no image rebuild, no `claude.json`
-surgery. A per-project `projects/<key>/mcp-servers.json` overrides the root copy
-for that project.
+surgery. A per-project `<config-dir>/projects/<key>/mcp-servers.json` overrides
+the baseline copy for that project.
 
 ## Project-level servers
 Add a `.mcp.json` file at the root of your project repository. Claude Code picks it up automatically from the mounted workspace. These are scoped to that repo and are typically checked in.

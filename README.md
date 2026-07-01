@@ -19,8 +19,17 @@ It is **not** an air-gapped, 100% secure setup. It is a solution to mitigate the
 **tl;dr**
 Run `make init`
 
-This copies every template in `templates/` to its target in the repo root in one step (existing files are left untouched), then edit the copies.
-All of the following files are gitignored and your personal files:
+This copies every template in `templates/` into your **config directory** —
+`~/.config/claude-in-docker/` by default (override with `CLAUDE_DOCKER_CONFIG_DIR`,
+or point `XDG_CONFIG_HOME` elsewhere) — in one step; existing files are left
+untouched, and the repo itself stays clean. Then edit the copies. List and inspect
+them any time with `./config.sh list` / `./config.sh show <file>`.
+
+> **Upgrading?** Older versions kept these files gitignored in the repo root. Run
+> `make migrate` once to move your config — and your per-project dirs — into the
+> config directory. It is non-destructive (never overwrites anything already there).
+
+All of the following files live in the config directory and are your personal files:
 
 - `settings.json` add your own settings here that will be used by Claude Code
 - `claude.json` contains onboarding state and your user-level MCP server config
@@ -28,8 +37,18 @@ All of the following files are gitignored and your personal files:
 - `allowed-domains.txt` domains listed here are the only outbound destinations the container can reach. It is the allowlist enforced by the shared Squid egress proxy (read live — edits apply within ~30s, no image rebuild). See [Centralized Egress Proxy](docs/egress-proxy.md) for how egress filtering works.
 - `.gitconfig` set your git `user.name` / `user.email` here.
 - `.gitignore_global` optional global (user-level) gitignore; mounted read-only at `~/.config/git/ignore`, which git reads automatically (no `.gitconfig` entry needed). Patterns apply to every repo you work in inside the container.
-- `install_additional_packages.sh` runs at image build time as root; add commands here to install extra tools a workflow needs (e.g. Deno). Rebuild the image after changing this file.
 - `.env` optional; arbitrary `KEY=VALUE` environment variables injected into the container via `docker --env-file`. See [Passing environment variables](docs/passing-env-vars.md).
+
+One file stays **in the repo** (not the config dir): `install_additional_packages.sh`.
+It runs at image build time as root — add commands here to install extra tools a
+workflow needs (e.g. Deno), then rebuild the image. It must stay in the repo because
+it is `COPY`'d into the image and Docker's build context is the repo directory.
+
+Per-project overrides (a per-repo `allowed-domains.txt`, `.env`, `container-CLAUDE.md`,
+`mcp-servers.json`, or `install_additional_packages.sh`) live under
+`<config-dir>/projects/<key>/`, created automatically the first time you run in a
+project. Find the right directory with `./config.sh project` and see the effective
+egress allowlist with `./config.sh domains`.
 
 ## Run
 
@@ -42,12 +61,13 @@ Any arguments you pass are forwarded verbatim to `claude` (e.g. `run.sh --model 
 
 ## Authentication
 
-`make init` seeds an empty `.credentials.json` (next to `run.sh`, gitignored) which `run.sh`
-bind-mounts into the container. The first time you run Claude Code, log in with the `/login`
-command and complete the OAuth flow; your credentials are written to that file, so a single
+`make init` seeds an empty `.credentials.json` in the config directory
+(`~/.config/claude-in-docker/` by default) which `run.sh` bind-mounts into the
+container. The first time you run Claude Code, log in with the `/login` command and
+complete the OAuth flow; your credentials are written to that file, so a single
 login is shared across **every** project you run in the container — you only need to do it once.
 
-To force a re-login, delete `.credentials.json` and re-run `make init` to recreate it empty.
+To force a re-login, delete `.credentials.json` from the config directory and re-run `make init` to recreate it empty.
 
 ### Shell profile alias
 
@@ -91,7 +111,7 @@ function claude {
 - [MCP Servers](docs/mcp-servers.md) — configure user-level, project-level, and GitHub MCP servers
 - [Mounting extra folders](docs/mounting-extra-folders.md) — make additional host folders visible inside the container via `CLAUDE_MOUNTS`
 - [Publishing ports](docs/publishing-ports.md) — expose a server running inside the container to the host via `CLAUDE_PORTS`
-- [Passing environment variables](docs/passing-env-vars.md) — inject arbitrary env vars into the container via a gitignored `.env` file
+- [Passing environment variables](docs/passing-env-vars.md) — inject arbitrary env vars into the container via a `.env` file in the config dir
 - [Per-project launch config](docs/per-project-env.md) — keep per-repo mounts, ports, and secrets in a gitignored `.claude-env` sourced at launch
 - [Volume-backed paths](docs/volume-backed-paths.md) — `node_modules` is kept off the host disk by default (named volumes); add paths with `CLAUDE_VOLUME_PATHS`, opt out with `SKIP_CLAUDE_VOLUME_PATHS`
 - [Installing additional packages](docs/installing-packages.md) — install extra tools a workflow needs (e.g. Deno) via `install_additional_packages.sh`

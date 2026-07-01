@@ -21,9 +21,12 @@ setup() {
   DOCKER_RUN_ARGS="${STUB_DIR}/docker-run-args.txt"
   DOCKER_ALL_CALLS="${STUB_DIR}/docker-all-calls.txt"
 
-  # Point per-project config dirs at throwaway scratch so test runs never write
-  # into the repo's projects/. Cleaned up with STUB_DIR in teardown.
+  # Point both the config dir and per-project config dirs at throwaway scratch so
+  # test runs never read the developer's real ~/.config/claude-in-docker nor write
+  # into it. Both are under STUB_DIR, cleaned up in teardown.
+  export CLAUDE_DOCKER_CONFIG_DIR="${STUB_DIR}/config"
   export CLAUDE_PROJECTS_DIR="${STUB_DIR}/projects"
+  mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}"
 
   # Create the docker stub. EOF is unquoted so ${STUB_DIR} vars expand now;
   # \$1, \$@, etc. are escaped and become real $ in the written script.
@@ -77,33 +80,11 @@ EOF
   # Prepend stub to PATH
   export PATH="${STUB_DIR}/bin:${PATH}"
 
-  # Ensure per-run.sh side-effects (credentials file) don't leak between tests
-  CRED_FILE="${SCRIPT_DIR}/.credentials.json"
-  _CRED_PRE_EXISTED=0
-  [ -e "${CRED_FILE}" ] && _CRED_PRE_EXISTED=1
-
-  # The optional .env lives next to run.sh (SCRIPT_DIR) — a path baked into
-  # run.sh that we cannot redirect. The .env tests below write to it directly, so
-  # to avoid destroying a developer's real .env we back up any existing file here
-  # and restore it byte-for-byte in teardown.
-  ENV_FILE="${SCRIPT_DIR}/.env"
-  ENV_BACKUP=""
-  if [ -e "${ENV_FILE}" ]; then
-    ENV_BACKUP="$(mktemp)"
-    cp -p "${ENV_FILE}" "${ENV_BACKUP}"
-  fi
-
-  # mcp-servers.json also lives at SCRIPT_DIR (a path baked into run.sh we cannot
-  # redirect). Back it up and remove it so each test starts with a known-absent
-  # root file; per-project copies go in the isolated CLAUDE_PROJECTS_DIR instead.
-  # Restored byte-for-byte in teardown.
-  MCP_ROOT="${SCRIPT_DIR}/mcp-servers.json"
-  MCP_BACKUP=""
-  if [ -e "${MCP_ROOT}" ]; then
-    MCP_BACKUP="$(mktemp)"
-    cp -p "${MCP_ROOT}" "${MCP_BACKUP}"
-    rm -f "${MCP_ROOT}"
-  fi
+  # Global config now lives in the isolated CLAUDE_DOCKER_CONFIG_DIR, so the .env
+  # and mcp-servers.json tests write there directly — no need to touch, back up,
+  # or restore the developer's real config. Both files are wiped with STUB_DIR.
+  ENV_FILE="${CLAUDE_DOCKER_CONFIG_DIR}/.env"
+  MCP_ROOT="${CLAUDE_DOCKER_CONFIG_DIR}/mcp-servers.json"
 
   # Convenience: run run.sh from the isolated project dir with test-safe env vars
   # SKIP_CLAUDE_VOLUME_PATHS=1  — skip node_modules docker volume creation
@@ -130,26 +111,10 @@ EOF
 }
 
 teardown() {
+  # STUB_DIR holds the isolated config dir, per-project dirs, and the docker stub,
+  # so a single recursive remove cleans up everything a test created. Nothing is
+  # written under SCRIPT_DIR anymore, so there is nothing there to restore.
   rm -rf "${TEST_PROJECT_DIR}" "${STUB_DIR}"
-  # Remove .credentials.json only if we created it during this test
-  if [[ "${_CRED_PRE_EXISTED}" -eq 0 ]] && [ -e "${SCRIPT_DIR}/.credentials.json" ]; then
-    rm -f "${SCRIPT_DIR}/.credentials.json"
-  fi
-  # Restore the developer's real .env byte-for-byte (the tests overwrite it), or
-  # remove a .env that a test created where none existed before.
-  rm -f "${ENV_FILE}"
-  if [ -n "${ENV_BACKUP}" ]; then
-    cp -p "${ENV_BACKUP}" "${ENV_FILE}"
-    rm -f "${ENV_BACKUP}"
-  fi
-  # Restore the developer's real mcp-servers.json, or remove one a test created.
-  rm -f "${MCP_ROOT}"
-  if [ -n "${MCP_BACKUP}" ]; then
-    cp -p "${MCP_BACKUP}" "${MCP_ROOT}"
-    rm -f "${MCP_BACKUP}"
-  fi
-  # Remove any per-project config dir created during this test
-  rm -rf "${PROJECT_CONFIG_DIR}"
 }
 
 # Helper: assert that DOCKER_RUN_ARGS contains a line that is exactly VALUE.

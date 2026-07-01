@@ -94,8 +94,9 @@ the launch shell. They reach the container by two different routes:
   [read-only guard](environment-variables.md) aborts the run if that token is
   write-capable).
 - **`NEXUS_NPM_TOKEN` and `MCP_GH_PERSONAL`** are *not* forwarded by `run.sh`.
-  List them as bare names (no `=`) in your gitignored `.env` next to `run.sh`,
-  and `docker --env-file` pulls each from the launch shell:
+  List them as bare names (no `=`) in your `.env` in the config dir
+  (`~/.config/claude-in-docker/`), and `docker --env-file` pulls each from the
+  launch shell:
 
   ```bash
   # .env

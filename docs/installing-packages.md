@@ -4,8 +4,10 @@ The image ships a fixed toolchain (Node, git, ripgrep, Python, etc.). When a wor
 something extra — e.g. Claude wants to run `deno` to check tests pass — add it via
 `install_additional_packages.sh`.
 
-`make init` creates the script from `templates/install_additional_packages.sh`; it is gitignored,
-so your additions stay local. The default is a no-op:
+`make init` creates the script from `templates/install_additional_packages.sh`. Unlike the
+other user config, this global script stays **in the repo root** (not the config dir) — it is
+the one exception, because it is `COPY`'d into the base image and Docker's build context is the
+repo directory. It is gitignored, so your additions stay local. The default is a no-op:
 
 ```bash
 #!/bin/bash
@@ -41,7 +43,7 @@ config directory and seeds it with an inert stub of this file (plus a copy of
 >> per-project config dir: …/projects/<key>
 ```
 
-Edit `projects/<key>/install_additional_packages.sh` and add your install
+Edit `<config-dir>/projects/<key>/install_additional_packages.sh` and add your install
 commands. The next run builds a **per-project image** layered `FROM` the shared
 base image, baking those packages in at **build time** — so they install once,
 not on every container start. `run.sh` reports the image it uses:
@@ -57,9 +59,10 @@ treated as empty and the project just runs the shared base image directly — no
 extra image is built.
 
 Because the install runs as **root** at build time, no `sudo` is needed (the
-runtime user is unprivileged). If a project needs a domain the root allowlist
-omits, edit `projects/<key>/allowed-domains.txt`; it is mounted over
-`/etc/allowed-domains.txt` at container start, so domain changes need no rebuild.
+runtime user is unprivileged). If a project needs a domain the baseline allowlist
+omits, edit `<config-dir>/projects/<key>/allowed-domains.txt`; the Squid egress
+proxy reads the allowlist live (≈30s verdict cache, no rebuild), so domain changes
+apply within ~30s (see [Centralized Egress Proxy](egress-proxy.md)).
 
-To promote a per-project script to the global default, copy it to the root
+To promote a per-project script to the global default, copy it to the repo-root
 `install_additional_packages.sh`.
