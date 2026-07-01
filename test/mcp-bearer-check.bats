@@ -36,6 +36,8 @@ setup() {
 case "$1" in
   image)  exit 1 ;;   # force a (no-op) build on every run
   build)  exit 0 ;;
+  container) echo "true"; exit 0 ;;  # egress proxy reported running → skip up.sh
+  network)   exit 0 ;;
   volume)
     case "$2" in
       inspect) exit 1 ;;   # volume not found → run.sh will create it
