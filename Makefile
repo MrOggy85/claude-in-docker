@@ -4,9 +4,10 @@
 .PHONY: init bats test test-extra-mounts test-extra-ports test-run test-e2e test-ext-allowlist lockfile pin-digest proxy-up proxy-down
 init: settings.json claude.json mcp-servers.json .credentials.json container-CLAUDE.md allowed-domains.txt .gitconfig .gitignore_global install_additional_packages.sh
 
-# Bring up / tear down the centralized egress proxy (opt-in; see
-# docs/egress-proxy.md). proxy-up is idempotent and re-applies config edits.
-# Run claude through it with CLAUDE_EGRESS_PROXY=1 ./run.sh
+# Bring up / tear down the centralized egress proxy — the sole egress path for
+# every Claude container (see docs/egress-proxy.md). run.sh auto-starts it, but
+# running this explicitly is clearer for a long-lived shared service. proxy-up is
+# idempotent and re-applies squid.conf / helper edits.
 proxy-up:
 	./proxy/up.sh
 

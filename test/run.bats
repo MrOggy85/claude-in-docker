@@ -42,6 +42,16 @@ case "\$1" in
   build)
     exit 0
     ;;
+  container)
+    # container inspect (egress-proxy liveness check): report the proxy as
+    # already running so run.sh does NOT invoke proxy/up.sh — that would issue a
+    # second 'docker run' and clobber DOCKER_RUN_ARGS with Squid's flags.
+    echo "true"
+    exit 0
+    ;;
+  network)
+    exit 0
+    ;;
   volume)
     case "\$2" in
       inspect) exit 1 ;;   # volume not found -> run.sh will create + chown it
@@ -419,6 +429,32 @@ refute_run_arg() {
 }
 
 # ---------------------------------------------------------------------------
+# Egress proxy is always on (no longer opt-in)
+# ---------------------------------------------------------------------------
+
+@test "docker run always joins the egress network" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--network"
+  assert_run_arg "claude-egress"
+}
+
+@test "docker run always sets EGRESS_PROXY_HOST=squid" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "EGRESS_PROXY_HOST=squid"
+}
+
+@test "docker run always points HTTPS_PROXY at squid with the project key as username" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "HTTPS_PROXY=http://${_SAFE_NAME:-repo}-${_PATH_HASH}:x@squid:3128"
+}
+
+# ---------------------------------------------------------------------------
 # Per-project config directory
 # ---------------------------------------------------------------------------
 
@@ -452,19 +488,11 @@ refute_run_arg() {
   assert_run_arg "${ENV_FILE}"
 }
 
-@test "per-project allowed-domains.txt is mounted over /etc/allowed-domains.txt" {
+@test "allowed-domains.txt is never bind-mounted into the container (Squid owns the allowlist)" {
+  # Egress filtering moved entirely to the Squid proxy; the container no longer
+  # reads /etc/allowed-domains.txt, so run.sh must not mount any copy over it.
   mkdir -p "${PROJECT_CONFIG_DIR}"
   printf 'example.com\n' > "${PROJECT_CONFIG_DIR}/allowed-domains.txt"
-  cd "${TEST_PROJECT_DIR}"
-  run "${RUN_CMD[@]}"
-  [ "$status" -eq 0 ]
-  assert_run_arg "--volume"
-  grep -qF "${PROJECT_CONFIG_DIR}/allowed-domains.txt:/etc/allowed-domains.txt:ro" "${DOCKER_RUN_ARGS}"
-}
-
-@test "no per-project allowed-domains.txt: /etc/allowed-domains.txt is not bind-mounted" {
-  mkdir -p "${PROJECT_CONFIG_DIR}"
-  rm -f "${PROJECT_CONFIG_DIR}/allowed-domains.txt"
   cd "${TEST_PROJECT_DIR}"
   run "${RUN_CMD[@]}"
   [ "$status" -eq 0 ]

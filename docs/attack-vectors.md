@@ -86,7 +86,7 @@ covers them.
 The main process runs as your unprivileged host UID:GID (`run.sh` `--user
 "$(id -u):$(id -g)"`), and root escalation along the *intended* path is locked
 down: `sudo` is restricted by `/etc/sudoers.d/firewall` to exactly one command,
-`/usr/local/bin/init-firewall.sh` (`Dockerfile` lines 146-153), and that script
+`/usr/local/bin/init-firewall.sh` (set up in the `Dockerfile`), and that script
 is `COPY`'d to a root-owned path the runtime user cannot edit. You cannot `sudo
 bash`, and you cannot swap the script for your own. `NET_ADMIN` is only
 exercisable through it.
@@ -95,14 +95,14 @@ What is **not** mitigated is the rest of the escalation surface, because the
 container runs without two hardening flags:
 
 - **Default capabilities are not dropped.** `run.sh` passes `--cap-add=NET_ADMIN`
-  (line 353) but no `--cap-drop=ALL`. `--cap-add` *adds* to Docker's default
+  but no `--cap-drop=ALL`. `--cap-add` *adds* to Docker's default
   capability set rather than replacing it, so the container holds the full
   default set (`CHOWN`, `SETUID`, `SETGID`, `DAC_OVERRIDE`, `NET_RAW`, …) **plus**
   `NET_ADMIN`. A root-level compromise inside the container therefore wields the
   whole default cap set, widening the blast radius.
 - **`no-new-privileges` is off.** There is no `--security-opt
   no-new-privileges`, and `sudo` (a setuid-root binary) is installed
-  (`Dockerfile` line 54). Any setuid-root vulnerability — the Baron Samedit
+  (in the `Dockerfile`). Any setuid-root vulnerability — the Baron Samedit
   (CVE-2021-3156) and PwnKit (CVE-2021-4034) class, several of which need no
   sudoers entry — is a live root path **independent of** the scoped sudoers
   rule. With `no-new-privileges` set, such bugs are inert; without it, they are
@@ -112,53 +112,58 @@ The scoped sudoers rule and the unprivileged runtime user defend the intended
 escalation path; they do **not** defend against setuid bugs or limit the
 capability blast radius after a root compromise. Closing this requires
 `--cap-drop=ALL` (re-adding only `NET_ADMIN`) and `--security-opt
-no-new-privileges` on the `docker run` invocation. Note that the comment at
-`run.sh` lines 342-344 — "no other escalation is possible from the non-root
-runtime user" — is accurate only for the intended path; it overstates the
-guarantee for the setuid surface described above.
+no-new-privileges` on the `docker run` invocation. Note that the `NET_ADMIN`
+comment in `run.sh` — "no other escalation is possible from the non-root runtime
+user" — is accurate only for the intended path; it overstates the guarantee for
+the setuid surface described above.
 
 ## Update of Allowed Domains
 
-If you run Claude in this folder, Claude can update `allowed-domains.txt` by itself. This is a very narrow threat which only applies if this folder is mounted in the container.
+The egress allowlist (the root `allowed-domains.txt` and each
+`projects/<key>/allowed-domains.txt`) lives in **this repo, on the host**, and is
+bind-mounted read-only into the Squid proxy. It is **not** mounted into the
+Claude containers that work on your other projects, so Claude running in those
+containers cannot see or edit it.
 
-Note that the change does not take effect at runtime. `allowed-domains.txt` is read only at image build time (baked into `/etc/allowed-domains.txt`). The firewall — both its startup resolution and the [background refresher](firewall.md#ip-rotation-and-the-background-refresher) that re-resolves rotating IPs during the session — reads only that baked copy, never the mounted repo file. So Claude editing the mounted file cannot widen the live firewall — it only stages a new domain that takes effect on the next `./run.sh` rebuild.
+The narrow exception is running Claude **on this repo itself** (the
+claude-in-docker checkout is the mounted project). Then Claude can edit
+`allowed-domains.txt`, and because the proxy re-reads the lists live (≈30s verdict
+cache, no rebuild), a widened allowlist takes effect within ~30s for the proxy —
+note this is faster than the old image-rebuild model. The blast radius is still
+bounded: a widened list only adds hostnames the proxy will then permit by CONNECT
+target; it cannot reach anything else. Treat edits to these files as you would
+any change to a security boundary, and review diffs to `allowed-domains.txt`.
 
-## Firewall Boundary Disclosure via Fast-Fail
+## Egress Boundary Disclosure via Fast-Fail
 
-The firewall REJECTs non-whitelisted outbound connections (TCP RST / ICMP unreachable) rather than silently dropping them, so a blocked connection fails immediately with `ECONNREFUSED` instead of hanging until timeout. This is a deliberate DX tradeoff: it also lets any in-container process map the firewall boundary by probing — attempting connections and observing refused-vs-accepted — quickly and without timeouts.
+The in-container egress-lock REJECTs non-permitted outbound connections (TCP RST / ICMP unreachable) rather than silently dropping them, so a blocked connection fails immediately with `ECONNREFUSED` instead of hanging. At the iptables layer this reveals little — only that egress is locked to the Squid host — but the proxy itself is also a fast signal: Squid answers a denied CONNECT with an immediate HTTP `403`, so a process can map the per-host allowlist by probing (allowed → tunnel established; denied → 403) without timeouts.
 
-This does not let a process *reach* a blocked destination; it only reveals which destinations are allowed. The whitelist is not secret (it is committed in `allowed-domains.txt`), so the disclosure is low impact. It is noted here because the prior silent-drop behavior made such probing slow and impractical, and the fast-fail change removes that friction.
+This does not let a process *reach* a blocked destination; it only reveals which hosts are allowed. The allowlist is not secret (it is committed in `allowed-domains.txt`), so the disclosure is low impact. It is noted here because silent-drop behavior would make such probing slow and impractical, and fast-fail removes that friction.
 
-## Allowlist Is IP-Based, Not Hostname-Based
+## Allowlist Is Hostname-Based, but Filters on the CONNECT Host (not SNI)
 
-The allowlist names **hostnames**, but the firewall enforces on **destination IP**: `init-firewall.sh` resolves each hostname to IPs and matches those in an ipset. It never inspects the TLS SNI or HTTP `Host` header. The actual policy is therefore *"any hostname reachable at an IP currently in the ipset is allowed"* — not *"only the hostnames you listed."*
+This is the threat the move to a Squid egress proxy **resolves**: filtering is now on the **CONNECT target hostname**, not on destination IP. A host that shares a CDN IP block with an allowlisted host is no longer implicitly reachable — the proxy permits a tunnel only when the requested host is on the list, regardless of where it resolves. The earlier IP-allowlist concern (allowing `api.githubcopilot.com`'s `140.82.x` IPs implicitly permitting anything else co-hosted there) no longer applies.
 
-This matters when an allowed host shares IPs with hosts you did **not** intend to allow — common on CDN/shared infrastructure. If `evil.example` (or another domain on the same provider) is served from an IP that one of your allowed hostnames also resolves to, a process in the container can reach it by connecting to that IP with a different SNI/`Host`; the firewall cannot tell the difference. Equally, a domain you deliberately excluded becomes reachable if it is ever served from an already-allowed IP.
+One residual gap remains, lower-impact than the IP version it replaces: Squid matches on the **CONNECT host string**, and for an HTTPS tunnel it does not verify that the TLS **SNI** inside the tunnel matches that CONNECT host. A host that permits *domain fronting* could therefore be reached under an allowed CONNECT name while the encrypted SNI names a different host on the same frontable infrastructure. Closing this is optional hardening — Squid `ssl_bump peek` + a `splice` rule asserting SNI == CONNECT host (no decryption, so cert pinning is unaffected); it is not enabled by default. See the [Centralized Egress Proxy](egress-proxy.md#trust-model--limitations) trust model.
 
-Concrete example: the allowlist intends to permit `api.githubcopilot.com` only, **not** `api.github.com`, `github.com`, or `raw.githubusercontent.com`. As of this writing those happen to sit on separate networks — `api.githubcopilot.com` on GitHub's own range (`140.82.112.0/20`), the web/API on Azure (`20.27.177.0/24`), and `raw`/`objects` on Fastly (`185.199.108.0/22`) — so allowing the Copilot IPs does not grant the others **in practice today**. But that is an artifact of GitHub's current infra split, not something this firewall enforces: if GitHub serves `api.github.com` from a `140.82.112.x` address again (it historically did), or if a Copilot edge IP also answers for the `api.github.com` vhost, that traffic would be permitted. The IP allowlist cannot prevent it.
+## DNS Exfiltration (Partially Mitigated)
 
-Enforcing a true per-hostname policy requires moving the check to L7 — e.g. an egress proxy that filters on TLS SNI and is the only permitted outbound destination, with the firewall blocking all direct egress. That is not implemented here; the IP allowlist is a deliberately simpler boundary that is sufficient when allowed hosts do not share infrastructure with untrusted ones. See [Outbound Firewall](firewall.md) for how the allowlist and its IP resolution work.
-
-## DNS Exfiltration (Unmitigated)
-
-The firewall allows unrestricted outbound DNS (UDP/TCP port 53) to **any destination**, not just the container's configured resolver. This is required so `init-firewall.sh`'s `dig`-based startup resolution and the background refresher can reach a working resolver before the ipset is populated:
+Egress to the proxy required closing the wide-open DNS channel the old IP-allowlist mode had. `init-firewall.sh` now permits port 53 **only to Docker's embedded resolver** (`127.0.0.11`); external DNS to an arbitrary IP is rejected by the egress-lock:
 
 ```sh
-# init-firewall.sh lines 74-75
-iptables -A OUTPUT -p udp --dport 53  -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 53  -j ACCEPT
+# init-firewall.sh — DNS restricted to Docker's embedded resolver
+iptables -A OUTPUT -d 127.0.0.11 -p udp --dport 53 -j ACCEPT
+iptables -A OUTPUT -d 127.0.0.11 -p tcp --dport 53 -j ACCEPT
 ```
 
-Because these rules carry no destination restriction, any process can send a DNS query to an IP of its own choosing — including an attacker-controlled authoritative nameserver. Data is encoded in hostname labels (`exfil-chunk.attacker.example`), sent directly as a UDP/TCP packet to port 53 of the attacker's IP, and received by their NS daemon. The IP allowlist never sees it: DNS traffic is accepted before the ipset match rule is evaluated. No privilege escalation is needed — the unprivileged runtime user can open a UDP socket to port 53 on any IP.
+This kills the **direct-to-authoritative** variant: a process can no longer open a UDP socket to port 53 of an attacker-controlled nameserver IP, because that packet is rejected. (The container only needs DNS at all to resolve the `squid` alias; Squid resolves upstream hostnames itself.)
 
-Restricting these rules to the container's configured resolver IP (typically the Docker bridge gateway, `172.17.0.1`) blocks direct-to-authoritative queries but does not close the channel: a standard recursive resolver will forward any query it receives up the DNS hierarchy, so `exfil.attacker.example` still reaches the attacker's NS — one hop removed. Fully closing DNS exfiltration requires:
+It does **not** fully close the channel. `127.0.0.11` is a recursive forwarder — it relays queries it receives up the DNS hierarchy — so a query for `exfil-chunk.attacker.example` still reaches the attacker's authoritative NS, one hop removed, with the data encoded in the hostname labels. The bar is raised from *trivial* (direct packet to any IP) to *one-hop-proxied via the Docker resolver*. Fully closing it would require:
 
-- **L7 DNS proxy** — run a local allowlist-only resolver (e.g. Unbound, CoreDNS) that resolves only the names in `allowed-domains.txt` and returns NXDOMAIN for everything else, then restrict port 53 to that resolver's loopback address only. Queries for unlisted names fail without ever leaving the host.
-- **DNS egress monitoring** — log all outgoing DNS queries and alert or block on suspicious patterns (high query rate, high-entropy labels, queries for unlisted second-level domains, unusual TLDs).
+- **L7 DNS proxy** — a local allowlist-only resolver (e.g. Unbound, CoreDNS) that resolves only the names in `allowed-domains.txt` and returns NXDOMAIN for everything else, with port 53 restricted to that resolver. Queries for unlisted names fail without leaving the host.
+- **DNS egress monitoring** — log outgoing queries and alert/block on suspicious patterns (high query rate, high-entropy labels, unlisted second-level domains, unusual TLDs).
 
-Neither is implemented here. At minimum, restricting DNS to the resolver IP raises the bar from trivial to one-hop-proxied. See [Outbound Firewall](firewall.md) for the full rule sequence and the reasoning behind the unrestricted DNS rule.
-
-This is a larger practical gap than the [fast-fail disclosure](#firewall-boundary-disclosure-via-fast-fail) already documented: fast-fail reveals which IPs are allowed (low-sensitivity, since the allowlist is committed to the repo), while DNS exfiltration creates an unrestricted outbound channel that bypasses the allowlist entirely with no privilege requirement.
+Neither is implemented. The residual one-hop channel is the practical gap; it is narrower than the prior unrestricted-port-53 channel but, like the [fast-fail disclosure](#egress-boundary-disclosure-via-fast-fail), it remains a way to move data out without reaching a blocked destination directly.
 
 ## Untrusted Package Artifacts on the Host
 

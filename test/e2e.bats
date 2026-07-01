@@ -36,6 +36,15 @@ case "$1" in
     # docker build — pretend to succeed without building anything
     exit 0
     ;;
+  container)
+    # container inspect (egress-proxy liveness check) — report the proxy as
+    # already running so run.sh does not invoke proxy/up.sh during the test.
+    echo "true"
+    exit 0
+    ;;
+  network)
+    exit 0
+    ;;
   volume)
     case "$2" in
       inspect) exit 1 ;;

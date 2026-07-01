@@ -22,7 +22,7 @@ who already have a devcontainer-based workflow.
 | Usage sync on exit | Automatic | No equivalent hook |
 | `node_modules` volume isolation | Auto-discovered via `package.json` scan | Must be listed per project |
 | Host UID mapping | Dynamic (`--user $(id -u):$(id -g)`) | Static `remoteUser` — must exist in image |
-| Outbound firewall | iptables (`NET_ADMIN`) | Squid proxy sidecar (see below) |
+| Outbound egress | Shared Squid proxy + thin iptables egress-lock (`NET_ADMIN`) | Squid proxy sidecar (see below) |
 | Terminal-first | Yes | IDE-first (VS Code / Codespaces) |
 | `NET_ADMIN` in Codespaces | N/A | **Not available** — use squid sidecar instead |
 

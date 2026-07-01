@@ -25,11 +25,14 @@ All are optional — with none set, the container runs with its defaults.
 | `CLAUDE_VOLUME` | `claude-<project>-<hash>` | Override the per-project session volume name (e.g. a throwaway one). | — |
 | `CLAUDE_CONTAINER_NAME` | `claude-<project>-<random>` | Pin a specific container name instead of the randomized default. | — |
 
-### Egress proxy (opt-in)
+### Egress proxy
+
+The shared Squid proxy is the sole egress path and is always on (`run.sh`
+auto-starts it); there is no enable/disable flag. These variables only rename the
+shared network and container.
 
 | Variable | Default | Description | Reference |
 | --- | --- | --- | --- |
-| `CLAUDE_EGRESS_PROXY` | _(unset)_ | Accepts `1`/`true`/`yes`/`on`. Routes the container through the shared Squid proxy instead of the per-container IP allowlist. | [Centralized Egress Proxy](egress-proxy.md) |
 | `CLAUDE_EGRESS_NETWORK` | `claude-egress` | Docker network shared by the proxy and the Claude containers (read by `run.sh` and `proxy/up.sh`). | [Centralized Egress Proxy](egress-proxy.md) |
 | `CLAUDE_EGRESS_PROXY_NAME` | `claude-egress-proxy` | Name of the long-running Squid container. | [Centralized Egress Proxy](egress-proxy.md) |
 | `CLAUDE_EGRESS_IMAGE` | `ubuntu/squid:latest` | Squid image `proxy/up.sh` runs; pin a digest for supply-chain safety. | [Centralized Egress Proxy](egress-proxy.md) |

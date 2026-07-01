@@ -44,7 +44,6 @@ context_hash() {
     "${SCRIPT_DIR}/Dockerfile"
     "${SCRIPT_DIR}/entrypoint.sh"
     "${SCRIPT_DIR}/init-firewall.sh"
-    "${SCRIPT_DIR}/allowed-domains.txt"
     "${SCRIPT_DIR}/install_additional_packages.sh"
     "${SCRIPT_DIR}/package.json"
     "${SCRIPT_DIR}/package-lock.json"
@@ -128,8 +127,9 @@ if [[ ! -d "${PROJECT_CONFIG_DIR}" ]]; then
 #   curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh -s v2.3.1
 STUB
   # Seed allowed-domains.txt: prefer the active root list, else the committed
-  # template (the root copy is gitignored and absent on a fresh checkout). It is
-  # mounted over /etc/allowed-domains.txt at runtime (see 3f) — edit, no rebuild.
+  # template (the root copy is gitignored and absent on a fresh checkout). The
+  # Squid proxy reads it live as this project's egress allowlist (see step 3f and
+  # docs/egress-proxy.md) — edit it and the change applies within ~30s, no rebuild.
   _seed_domains="${SCRIPT_DIR}/allowed-domains.txt"
   [[ -f "${_seed_domains}" ]] || _seed_domains="${SCRIPT_DIR}/templates/allowed-domains.txt"
   [[ -f "${_seed_domains}" ]] && \
@@ -331,54 +331,40 @@ if [ -f "$ENV_FILE" ]; then
   echo ">> env file: ${ENV_FILE}"
 fi
 
-# 3f. Per-project allowed-domains.txt: if present, mount it over the baked-in
-#     /etc/allowed-domains.txt so the firewall uses the project-specific list.
-_PROJECT_DOMAINS="${PROJECT_CONFIG_DIR}/allowed-domains.txt"
-if [[ -f "${_PROJECT_DOMAINS}" ]]; then
-  RO_MOUNTS+=(--volume "${_PROJECT_DOMAINS}:/etc/allowed-domains.txt:ro")
-  echo ">> per-project allowed-domains.txt: ${_PROJECT_DOMAINS}"
-fi
-
 # (Per-project install packages are baked into a derived image at build time;
 #  see 2d. There is no longer a runtime install mount.)
 
-# 3g. Centralized egress proxy (opt-in via CLAUDE_EGRESS_PROXY). When enabled,
-#     the container egresses through the shared Squid proxy (proxy/up.sh) rather
-#     than the per-container IP allowlist: it joins the proxy network, its
-#     HTTP(S)_PROXY points at Squid carrying PROJECT_KEY as the proxy username,
-#     and EGRESS_PROXY_HOST flips init-firewall.sh into proxy mode (egress
-#     allowed only to Squid). Squid enforces this project's allowed-domains.txt,
-#     keyed by that username. See docs/egress-proxy.md.
-PROXY_NET_ARGS=()
-PROXY_ENV_ARGS=()
-case "${CLAUDE_EGRESS_PROXY:-}" in
-  1|true|yes|on|TRUE|YES|ON)
-    EGRESS_NETWORK="${CLAUDE_EGRESS_NETWORK:-claude-egress}"
-    EGRESS_PROXY_NAME="${CLAUDE_EGRESS_PROXY_NAME:-claude-egress-proxy}"
-    PROXY_URL="http://${PROJECT_KEY}:x@squid:3128"
-    # Bring the shared proxy up if it isn't already running (up.sh is idempotent).
-    if [[ "$(docker container inspect -f '{{.State.Running}}' "${EGRESS_PROXY_NAME}" 2>/dev/null || true)" != "true" ]]; then
-      echo ">> egress proxy '${EGRESS_PROXY_NAME}' not running — starting it"
-      CLAUDE_EGRESS_NETWORK="${EGRESS_NETWORK}" \
-      CLAUDE_EGRESS_PROXY_NAME="${EGRESS_PROXY_NAME}" \
-        "${SCRIPT_DIR}/proxy/up.sh"
-    fi
-    PROXY_NET_ARGS=(--network "${EGRESS_NETWORK}")
-    PROXY_ENV_ARGS=(
-      --env "HTTP_PROXY=${PROXY_URL}"   --env "http_proxy=${PROXY_URL}"
-      --env "HTTPS_PROXY=${PROXY_URL}"  --env "https_proxy=${PROXY_URL}"
-      --env "NO_PROXY=localhost,127.0.0.1,::1,host.docker.internal"
-      --env "no_proxy=localhost,127.0.0.1,::1,host.docker.internal"
-      --env "EGRESS_PROXY_HOST=squid"
-    )
-    echo ">> egress via central proxy: network ${EGRESS_NETWORK}, project key ${PROJECT_KEY}"
-    ;;
-esac
+# 3f. Centralized egress proxy — the sole egress path. The container egresses
+#     through the shared Squid proxy (proxy/up.sh): it joins the proxy network,
+#     its HTTP(S)_PROXY points at Squid carrying PROJECT_KEY as the proxy
+#     username, and EGRESS_PROXY_HOST tells init-firewall.sh to lock egress to
+#     Squid only (all other outbound rejected). Squid enforces this project's
+#     allowed-domains.txt, keyed by that username. See docs/egress-proxy.md.
+EGRESS_NETWORK="${CLAUDE_EGRESS_NETWORK:-claude-egress}"
+EGRESS_PROXY_NAME="${CLAUDE_EGRESS_PROXY_NAME:-claude-egress-proxy}"
+PROXY_URL="http://${PROJECT_KEY}:x@squid:3128"
+# Bring the shared proxy up if it isn't already running (up.sh is idempotent).
+if [[ "$(docker container inspect -f '{{.State.Running}}' "${EGRESS_PROXY_NAME}" 2>/dev/null || true)" != "true" ]]; then
+  echo ">> egress proxy '${EGRESS_PROXY_NAME}' not running — starting it"
+  CLAUDE_EGRESS_NETWORK="${EGRESS_NETWORK}" \
+  CLAUDE_EGRESS_PROXY_NAME="${EGRESS_PROXY_NAME}" \
+    "${SCRIPT_DIR}/proxy/up.sh"
+fi
+PROXY_NET_ARGS=(--network "${EGRESS_NETWORK}")
+PROXY_ENV_ARGS=(
+  --env "HTTP_PROXY=${PROXY_URL}"   --env "http_proxy=${PROXY_URL}"
+  --env "HTTPS_PROXY=${PROXY_URL}"  --env "https_proxy=${PROXY_URL}"
+  --env "NO_PROXY=localhost,127.0.0.1,::1,host.docker.internal"
+  --env "no_proxy=localhost,127.0.0.1,::1,host.docker.internal"
+  --env "EGRESS_PROXY_HOST=squid"
+)
+echo ">> egress via central proxy: network ${EGRESS_NETWORK}, project key ${PROJECT_KEY}"
 
 # 4. Run as your host UID:GID; HOME forced so "~" resolves for the passwd-less UID.
-#    NET_ADMIN is required for iptables/ipset; it is only exercisable via the
-#    sudo rule scoped to /usr/local/bin/init-firewall.sh — no other escalation
-#    is possible from the non-root runtime user.
+#    NET_ADMIN is required for the iptables egress-lock that confines outbound
+#    traffic to the Squid proxy; it is only exercisable via the sudo rule scoped
+#    to /usr/local/bin/init-firewall.sh — no other escalation is possible from
+#    the non-root runtime user.
 #    "${ARR[@]+...}" keeps it safe under `set -u` on macOS bash 3.2.
 # Run without `exec` so control returns to this script after the session ends,
 # allowing the usage archive to be updated below.
