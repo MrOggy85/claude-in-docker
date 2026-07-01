@@ -43,10 +43,8 @@ RUN apt-get update \
   wget \
   sqlite3 \
   gnupg \
-  dnsutils \
   man-db \
   iptables \
-  ipset \
   shellcheck \
   yamllint \
   nano \
@@ -141,11 +139,10 @@ RUN if ! getent passwd "${USER_ID}" >/dev/null 2>&1; then \
       echo "${USERNAME}:x:${GROUP_ID}:" >> /etc/group; \
     fi
 
-# Outbound firewall: allowed domains are baked in at build time; rules are
-# applied on each container start via a sudo-scoped call in the entrypoint.
-# The sudo rule is restricted to this one script so no other root escalation
-# is possible.
-COPY allowed-domains.txt /etc/allowed-domains.txt
+# Egress lock: confines outbound traffic to the central Squid proxy. The rules
+# are applied on each container start via a sudo-scoped call in the entrypoint;
+# all egress policy (the allowlist) lives in Squid, not here. The sudo rule is
+# restricted to this one script so no other root escalation is possible.
 COPY init-firewall.sh /usr/local/bin/init-firewall.sh
 RUN chmod +x /usr/local/bin/init-firewall.sh \
  && printf 'Defaults!/usr/local/bin/init-firewall.sh !pam_acct_mgmt\nALL ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh\n' \

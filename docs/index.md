@@ -1,7 +1,6 @@
 # Additional Information
 
-- [Outbound Firewall](firewall.md) — the default-deny network boundary, the domain allowlist, and how IP rotation is handled
-- [Centralized Egress Proxy](egress-proxy.md) — opt-in: route all containers through one Squid proxy that filters by hostname per project (`CLAUDE_EGRESS_PROXY=1`)
+- [Centralized Egress Proxy](egress-proxy.md) — the network boundary: every container egresses through one shared Squid proxy that filters by hostname per project, with a thin iptables rule locking egress to the proxy
 - [MCP Servers](mcp-servers.md) — configure user-level, project-level, and GitHub MCP servers
 - [Mounting Extra Folders](mounting-extra-folders.md) — mount additional host folders into the container via `CLAUDE_MOUNTS`
 - [Publishing Ports](publishing-ports.md) — expose a server running inside the container to the host via `CLAUDE_PORTS`

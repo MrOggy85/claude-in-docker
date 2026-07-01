@@ -27,6 +27,8 @@ setup() {
 case "$1" in
   image)  exit 1 ;;   # not found -> run.sh builds (no-op below)
   build)  exit 0 ;;
+  container) echo "true"; exit 0 ;;  # egress proxy reported running -> skip up.sh
+  network)   exit 0 ;;
   volume)
     case "$2" in
       inspect) exit 1 ;;

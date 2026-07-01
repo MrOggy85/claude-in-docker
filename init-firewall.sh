@@ -1,59 +1,18 @@
 #!/bin/bash
-# Configures outbound firewall at container start (runs as root, before privilege drop).
-# Allowed domains come from /etc/allowed-domains.txt — baked into the image by default,
-# or overridden per-project by run.sh mounting a project-specific file there.
+# Locks container egress to the central Squid proxy (runs as root at container
+# start, before privilege drop). This is the in-container half of the egress
+# boundary: all outbound policy lives in Squid, keyed by the project's proxy-auth
+# username; this firewall's only job is to make sure nothing can bypass it.
+#
+# The container egresses ONLY to the Squid host (plus DNS to Docker's embedded
+# resolver so the Squid network alias can be resolved). Everything else is
+# rejected — a process that ignores the HTTP(S)_PROXY env vars doesn't leak, it
+# simply fails to connect. This also closes the port-53-to-anywhere DNS
+# exfiltration channel, since external DNS is shut and Squid resolves upstream
+# names on the container's behalf. See docs/egress-proxy.md.
 set -euo pipefail
 
-DOMAINS_FILE="/etc/allowed-domains.txt"
-IPSET_NAME="allowed-ips"
-
-# The allowed hosts are CDN-fronted and rotate their IPs *within* a session
-# (api.githubcopilot.com notably moves around GitHub's 140.82.112.0/20 block).
-# A one-shot resolution at startup therefore goes stale: a later connection hits
-# a freshly-rotated IP that was never added, and the REJECT rule below drops it.
-# A background loop re-resolves the allowlist every REFRESH_SECS and tops up the
-# ipset. Set to 0 to disable the refresher (startup resolution only).
-REFRESH_SECS=30
-
 log() { echo "[firewall] $*" >&2; }
-
-# Resolve every hostname in $DOMAINS_FILE and add any new IPv4 addresses to the
-# ipset. Pass "1" for verbose startup logging (one line per host); pass "0" for
-# the background refresher, which logs only the IPs it newly adds. This only ever
-# adds the actual DNS answers for the listed names — never a broader range — so
-# it cannot widen the policy beyond what the allowlist already names.
-refresh_allowlist() {
-  local verbose="$1" domain ips ip
-  while IFS= read -r domain || [[ -n "$domain" ]]; do
-    [[ "$domain" =~ ^[[:space:]]*# || -z "${domain//[[:space:]]/}" ]] && continue
-    ips=$(dig +short +timeout=5 "$domain" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || true)
-    if [[ -z "$ips" ]]; then
-      [[ "$verbose" == "1" ]] && log "warn: could not resolve $domain"
-      continue
-    fi
-    while IFS= read -r ip; do
-      # `ipset add` exits 0 only when the element was not already present, so this
-      # logs a host's IP exactly once — when it first appears (e.g. after a rotation).
-      if ipset add "$IPSET_NAME" "$ip" 2>/dev/null && [[ "$verbose" != "1" ]]; then
-        log "refresh: +$ip ($domain)"
-      fi
-    done <<< "$ips"
-    [[ "$verbose" == "1" ]] && log "$domain → $(echo "$ips" | tr '\n' ' ')"
-  done < "$DOMAINS_FILE"
-  return 0
-}
-
-# Detached re-invocation (setsid "$0" --refresh-loop <secs>): skip all iptables
-# setup and just keep the ipset current for the container's lifetime. Already
-# running as root (inherited from the initial sudo invocation), so it needs no
-# sudo and touches no iptables rules — only `ipset add`.
-if [[ "${1:-}" == "--refresh-loop" ]]; then
-  REFRESH_SECS="${2:-$REFRESH_SECS}"
-  while sleep "$REFRESH_SECS"; do
-    refresh_allowlist 0
-  done
-  exit 0
-fi
 
 # Comma-separated "<port>/<proto>" list of inbound ports to accept, from
 # CLAUDE_PORTS via run.sh / entrypoint.sh. Optional; empty when unset.
@@ -63,24 +22,13 @@ OPEN_PORTS="${1:-}"
 # from SOUND_PORT via run.sh / entrypoint.sh. Defaults to 4767.
 SOUND_PORT="${2:-4767}"
 
-# Egress-proxy host (e.g. "squid"), from EGRESS_PROXY_HOST via run.sh /
-# entrypoint.sh. When set, this container runs in PROXY MODE: instead of
-# allowing direct egress to the resolved allowlist IPs, it allows egress ONLY to
-# the central Squid proxy (plus DNS to Docker's embedded resolver). All policy
-# then lives in Squid, keyed by the project's proxy-auth username. Empty => the
-# default per-container IP-allowlist mode below. See docs/egress-proxy.md.
-PROXY_HOST="${3:-}"
+# Egress-proxy host (the Squid network alias), from EGRESS_PROXY_HOST via run.sh
+# / entrypoint.sh. Defaults to "squid" as defence-in-depth: if it ever arrives
+# empty the firewall still locks egress to the proxy rather than failing open.
+PROXY_HOST="${3:-squid}"
 
 # Port the central Squid proxy listens on. Kept in sync with proxy/squid.conf.
 PROXY_PORT=3128
-
-# The domains file is only consumed by IP-allowlist mode. In proxy mode the
-# allowlist lives in Squid, so its absence here must NOT short-circuit the
-# firewall — that would leave the OUTPUT policy at ACCEPT and defeat the point.
-if [[ -z "$PROXY_HOST" && ! -f "$DOMAINS_FILE" ]]; then
-  log "no domains file at $DOMAINS_FILE — skipping"
-  exit 0
-fi
 
 iptables -F
 iptables -A INPUT  -i lo                                -j ACCEPT
@@ -88,37 +36,22 @@ iptables -A OUTPUT -o lo                                -j ACCEPT
 iptables -A INPUT  -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-if [[ -n "$PROXY_HOST" ]]; then
-  # --- PROXY MODE -----------------------------------------------------------
-  # DNS only to Docker's embedded resolver (127.0.0.11) so the container can
-  # resolve the proxy's network alias; external DNS is closed (Squid resolves
-  # upstream names), which also removes the port-53 exfiltration channel.
-  iptables -A OUTPUT -d 127.0.0.11 -p udp --dport 53 -j ACCEPT
-  iptables -A OUTPUT -d 127.0.0.11 -p tcp --dport 53 -j ACCEPT
+# DNS only to Docker's embedded resolver (127.0.0.11) so the container can
+# resolve the proxy's network alias; external DNS is closed (Squid resolves
+# upstream names), which also removes the port-53 exfiltration channel.
+iptables -A OUTPUT -d 127.0.0.11 -p udp --dport 53 -j ACCEPT
+iptables -A OUTPUT -d 127.0.0.11 -p tcp --dport 53 -j ACCEPT
 
-  # Resolve the proxy alias and allow egress ONLY to it on the proxy port.
-  PROXY_IP="$(getent hosts "$PROXY_HOST" 2>/dev/null | awk '{print $1; exit}')"
-  if [[ -z "$PROXY_IP" ]]; then
-    # Fail closed: with no proxy reachable and a DROP policy below, the
-    # container simply has no egress — better than silently widening access.
-    log "FATAL: egress proxy '$PROXY_HOST' did not resolve — no outbound access"
-    exit 1
-  fi
-  iptables -A OUTPUT -d "$PROXY_IP" -p tcp --dport "$PROXY_PORT" -j ACCEPT
-  log "proxy egress: ${PROXY_HOST} (${PROXY_IP}):${PROXY_PORT} — all other egress denied"
-else
-  # --- IP-ALLOWLIST MODE (default) ------------------------------------------
-  ipset destroy "$IPSET_NAME" 2>/dev/null || true
-  ipset create "$IPSET_NAME" hash:net
-
-  iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
-  iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
-
-  # Initial synchronous resolution so connectivity is up before claude starts.
-  refresh_allowlist 1
-
-  iptables -A OUTPUT -m set --match-set "$IPSET_NAME" dst -j ACCEPT
+# Resolve the proxy alias and allow egress ONLY to it on the proxy port.
+PROXY_IP="$(getent hosts "$PROXY_HOST" 2>/dev/null | awk '{print $1; exit}')"
+if [[ -z "$PROXY_IP" ]]; then
+  # Fail closed: with no proxy reachable and a DROP policy below, the container
+  # simply has no egress — better than silently widening access.
+  log "FATAL: egress proxy '$PROXY_HOST' did not resolve — no outbound access"
+  exit 1
 fi
+iptables -A OUTPUT -d "$PROXY_IP" -p tcp --dport "$PROXY_PORT" -j ACCEPT
+log "proxy egress: ${PROXY_HOST} (${PROXY_IP}):${PROXY_PORT} — all other egress denied"
 
 # Inbound ports published to the host (docker run --publish) arrive on this
 # container's INPUT chain as NEW connections, which the DROP policy below would
@@ -139,9 +72,9 @@ fi
 
 # Allow OUTBOUND to the Docker host (host.docker.internal) on the sound-server
 # port only, so container hooks can reach the host-side sound daemon. The host
-# is published into /etc/hosts by Docker (not DNS), so it can't ride the
-# dig-based allowlist above — add it as an explicit rule. Narrowly scoped to one
-# tcp port so the container stays unable to reach any other host service.
+# is published into /etc/hosts by Docker (not DNS), so add it as an explicit
+# rule. Narrowly scoped to one tcp port so the container stays unable to reach
+# any other host service.
 if [[ "$SOUND_PORT" =~ ^[0-9]+$ ]] && (( 10#$SOUND_PORT >= 1 && 10#$SOUND_PORT <= 65535 )); then
   HOST_IP="$(getent hosts host.docker.internal 2>/dev/null | awk '{print $1; exit}')"
   if [[ -n "$HOST_IP" ]]; then
@@ -164,19 +97,5 @@ iptables -A OUTPUT       -j REJECT --reject-with icmp-port-unreachable
 iptables -P INPUT   DROP
 iptables -P FORWARD DROP
 iptables -P OUTPUT  DROP
-
-# Start the background refresher now that the ipset ACCEPT rule is live. setsid
-# detaches it into its own session so it survives after this script returns and
-# the entrypoint exec's claude; it dies with the container. Its output goes to a
-# logfile (not the terminal, which would corrupt claude's TUI; not /dev/null, so
-# rotations stay inspectable) and stdin is detached so it never holds anything open.
-# Proxy mode has no ipset to top up (Squid owns the allowlist), so the refresher
-# only runs in IP-allowlist mode.
-REFRESH_LOG="/tmp/firewall-refresh.log"
-if [[ -z "$PROXY_HOST" ]] && (( REFRESH_SECS > 0 )); then
-  setsid "$0" --refresh-loop "$REFRESH_SECS" </dev/null >>"$REFRESH_LOG" 2>&1 &
-  disown 2>/dev/null || true
-  log "refresher started (every ${REFRESH_SECS}s) → $REFRESH_LOG"
-fi
 
 log "ready"

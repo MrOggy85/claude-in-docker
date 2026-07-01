@@ -1,21 +1,25 @@
 # Centralized Egress Proxy (Squid)
 
-> **Status: opt-in.** The default network boundary is still the per-container
-> IP allowlist documented in [Outbound Firewall](firewall.md). This proxy is an
-> alternative egress model you enable with `CLAUDE_EGRESS_PROXY=1`. The two
-> modes are mutually exclusive per container.
+This is the project's network containment boundary. Every Claude container
+egresses through **one shared Squid proxy**, which allows or denies each
+connection by its CONNECT target **hostname**. Nothing inside a container can
+reach the network by any other path: a thin in-container iptables rule
+(`init-firewall.sh`) permits outbound traffic *only* to the proxy, so a process
+that ignores the `HTTP(S)_PROXY` env vars doesn't leak — it simply fails to
+connect.
 
-## Why
+## Why a proxy (vs. an IP firewall)
 
-The default firewall allows outbound to the **IP addresses** the allowlisted
-hostnames currently resolve to. That is coarse: CDN-fronted hosts share IPs, so
-allowing one host on a shared `140.82.x.x` block implicitly allows everything
-else co-hosted there, and the allowlist must be re-resolved continuously as
-those IPs rotate.
+An earlier design allowed outbound to the **IP addresses** the allowlisted
+hostnames resolved to. That is coarse: CDN-fronted hosts share IPs, so allowing
+one host on a shared `140.82.x.x` block implicitly allowed everything else
+co-hosted there, and the allowlist had to be re-resolved continuously as those
+IPs rotated. It also left port 53 open to anywhere (a DNS-exfiltration channel).
 
-A single shared Squid proxy moves the boundary to the **hostname**. Every Claude
-container egresses through one proxy, which allows or denies each connection by
-the CONNECT target host — no rotating IPs, and one place to reason about policy.
+Moving the boundary to the **hostname** removes all three problems: no shared-IP
+over-permission, no rotating-IP chase, and DNS is closed to everything but
+Docker's resolver (Squid resolves upstream names itself). There is one place to
+reason about policy.
 
 ## How it works
 
@@ -48,27 +52,38 @@ the CONNECT target host — no rotating IPs, and one place to reason about polic
 3. **No TLS interception.** Filtering is on the CONNECT target host only. There
    is no `ssl_bump`, no MITM, and no CA certificate installed anywhere, so
    certificate pinning in Claude/MCP clients is unaffected.
-4. **The container can't bypass it.** With `CLAUDE_EGRESS_PROXY=1`,
-   [`init-firewall.sh`](../init-firewall.sh) runs in *proxy mode*: it permits
-   egress **only** to the Squid host (plus DNS to Docker's embedded resolver at
-   `127.0.0.11`) and rejects everything else. A process that ignores the proxy
-   env var doesn't leak — it simply fails to connect. This also closes the
-   port-53-to-anywhere DNS exfiltration channel that exists in IP-allowlist mode.
+4. **The container can't bypass it.**
+   [`init-firewall.sh`](../init-firewall.sh) runs at container start (as root,
+   via a tightly-scoped `sudo` rule, before the entrypoint drops to your user).
+   It permits egress **only** to the Squid host (plus DNS to Docker's embedded
+   resolver at `127.0.0.11`) and rejects everything else. A process that ignores
+   the proxy env var doesn't leak — it simply fails to connect. This also closes
+   the port-53-to-anywhere DNS exfiltration channel.
+
+### Privilege model
+
+`init-firewall.sh` is the *only* root action available to the runtime user: the
+image grants a single `sudo` rule for `/usr/local/bin/init-firewall.sh` and
+nothing else. The entrypoint calls it, then `exec`s `claude` as your
+unprivileged host UID. `NET_ADMIN` is granted solely so that one script can
+apply the egress-lock iptables rules.
 
 ## Setup
 
+The proxy is mandatory infrastructure — `run.sh` auto-starts it if it isn't
+already running, so there is nothing to enable per session:
+
 ```bash
-# 1. Start the shared proxy once on the host (Docker is not available inside the
-#    Claude container). Idempotent — re-run it to apply squid.conf/helper edits.
+# Optional: start the shared proxy explicitly (Docker is not available inside the
+# Claude container). Idempotent — re-run it to apply squid.conf/helper edits.
 make proxy-up            # or: ./proxy/up.sh
 
-# 2. Launch Claude through it (per session, or export it in your shell).
-CLAUDE_EGRESS_PROXY=1 ./run.sh
+# Launch Claude as usual; it egresses through the proxy automatically.
+./run.sh
 ```
 
-`run.sh` auto-starts the proxy if it isn't already running, so step 1 is
-optional for the first run — but running it explicitly is clearer for a
-long-lived shared service. Tear down with `make proxy-down`.
+Tear down with `make proxy-down`. The network and proxy container can be renamed
+via `CLAUDE_EGRESS_NETWORK`, `CLAUDE_EGRESS_PROXY_NAME`, and `CLAUDE_EGRESS_IMAGE`.
 
 ## Allowlists
 

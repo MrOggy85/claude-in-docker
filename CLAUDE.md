@@ -11,8 +11,16 @@ See `README.md` for setup, usage, and a fuller description of the project.
 - `run.sh` — entrypoint: builds the image on context change, derives the
   per-project session volume and a unique container name, assembles mounts, runs
   `claude`, then syncs usage. The most important file to understand.
-- `Dockerfile`, `entrypoint.sh`, `init-firewall.sh`, `allowed-domains.txt` —
-  image build context; their hash gates rebuilds (`run.sh` `context_hash`).
+- `Dockerfile`, `entrypoint.sh`, `init-firewall.sh` — image build context; their
+  hash gates rebuilds (`run.sh` `context_hash`). `init-firewall.sh` is the thin
+  in-container egress-lock: it confines outbound traffic to the Squid proxy and
+  nothing else (all allowlist policy lives in Squid, see `proxy/`).
+- `proxy/` — the shared Squid egress proxy: the sole path out for every
+  container. `up.sh` brings it up; `squid.conf` + `ext-allowlist.sh` enforce each
+  project's `allowed-domains.txt` by CONNECT hostname. See `docs/egress-proxy.md`.
+- `allowed-domains.txt` — the egress allowlist, read live by Squid (not baked
+  into the image). Root copy is the baseline; `projects/<key>/allowed-domains.txt`
+  is the per-project list.
 - `scripts/extra-mounts.sh` — turns `CLAUDE_MOUNTS` into `--volume` tokens.
 - `guards/` — pre-flight security gates, each `source`d by `run.sh` so it can
   `exit` the run before any build/container work (home-dir, project-settings,
