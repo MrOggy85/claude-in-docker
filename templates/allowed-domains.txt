@@ -3,6 +3,7 @@
 
 # Claude Code API
 api.anthropic.com
+platform.claude.com
 
 # Statsig (feature flags / telemetry)
 statsig.anthropic.com
