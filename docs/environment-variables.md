@@ -15,6 +15,8 @@ All are optional — with none set, the container runs with its defaults.
 
 | Variable | Default | Description | Reference |
 | --- | --- | --- | --- |
+| `CLAUDE_DOCKER_CONFIG_DIR` | `$XDG_CONFIG_HOME/claude-in-docker` (i.e. `~/.config/claude-in-docker`) | Directory holding all user config (settings, credentials, allowed-domains, per-project dirs). Read by `run.sh`, `proxy/up.sh`, `config.sh`, and the `Makefile`. | — |
+| `CLAUDE_PROJECTS_DIR` | `<config-dir>/projects` | Base directory for the per-project config dirs. Override to relocate them (the test suite points this at a throwaway dir). | — |
 | `CLAUDE_MOUNTS` | _(unset)_ | Extra host folders to bind-mount into the container. | [Mounting Extra Folders](mounting-extra-folders.md) |
 | `CLAUDE_PORTS` | _(unset)_ | Ports to publish from the container to the host (and open in the firewall). | [Publishing Ports](publishing-ports.md) |
 | `CLAUDE_VOLUME_PATHS` | _(unset)_ | Extra in-container paths to back with named volumes (in addition to `node_modules`), keeping them off the host disk. | [Volume-Backed Paths](volume-backed-paths.md) |
@@ -48,8 +50,9 @@ shared network and container.
 
 ## The `.env` file
 
-Beyond the variables above, any `KEY=VALUE` lines in a gitignored `.env` next to
-`run.sh` are injected straight into the container via `docker --env-file`. This
+Beyond the variables above, any `KEY=VALUE` lines in a `.env` in the config dir
+(`~/.config/claude-in-docker/`) are injected straight into the container via
+`docker --env-file`. This
 is how you pass variables your own workflow needs inside the container — e.g.
 `DATABASE_URL`, or `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` to point Claude
 at a gateway.

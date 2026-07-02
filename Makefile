@@ -1,8 +1,25 @@
-# Config files are created from their committed templates in templates/.
-# Each file is its own target with no prerequisites, so `make init` creates the
-# ones that are missing and leaves existing files (your edits) untouched.
-.PHONY: init bats test test-extra-mounts test-extra-ports test-run test-e2e test-ext-allowlist lockfile pin-digest proxy-up proxy-down
-init: settings.json claude.json mcp-servers.json .credentials.json container-CLAUDE.md allowed-domains.txt .gitconfig .gitignore_global install_additional_packages.sh
+# Config files are created from their committed templates in templates/ into a
+# dedicated config dir (~/.config/claude-in-docker by default) — NOT the repo, so
+# a checkout stays clean. Each file is its own target with no prerequisites, so
+# `make init` creates the missing ones and leaves your edits untouched. Override
+# the location with CLAUDE_DOCKER_CONFIG_DIR or XDG_CONFIG_HOME (see scripts/paths.sh).
+XDG_CONFIG_HOME ?= $(HOME)/.config
+CLAUDE_DOCKER_CONFIG_DIR ?= $(XDG_CONFIG_HOME)/claude-in-docker
+CONFIG_DIR := $(CLAUDE_DOCKER_CONFIG_DIR)
+
+GLOBAL_CONFIG := settings.json claude.json mcp-servers.json container-CLAUDE.md allowed-domains.txt .gitconfig .gitignore_global
+
+.PHONY: init migrate bats test test-extra-mounts test-extra-ports test-run test-e2e test-ext-allowlist lockfile pin-digest proxy-up proxy-down
+# install_additional_packages.sh stays in the repo: it is COPY'd into the base
+# image at build time (build context = repo dir), so unlike the others it can't
+# be mounted from the config dir.
+init: $(addprefix $(CONFIG_DIR)/,$(GLOBAL_CONFIG)) $(CONFIG_DIR)/.credentials.json install_additional_packages.sh
+	@echo ">> config ready in $(CONFIG_DIR)  (view it with ./config.sh list)"
+
+# Move a pre-existing repo-root config (from older versions of this tool) into
+# the config dir. Non-destructive — never overwrites files already there.
+migrate:
+	./scripts/migrate-config.sh
 
 # Bring up / tear down the centralized egress proxy — the sole egress path for
 # every Claude container (see docs/egress-proxy.md). run.sh auto-starts it, but
@@ -68,40 +85,24 @@ pin-digest:
 	  sed -i "s|FROM debian:trixie-slim.*|FROM debian:trixie-slim@$$DIGEST|" Dockerfile && \
 	  echo "Pinned to $$DIGEST"
 
-settings.json:
-	cp templates/settings.json settings.json
+# Pattern rule: create any config-dir file from its same-named template. No
+# prerequisite on the template, so an existing (edited) file is left untouched.
+$(CONFIG_DIR)/%:
+	@mkdir -p $(CONFIG_DIR)
+	cp templates/$* $@
 
-claude.json:
-	cp templates/claude.json claude.json
+# Credentials need mode 600. This explicit rule is more specific than the pattern
+# rule above, so make prefers it. Seeded "{}" so Docker mounts it as a file;
+# `/login` writes the real token in place. Delete it to force a re-login —
+# `make init` re-creates it empty.
+$(CONFIG_DIR)/.credentials.json:
+	@mkdir -p $(CONFIG_DIR)
+	cp templates/.credentials.json $@
+	chmod 600 $@
 
-# MCP server definitions, kept separate from the mutable claude.json state file
-# and injected at runtime via `claude --mcp-config` (run.sh step 3a). Edit this
-# file to add/remove servers; changes apply on the next container start.
-mcp-servers.json:
-	cp templates/mcp-servers.json mcp-servers.json
-
-# Credentials persist across projects via this single file, bind-mounted
-# read-write into the container by run.sh. Seeded "{}" (mode 600) so Docker
-# mounts it as a file; `/login` writes the real token in place. Delete it to
-# force a re-login — `make init` re-creates it empty.
-.credentials.json:
-	cp templates/.credentials.json .credentials.json
-	chmod 600 .credentials.json
-
-container-CLAUDE.md:
-	cp templates/container-CLAUDE.md container-CLAUDE.md
-
-allowed-domains.txt:
-	cp templates/allowed-domains.txt allowed-domains.txt
-
-.gitconfig:
-	cp templates/.gitconfig .gitconfig
-
-# Global (user-level) gitignore, mounted read-only at ~/.config/git/ignore inside
-# the container (git's XDG convention — no core.excludesFile entry needed).
-.gitignore_global:
-	cp templates/.gitignore_global .gitignore_global
-
+# User-supplied extra packages, baked into the base image at build time (see
+# Dockerfile). Stays in the repo (gitignored) because it must be in the build
+# context. Edit it, then rebuild the image.
 install_additional_packages.sh:
 	cp templates/install_additional_packages.sh install_additional_packages.sh
 	chmod +x install_additional_packages.sh

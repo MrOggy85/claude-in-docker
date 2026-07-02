@@ -45,7 +45,7 @@ feature existed (or with the env var unset), where it shows `/home/dev/repo`.
 - **Show only the folder name** instead of the full path:
   `$(basename "${CLAUDE_HOST_PROJECT_DIR:-$PWD}")`. The full path is more
   disambiguating when same-named folders live in different locations.
-- The status line lives in your gitignored root `settings.json` (seeded from
+- The status line lives in your config-dir `settings.json` (seeded from
   [`templates/settings.json`](../templates/settings.json) by `make init`). Edit
   it freely — it's mounted read-only into the container, so changes take effect
   on the next launch.

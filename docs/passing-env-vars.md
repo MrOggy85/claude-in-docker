@@ -1,7 +1,8 @@
 # Passing Environment Variables
 
 To inject arbitrary environment variables into the container, put them in a
-gitignored `.env` file next to `run.sh`. When that file exists, `run.sh` passes
+`.env` file in the config dir (`~/.config/claude-in-docker/`). When that file
+exists, `run.sh` passes
 it to `docker run --env-file`, so every `KEY=VALUE` line becomes an env var
 inside the container.
 
@@ -9,7 +10,7 @@ The file is entirely optional, so it is **not** created by `make init` — creat
 it yourself only if you need it:
 
 ```bash
-# create .env next to run.sh:
+# create .env in the config dir (~/.config/claude-in-docker/):
 # DATABASE_URL=postgres://user:pass@localhost:5432/app
 # MY_API_KEY=sk-xxxxxxxx
 ```
@@ -41,7 +42,7 @@ resolve for the passwd-less runtime UID.)
 
 ## Security notes
 
-- `.env` is gitignored; keep it that way for anything secret.
+- `.env` lives in the config dir, outside the repo; keep it there for anything secret.
 - Values land in the container's process environment and are readable by any
   process there (including Claude Code). Treat `.env` as convenience config, not
   a vault.

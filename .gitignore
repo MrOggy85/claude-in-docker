@@ -1,4 +1,12 @@
+# User config now lives OUTSIDE the repo, in ~/.config/claude-in-docker (see
+# README / scripts/paths.sh); `make init` seeds it there and `make migrate` moves
+# a pre-existing repo-root config out. The repo-root entries below are kept as a
+# defensive safety net so that config left behind by an older layout — above all
+# .credentials.json — can never be committed by accident. They are harmless when
+# no such files exist.
 .claude/
+
+# Legacy repo-root config (moved to the config dir; ignored here defensively).
 /settings.json
 /claude.json
 /mcp-servers.json
@@ -7,9 +15,13 @@
 /.gitignore_global
 /.credentials.json
 /allowed-domains.txt
-/install_additional_packages.sh
 /.env
+/projects/*/
+
+# install_additional_packages.sh still lives in the repo: it is baked into the
+# base image at build time, so it must stay in the Docker build context.
+/install_additional_packages.sh
+
 sound-effects/sounds/*
 !sound-effects/sounds/.gitkeep
 .claude-docker-usage/
-/projects/*/

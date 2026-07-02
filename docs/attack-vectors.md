@@ -54,8 +54,8 @@ to view the file(s), then to confirm whether to proceed. Declining either prompt
 aborts with a non-zero status. If stdin is not a terminal (`/dev/tty`
 unavailable), both prompts are treated as declined and the run aborts, so
 non-interactive invocations remain secure by default. The container's settings
-come from `${SCRIPT_DIR}` (mounted at `~/.claude/settings.json`), never from the
-project.
+come from the config dir (`~/.config/claude-in-docker/settings.json`, mounted
+read-only at `~/.claude/settings.json`), never from the project.
 
 To run a project you trust that ships its own settings without the prompt, opt
 in with `CLAUDE_ALLOW_PROJECT_SETTINGS=1` (accepts `1`/`true`/`yes`/`on`), which
@@ -119,15 +119,16 @@ the setuid surface described above.
 
 ## Update of Allowed Domains
 
-The egress allowlist (the root `allowed-domains.txt` and each
-`projects/<key>/allowed-domains.txt`) lives in **this repo, on the host**, and is
+The egress allowlist (the baseline `allowed-domains.txt` and each
+`<config-dir>/projects/<key>/allowed-domains.txt`) lives in **the config dir on
+the host** (`~/.config/claude-in-docker/`), outside every mounted project, and is
 bind-mounted read-only into the Squid proxy. It is **not** mounted into the
-Claude containers that work on your other projects, so Claude running in those
+Claude containers that work on your projects, so Claude running in those
 containers cannot see or edit it.
 
 The narrow exception is running Claude **on this repo itself** (the
-claude-in-docker checkout is the mounted project). Then Claude can edit
-`allowed-domains.txt`, and because the proxy re-reads the lists live (≈30s verdict
+claude-in-docker checkout is the mounted project) with the config dir mounted in.
+Then Claude can edit `allowed-domains.txt`, and because the proxy re-reads the lists live (≈30s verdict
 cache, no rebuild), a widened allowlist takes effect within ~30s for the proxy —
 note this is faster than the old image-rebuild model. The blast radius is still
 bounded: a widened list only adds hostnames the proxy will then permit by CONNECT
@@ -138,7 +139,7 @@ any change to a security boundary, and review diffs to `allowed-domains.txt`.
 
 The in-container egress-lock REJECTs non-permitted outbound connections (TCP RST / ICMP unreachable) rather than silently dropping them, so a blocked connection fails immediately with `ECONNREFUSED` instead of hanging. At the iptables layer this reveals little — only that egress is locked to the Squid host — but the proxy itself is also a fast signal: Squid answers a denied CONNECT with an immediate HTTP `403`, so a process can map the per-host allowlist by probing (allowed → tunnel established; denied → 403) without timeouts.
 
-This does not let a process *reach* a blocked destination; it only reveals which hosts are allowed. The allowlist is not secret (it is committed in `allowed-domains.txt`), so the disclosure is low impact. It is noted here because silent-drop behavior would make such probing slow and impractical, and fast-fail removes that friction.
+This does not let a process *reach* a blocked destination; it only reveals which hosts are allowed. The allowlist is not secret (it is a host-side file you maintain in the config dir), so the disclosure is low impact. It is noted here because silent-drop behavior would make such probing slow and impractical, and fast-fail removes that friction.
 
 ## Allowlist Is Hostname-Based, but Filters on the CONNECT Host (not SNI)
 

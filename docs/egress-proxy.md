@@ -46,8 +46,8 @@ reason about policy.
 2. **Squid selects that project's allowlist.** An
    [`external_acl`](../proxy/ext-allowlist.sh) helper receives
    `<project-key> <host>` and returns `OK` when `<host>` is in the baseline list
-   (the active gitignored `allowed-domains.txt`) **or** in
-   `projects/<project-key>/allowed-domains.txt`. Everything else is denied
+   (the config-dir `allowed-domains.txt`) **or** in
+   `<config-dir>/projects/<project-key>/allowed-domains.txt`. Everything else is denied
    (`http_access deny all`).
 3. **No TLS interception.** Filtering is on the CONNECT target host only. There
    is no `ssl_bump`, no MITM, and no CA certificate installed anywhere, so
@@ -89,8 +89,8 @@ via `CLAUDE_EGRESS_NETWORK`, `CLAUDE_EGRESS_PROXY_NAME`, and `CLAUDE_EGRESS_IMAG
 
 | File                                       | Role                                                            |
 | ------------------------------------------ | --------------------------------------------------------------- |
-| `allowed-domains.txt` (gitignored root)    | **baseline** — always allowed, every project (falls back to `templates/allowed-domains.txt` if absent) |
-| `projects/<key>/allowed-domains.txt`       | that project's full list (already seeded by `run.sh` first run) |
+| `<config-dir>/allowed-domains.txt`         | **baseline** — always allowed, every project (falls back to `templates/allowed-domains.txt` if absent) |
+| `<config-dir>/projects/<key>/allowed-domains.txt` | that project's full list (already seeded by `run.sh` first run) |
 
 Both are bind-mounted read-only into the proxy and read live by the helper
 (30-second verdict cache), so **editing a list needs no proxy restart** — the
