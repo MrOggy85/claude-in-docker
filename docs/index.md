@@ -1,6 +1,6 @@
 # Additional Information
 
-- [Centralized Egress Proxy](egress-proxy.md) — the network boundary: every container egresses through one shared Squid proxy that filters by hostname per project, with a thin iptables rule locking egress to the proxy
+- [Centralized Egress Proxy](egress-proxy.md) — the network boundary: every container egresses through one shared Squid proxy that filters by hostname per project, with a thin nftables rule locking egress to the proxy
 - [MCP Servers](mcp-servers.md) — configure user-level, project-level, and GitHub MCP servers
 - [Mounting Extra Folders](mounting-extra-folders.md) — mount additional host folders into the container via `CLAUDE_MOUNTS`
 - [Publishing Ports](publishing-ports.md) — expose a server running inside the container to the host via `CLAUDE_PORTS`

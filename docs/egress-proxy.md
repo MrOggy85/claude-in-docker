@@ -3,7 +3,7 @@
 This is the project's network containment boundary. Every Claude container
 egresses through **one shared Squid proxy**, which allows or denies each
 connection by its CONNECT target **hostname**. Nothing inside a container can
-reach the network by any other path: a thin in-container iptables rule
+reach the network by any other path: a thin in-container nftables rule
 (`init-firewall.sh`) permits outbound traffic *only* to the proxy, so a process
 that ignores the `HTTP(S)_PROXY` env vars doesn't leak — it simply fails to
 connect.
@@ -66,7 +66,7 @@ reason about policy.
 image grants a single `sudo` rule for `/usr/local/bin/init-firewall.sh` and
 nothing else. The entrypoint calls it, then `exec`s `claude` as your
 unprivileged host UID. `NET_ADMIN` is granted solely so that one script can
-apply the egress-lock iptables rules.
+apply the egress-lock nftables rules.
 
 ## Setup
 

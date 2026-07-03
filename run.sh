@@ -371,7 +371,7 @@ PROXY_ENV_ARGS=(
 echo ">> egress via central proxy: network ${EGRESS_NETWORK}, project key ${PROJECT_KEY}"
 
 # 4. Run as your host UID:GID; HOME forced so "~" resolves for the passwd-less UID.
-#    NET_ADMIN is required for the iptables egress-lock that confines outbound
+#    NET_ADMIN is required for the nftables egress-lock that confines outbound
 #    traffic to the Squid proxy; it is only exercisable via the sudo rule scoped
 #    to /usr/local/bin/init-firewall.sh — no other escalation is possible from
 #    the non-root runtime user.

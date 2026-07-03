@@ -44,7 +44,7 @@ RUN apt-get update \
   sqlite3 \
   gnupg \
   man-db \
-  iptables \
+  nftables \
   shellcheck \
   yamllint \
   nano \
