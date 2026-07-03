@@ -137,7 +137,7 @@ any change to a security boundary, and review diffs to `allowed-domains.txt`.
 
 ## Egress Boundary Disclosure via Fast-Fail
 
-The in-container egress-lock REJECTs non-permitted outbound connections (TCP RST / ICMP unreachable) rather than silently dropping them, so a blocked connection fails immediately with `ECONNREFUSED` instead of hanging. At the iptables layer this reveals little — only that egress is locked to the Squid host — but the proxy itself is also a fast signal: Squid answers a denied CONNECT with an immediate HTTP `403`, so a process can map the per-host allowlist by probing (allowed → tunnel established; denied → 403) without timeouts.
+The in-container egress-lock REJECTs non-permitted outbound connections (TCP RST / ICMP unreachable) rather than silently dropping them, so a blocked connection fails immediately with `ECONNREFUSED` instead of hanging. At the packet-filter layer this reveals little — only that egress is locked to the Squid host — but the proxy itself is also a fast signal: Squid answers a denied CONNECT with an immediate HTTP `403`, so a process can map the per-host allowlist by probing (allowed → tunnel established; denied → 403) without timeouts.
 
 This does not let a process *reach* a blocked destination; it only reveals which hosts are allowed. The allowlist is not secret (it is a host-side file you maintain in the config dir), so the disclosure is low impact. It is noted here because silent-drop behavior would make such probing slow and impractical, and fast-fail removes that friction.
 
@@ -152,9 +152,9 @@ One residual gap remains, lower-impact than the IP version it replaces: Squid ma
 Egress to the proxy required closing the wide-open DNS channel the old IP-allowlist mode had. `init-firewall.sh` now permits port 53 **only to Docker's embedded resolver** (`127.0.0.11`); external DNS to an arbitrary IP is rejected by the egress-lock:
 
 ```sh
-# init-firewall.sh — DNS restricted to Docker's embedded resolver
-iptables -A OUTPUT -d 127.0.0.11 -p udp --dport 53 -j ACCEPT
-iptables -A OUTPUT -d 127.0.0.11 -p tcp --dport 53 -j ACCEPT
+# init-firewall.sh — DNS restricted to Docker's embedded resolver (nftables)
+ip daddr 127.0.0.11 udp dport 53 accept
+ip daddr 127.0.0.11 tcp dport 53 accept
 ```
 
 This kills the **direct-to-authoritative** variant: a process can no longer open a UDP socket to port 53 of an attacker-controlled nameserver IP, because that packet is rejected. (The container only needs DNS at all to resolve the `squid` alias; Squid resolves upstream hostnames itself.)

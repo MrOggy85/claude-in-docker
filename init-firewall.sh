@@ -4,6 +4,12 @@
 # boundary: all outbound policy lives in Squid, keyed by the project's proxy-auth
 # username; this firewall's only job is to make sure nothing can bypass it.
 #
+# Uses nftables (nft) with a single dual-stack `inet` table, so IPv4 and IPv6 are
+# locked by one ruleset — no separate iptables/ip6tables passes (and no chance of
+# feeding an IPv6 address to an IPv4-only tool). nft talks to the same nf_tables
+# subsystem the iptables shim already delegates to, and works with NET_ADMIN
+# alone — no dependency on the legacy ip_tables kernel module.
+#
 # The container egresses ONLY to the Squid host (plus DNS to Docker's embedded
 # resolver so the Squid network alias can be resolved). Everything else is
 # rejected — a process that ignores the HTTP(S)_PROXY env vars doesn't leak, it
@@ -30,55 +36,39 @@ PROXY_HOST="${3:-squid}"
 # Port the central Squid proxy listens on. Kept in sync with proxy/squid.conf.
 PROXY_PORT=3128
 
-iptables -F
-iptables -A INPUT  -i lo                                -j ACCEPT
-iptables -A OUTPUT -o lo                                -j ACCEPT
-iptables -A INPUT  -m state --state ESTABLISHED,RELATED -j ACCEPT
-iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-
-# DNS only to Docker's embedded resolver (127.0.0.11) so the container can
-# resolve the proxy's network alias; external DNS is closed (Squid resolves
-# upstream names), which also removes the port-53 exfiltration channel.
-iptables -A OUTPUT -d 127.0.0.11 -p udp --dport 53 -j ACCEPT
-iptables -A OUTPUT -d 127.0.0.11 -p tcp --dport 53 -j ACCEPT
-
-# Resolve the proxy alias and allow egress ONLY to it on the proxy port.
-PROXY_IP="$(getent hosts "$PROXY_HOST" 2>/dev/null | awk '{print $1; exit}')"
-if [[ -z "$PROXY_IP" ]]; then
-  # Fail closed: with no proxy reachable and a DROP policy below, the container
-  # simply has no egress — better than silently widening access.
+# Resolve the proxy alias. Resolve IPv4 and IPv6 separately (getent ahostsv4 /
+# ahostsv6) and pin whichever address families exist into the ruleset — the inet
+# table below matches each with its own `ip`/`ip6` rule. A plain `getent hosts`
+# would hand back one family in an unpredictable order, which is how the old
+# iptables version ended up passing an IPv6 address to an IPv4-only tool.
+# The `|| true` matters under `set -o pipefail`: getent exits non-zero when a
+# name has no record for that family (e.g. no IPv6 on an IPv4-only network), and
+# without it that non-zero pipeline would abort the whole script. We want an
+# empty string there and handle it explicitly below.
+PROXY_IP="$(getent ahostsv4 "$PROXY_HOST" 2>/dev/null | awk '{print $1; exit}' || true)"
+PROXY_IP6="$(getent ahostsv6 "$PROXY_HOST" 2>/dev/null | awk '{print $1; exit}' || true)"
+if [[ -z "$PROXY_IP" && -z "$PROXY_IP6" ]]; then
+  # Fail closed: with no proxy reachable and a drop policy, the container simply
+  # has no egress — better than silently widening access.
   log "FATAL: egress proxy '$PROXY_HOST' did not resolve — no outbound access"
   exit 1
 fi
-iptables -A OUTPUT -d "$PROXY_IP" -p tcp --dport "$PROXY_PORT" -j ACCEPT
-log "proxy egress: ${PROXY_HOST} (${PROXY_IP}):${PROXY_PORT} — all other egress denied"
 
-# Inbound ports published to the host (docker run --publish) arrive on this
-# container's INPUT chain as NEW connections, which the DROP policy below would
-# otherwise reject. Open each requested port explicitly. Values come from
-# run.sh as "<port>/<proto>"; validate defensively since this runs as root.
-if [[ -n "$OPEN_PORTS" ]]; then
-  IFS=',' read -r -a _ports <<< "$OPEN_PORTS"
-  for pp in ${_ports[@]+"${_ports[@]}"}; do
-    port="${pp%%/*}"; proto="${pp##*/}"
-    if [[ ! "$port" =~ ^[0-9]+$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
-      log "warn: ignoring invalid port spec '$pp'"; continue
-    fi
-    case "$proto" in tcp|udp) ;; *) log "warn: ignoring invalid proto in '$pp'"; continue ;; esac
-    iptables -A INPUT -p "$proto" --dport "$port" -j ACCEPT
-    log "open inbound: ${port}/${proto}"
-  done
-fi
+# Per-family proxy accept rules — only for the families that actually resolved.
+PROXY_RULES=""
+[[ -n "$PROXY_IP"  ]] && PROXY_RULES+="        ip daddr ${PROXY_IP} tcp dport ${PROXY_PORT} accept"$'\n'
+[[ -n "$PROXY_IP6" ]] && PROXY_RULES+="        ip6 daddr ${PROXY_IP6} tcp dport ${PROXY_PORT} accept"$'\n'
 
 # Allow OUTBOUND to the Docker host (host.docker.internal) on the sound-server
-# port only, so container hooks can reach the host-side sound daemon. The host
-# is published into /etc/hosts by Docker (not DNS), so add it as an explicit
-# rule. Narrowly scoped to one tcp port so the container stays unable to reach
-# any other host service.
+# port only, so container hooks can reach the host-side sound daemon. The host is
+# published into /etc/hosts by Docker (not DNS); resolve it to IPv4 (it often has
+# an IPv6 too). Narrowly scoped to one tcp port so the container stays unable to
+# reach any other host service.
+HOST_RULE=""
 if [[ "$SOUND_PORT" =~ ^[0-9]+$ ]] && (( 10#$SOUND_PORT >= 1 && 10#$SOUND_PORT <= 65535 )); then
-  HOST_IP="$(getent hosts host.docker.internal 2>/dev/null | awk '{print $1; exit}')"
+  HOST_IP="$(getent ahostsv4 host.docker.internal 2>/dev/null | awk '{print $1; exit}' || true)"
   if [[ -n "$HOST_IP" ]]; then
-    iptables -A OUTPUT -d "$HOST_IP" -p tcp --dport "$SOUND_PORT" -j ACCEPT
+    HOST_RULE="        ip daddr ${HOST_IP} tcp dport ${SOUND_PORT} accept"
     log "allow host: ${HOST_IP}:${SOUND_PORT}/tcp (sound server)"
   else
     log "warn: host.docker.internal did not resolve — sound server unreachable from container"
@@ -87,15 +77,69 @@ else
   log "warn: invalid SOUND_PORT '$SOUND_PORT' — not opening host sound port"
 fi
 
-# Fail fast instead of silently dropping. A bare `-P OUTPUT DROP` makes blocked
-# connections hang until the client's own timeout; an explicit REJECT sends a TCP
-# RST (-> immediate ECONNREFUSED) or an ICMP unreachable, so the process errors
-# out right away and names the host it failed to reach.
-iptables -A OUTPUT -p tcp -j REJECT --reject-with tcp-reset
-iptables -A OUTPUT       -j REJECT --reject-with icmp-port-unreachable
+# Inbound ports published to the host (docker run --publish) arrive on this
+# container's input chain as NEW connections, which the drop policy would
+# otherwise reject. Open each requested port explicitly. Values come from run.sh
+# as "<port>/<proto>"; validate defensively since this runs as root.
+INPUT_RULES=""
+if [[ -n "$OPEN_PORTS" ]]; then
+  IFS=',' read -r -a _ports <<< "$OPEN_PORTS"
+  for pp in ${_ports[@]+"${_ports[@]}"}; do
+    port="${pp%%/*}"; proto="${pp##*/}"
+    if [[ ! "$port" =~ ^[0-9]+$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
+      log "warn: ignoring invalid port spec '$pp'"; continue
+    fi
+    case "$proto" in tcp|udp) ;; *) log "warn: ignoring invalid proto in '$pp'"; continue ;; esac
+    INPUT_RULES+="        ${proto} dport ${port} accept"$'\n'
+    log "open inbound: ${port}/${proto}"
+  done
+fi
 
-iptables -P INPUT   DROP
-iptables -P FORWARD DROP
-iptables -P OUTPUT  DROP
+# Apply our ruleset atomically (`nft -f -` is transactional: it all loads or
+# nothing changes). Crucially we replace ONLY our own `inet firewall` table — we
+# must NOT `flush ruleset`, which would also wipe the nftables rules Docker
+# installs in the container's netns, notably the DNAT that makes the embedded DNS
+# resolver at 127.0.0.11:53 work (and published-port DNAT). Flushing those breaks
+# name resolution, so the container can't resolve the `squid` alias and every
+# connection fails — this is why the old `iptables -F` (filter table only) was
+# safe and a blanket flush is not. The bare `table inet firewall` line creates the
+# table if absent so the following `delete` never errors; then we recreate it.
+#
+# One dual-stack inet table, every chain default-drop:
+#   - allow loopback and established/related flows
+#   - DNS only to Docker's embedded resolver (127.0.0.11, IPv4) — external DNS is
+#     shut, closing the port-53 exfiltration channel; Squid resolves upstream
+#   - the proxy port to the resolved Squid address(es)
+#   - any published inbound ports; the host sound port
+#   - fast-reject the rest (TCP RST / ICMP unreachable) so a blocked connection
+#     errors out immediately and names the host, instead of hanging until timeout
+nft -f - <<NFT_EOF
+table inet firewall
+delete table inet firewall
 
+table inet firewall {
+    chain input {
+        type filter hook input priority 0; policy drop;
+        iifname "lo" accept
+        ct state established,related accept
+${INPUT_RULES}    }
+
+    chain forward {
+        type filter hook forward priority 0; policy drop;
+    }
+
+    chain output {
+        type filter hook output priority 0; policy drop;
+        oifname "lo" accept
+        ct state established,related accept
+        ip daddr 127.0.0.11 udp dport 53 accept
+        ip daddr 127.0.0.11 tcp dport 53 accept
+${PROXY_RULES}${HOST_RULE}
+        meta l4proto tcp reject with tcp reset
+        reject
+    }
+}
+NFT_EOF
+
+log "proxy egress: ${PROXY_HOST} (${PROXY_IP:-–}${PROXY_IP6:+, [${PROXY_IP6}]}):${PROXY_PORT} — all other egress denied"
 log "ready"
