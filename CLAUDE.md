@@ -16,6 +16,15 @@ location and for the per-project key, shared by `run.sh`, `proxy/up.sh`, and
 one exception is `install_additional_packages.sh`, which stays in the repo because
 it is baked into the image at build time (Docker build context = repo dir).
 
+## Comments
+`run.sh` is the orchestrator; the detail lives in the files it sources and links
+(`guards/*`, `scripts/paths.sh`, `proxy/`, `docs/`). When a sourced or referenced
+file already carries the full explanation, keep the comment at the call site
+brief — one line on what happens and why, plus a pointer ("see the guard file",
+"see docs/egress-proxy.md"). Do not restate the linked file's description inline;
+that duplication drifts out of sync. Put the authoritative description in the
+sourced file, not in `run.sh`.
+
 ## Layout
 - `run.sh` — entrypoint: builds the image on context change, derives the
   per-project session volume and a unique container name, assembles mounts, runs

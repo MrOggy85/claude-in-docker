@@ -7,7 +7,7 @@ XDG_CONFIG_HOME ?= $(HOME)/.config
 CLAUDE_DOCKER_CONFIG_DIR ?= $(XDG_CONFIG_HOME)/claude-in-docker
 CONFIG_DIR := $(CLAUDE_DOCKER_CONFIG_DIR)
 
-GLOBAL_CONFIG := settings.json claude.json mcp-servers.json container-CLAUDE.md allowed-domains.txt .gitconfig .gitignore_global
+GLOBAL_CONFIG := settings.json claude.json mcp-servers.json container-CLAUDE.md allowed-domains.txt .gitconfig .gitignore_global .env
 
 .PHONY: init migrate bats test test-extra-mounts test-extra-ports test-run test-e2e test-ext-allowlist lockfile pin-digest proxy-up proxy-down
 # install_additional_packages.sh stays in the repo: it is COPY'd into the base

@@ -27,6 +27,10 @@ setup() {
   export CLAUDE_DOCKER_CONFIG_DIR="${STUB_DIR}/config"
   export CLAUDE_PROJECTS_DIR="${STUB_DIR}/projects"
   mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}"
+  # The config-initialized guard aborts unless a baseline config-dir .env exists,
+  # so seed one: every test runs from an "already ran make init" state. Tests that
+  # exercise .env behaviour overwrite it; the guard test removes it deliberately.
+  : > "${CLAUDE_DOCKER_CONFIG_DIR}/.env"
 
   # Create the docker stub. EOF is unquoted so ${STUB_DIR} vars expand now;
   # \$1, \$@, etc. are escaped and become real $ in the written script.
@@ -340,12 +344,12 @@ refute_run_arg() {
   [ "${envfile_line}" -lt "${home_line}" ]
 }
 
-@test "no .env: no --env-file flag in docker run" {
+@test "no baseline .env: config-initialized guard aborts with a make-init hint" {
   rm -f "${ENV_FILE}"
   cd "${TEST_PROJECT_DIR}"
   run "${RUN_CMD[@]}"
-  [ "$status" -eq 0 ]
-  refute_run_arg "--env-file"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"make init"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -434,7 +438,8 @@ refute_run_arg() {
 @test "per-project .env is used when present (overrides root .env)" {
   mkdir -p "${PROJECT_CONFIG_DIR}"
   printf 'PROJECT_VAR=from-project\n' > "${PROJECT_CONFIG_DIR}/.env"
-  rm -f "${ENV_FILE}"  # ensure root .env is absent
+  # Root .env stays present (the guard requires it); the per-project one must win.
+  printf 'ROOT_VAR=from-root\n' > "${ENV_FILE}"
   cd "${TEST_PROJECT_DIR}"
   run "${RUN_CMD[@]}"
   [ "$status" -eq 0 ]
