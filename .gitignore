@@ -22,6 +22,9 @@
 # base image at build time, so it must stay in the Docker build context.
 /install_additional_packages.sh
 
+# npm install artifact from `make lockfile`; only package-lock.json is committed.
+/node_modules/
+
 sound-effects/sounds/*
 !sound-effects/sounds/.gitkeep
 .claude-docker-usage/
