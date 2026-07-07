@@ -1,8 +1,16 @@
 # Installing Additional Packages
 
-The image ships a fixed toolchain (Node, git, ripgrep, Python, etc.). When a workflow needs
+The image ships a baseline toolchain (Node, git, ripgrep, Python, etc.). When a workflow needs
 something extra — e.g. Claude wants to run `deno` to check tests pass — add it via
 `install_additional_packages.sh`.
+
+> **Node is provided via [nvm](https://github.com/nvm-sh/nvm)** and is user-controllable, so
+> you don't need this script to manage it. A single pinned version (see `NODE_VERSION` in the
+> `Dockerfile`) is installed as the default; at runtime you can `nvm install <ver>` / `nvm use
+> <ver>` to add or switch versions (`nodejs.org` is in the baseline `allowed-domains.txt`).
+> Caveat: an `nvm use` only affects the shell it runs in, and Claude's Bash tool starts a fresh
+> shell per command — so bare `node` always uses the pinned default. To honor a project's
+> `.nvmrc`, chain the switch into the same command: `nvm use && npm test`.
 
 `make init` creates the script from `templates/install_additional_packages.sh`. Unlike the
 other user config, this global script stays **in the repo root** (not the config dir) — it is

@@ -15,6 +15,9 @@ sentry.io
 # npm registry
 registry.npmjs.org
 
+# Node.js releases — for `nvm install <ver>` at runtime (tarballs + SHASUMS256.txt)
+nodejs.org
+
 # GitHub MCP
 api.githubcopilot.com
 
