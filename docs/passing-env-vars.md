@@ -1,22 +1,23 @@
 # Passing Environment Variables
 
-To inject arbitrary environment variables into the container, put them in a
-`.env` file in the config dir (`~/.config/claude-in-docker/`). When that file
-exists, `run.sh` passes
-it to `docker run --env-file`, so every `KEY=VALUE` line becomes an env var
-inside the container.
+To inject arbitrary environment variables into the container, put them in the
+`.env` file in the config dir (`~/.config/claude-in-docker/`). `run.sh` always
+passes it to `docker run --env-file`, so every `KEY=VALUE` line becomes an env
+var inside the container.
 
-The file is entirely optional, so it is **not** created by `make init` — create
-it yourself only if you need it:
+`make init` creates a comment-only `.env` from the template, and `run.sh`
+refuses to start until it exists (a first-time run without it aborts with a
+`make init` pointer). The file may safely stay empty — a comment-only `.env`
+injects nothing. Add lines when you need them:
 
 ```bash
-# create .env in the config dir (~/.config/claude-in-docker/):
+# .env in the config dir (~/.config/claude-in-docker/):
 # DATABASE_URL=postgres://user:pass@localhost:5432/app
 # MY_API_KEY=sk-xxxxxxxx
 ```
 
-The file is optional and absent-safe: with no `.env`, no `--env-file` flag is
-emitted. A comments-only `.env` injects nothing.
+A per-project `.env` in `projects/<key>/.env` takes precedence over the
+config-dir one when present.
 
 ## `docker --env-file` parsing caveats
 

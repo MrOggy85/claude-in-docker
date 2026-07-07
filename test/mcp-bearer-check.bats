@@ -25,8 +25,13 @@ setup() {
   # can build a sanitised PATH that excludes any real curl binary.
   ORIGINAL_PATH="${PATH}"
 
-  # Keep per-project config dirs out of the repo's projects/ (cleaned with STUB_DIR).
+  # Keep the config dir and per-project config dirs out of the developer's real
+  # ~/.config and the repo (both under STUB_DIR, cleaned with it). Seed a baseline
+  # .env so the config-initialized guard passes and the bearer guard under test runs.
+  export CLAUDE_DOCKER_CONFIG_DIR="${STUB_DIR}/config"
   export CLAUDE_PROJECTS_DIR="${STUB_DIR}/projects"
+  mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}"
+  : > "${CLAUDE_DOCKER_CONFIG_DIR}/.env"
 
   mkdir -p "${STUB_DIR}/bin" "${STUB_DIR}/no-curl-bin"
 

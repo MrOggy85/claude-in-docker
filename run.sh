@@ -3,13 +3,9 @@
 # Run Claude Code in Docker as YOUR host user, so any files it creates in the
 # mounted project are owned by you (not root).
 #
-# Mounts:
+# Mount:
 #   - $(pwd)    -> /home/dev/repo     (the project you launch this from)
-#   - ~/.claude -> /home/dev/.claude  (your settings/config/credentials)
-#   - $CLAUDE_MOUNTS                   (optional extra folders, see step 3b)
-# By default every node_modules location is backed by a named volume and hidden
-# from the host (step 3d). Add more in-repo paths with $CLAUDE_VOLUME_PATHS, or
-# opt out with $SKIP_CLAUDE_VOLUME_PATHS.
+#
 # Working dir is set to /home/dev/repo, then `claude` runs.
 #
 # All script arguments are forwarded verbatim to `claude`. Extra host folders
@@ -21,7 +17,6 @@ set -euo pipefail
 BASE_IMAGE="claude-code:local"
 HOME_IN_CONTAINER="/home/dev"
 REPO_IN_CONTAINER="${HOME_IN_CONTAINER}/repo"
-HOST_CLAUDE_DIR="${HOME}/.claude"
 
 # Directory of THIS script = build context (where the Dockerfile lives), kept
 # separate from $(pwd) so you can run the script from any project.
@@ -36,6 +31,12 @@ PROJECT_DIR="$(pwd)"
 # a pre-existing repo-root config into it.
 source "${SCRIPT_DIR}/scripts/paths.sh"
 CONFIG_DIR="$(config_dir)"
+
+# Refuse to run against an un-initialized config dir before doing anything else:
+# `make init` seeds the config dir (including the baseline .env this guard checks
+# for), and the rest of the script assumes that config exists. Sourced so it can
+# `exit` with a `make init` pointer for first-time users. See the guard file.
+source "${SCRIPT_DIR}/guards/config-initialized.sh"
 
 # Pre-flight security guards. Each lives in guards/ and is sourced (not run as a
 # subprocess) so it can abort the whole run with `exit` before any build, volume,
@@ -326,16 +327,14 @@ else
   fi
 fi
 
-# 3e. Optional arbitrary env vars from a gitignored `.env` next to run.sh, via
-#     `docker --env-file`. Per-project .env in projects/<key>/.env takes
-#     precedence when present. Emitted before the explicit `--env` flags so it
-#     can't clobber them (last duplicate wins). See docs/passing-env-vars.md.
+# 3e. Arbitrary env vars from the config-dir `.env`, via `docker --env-file`. A
+#     per-project .env in projects/<key>/.env takes precedence when present; the
+#     config-initialized guard guarantees the baseline config-dir .env exists, so
+#     this always resolves to a real file and --env-file is unconditional (the
+#     file may be empty/comment-only). Emitted before the explicit `--env` flags
+#     so it can't clobber them (last duplicate wins). See docs/passing-env-vars.md.
 ENV_FILE="$(resolve_config_file .env)"
-ENV_FILE_ARGS=()
-if [ -f "$ENV_FILE" ]; then
-  ENV_FILE_ARGS+=(--env-file "$ENV_FILE")
-  echo ">> env file: ${ENV_FILE}"
-fi
+echo ">> env file: ${ENV_FILE}"
 
 # (Per-project install packages are baked into a derived image at build time;
 #  see 2d. There is no longer a runtime install mount.)
@@ -385,7 +384,7 @@ docker run \
   --user "$(id -u):$(id -g)" \
   --cap-add=NET_ADMIN \
   ${PROXY_NET_ARGS[@]+"${PROXY_NET_ARGS[@]}"} \
-  ${ENV_FILE_ARGS[@]+"${ENV_FILE_ARGS[@]}"} \
+  --env-file "${ENV_FILE}" \
   ${PROXY_ENV_ARGS[@]+"${PROXY_ENV_ARGS[@]}"} \
   --env HOME="${HOME_IN_CONTAINER}" \
   --env COLORTERM=truecolor \

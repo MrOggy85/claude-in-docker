@@ -37,7 +37,7 @@ All of the following files live in the config directory and are your personal fi
 - `allowed-domains.txt` domains listed here are the only outbound destinations the container can reach. It is the allowlist enforced by the shared Squid egress proxy (read live — edits apply within ~30s, no image rebuild). See [Centralized Egress Proxy](docs/egress-proxy.md) for how egress filtering works.
 - `.gitconfig` set your git `user.name` / `user.email` here.
 - `.gitignore_global` optional global (user-level) gitignore; mounted read-only at `~/.config/git/ignore`, which git reads automatically (no `.gitconfig` entry needed). Patterns apply to every repo you work in inside the container.
-- `.env` optional; arbitrary `KEY=VALUE` environment variables injected into the container via `docker --env-file`. See [Passing environment variables](docs/passing-env-vars.md).
+- `.env` arbitrary `KEY=VALUE` environment variables injected into the container via `docker --env-file`. Created (comment-only) by `make init` and required — `run.sh` aborts with a `make init` pointer if it is missing — but may safely stay empty. See [Passing environment variables](docs/passing-env-vars.md).
 
 One file stays **in the repo** (not the config dir): `install_additional_packages.sh`.
 It runs at image build time as root — add commands here to install extra tools a
