@@ -1,16 +1,11 @@
 #!/usr/bin/env bash
 #
-# Run Claude Code in Docker as YOUR host user, so any files it creates in the
-# mounted project are owned by you (not root).
+# Run Claude Code in Docker as YOUR host user, so files it creates in the mounted
+# project ($(pwd) -> /home/dev/repo) are owned by you, not root. Working dir is
+# that mount; `claude` runs there.
 #
-# Mount:
-#   - $(pwd)    -> /home/dev/repo     (the project you launch this from)
-#
-# Working dir is set to /home/dev/repo, then `claude` runs.
-#
-# All script arguments are forwarded verbatim to `claude`. Extra host folders
-# are mounted via the CLAUDE_MOUNTS env var (not flags), so they don't consume
-# any positional args meant for claude.
+# Script args are forwarded verbatim to `claude`. Extra host folders mount via
+# CLAUDE_MOUNTS (env, not flags) so they don't consume claude's positional args.
 
 set -euo pipefail
 
@@ -23,32 +18,26 @@ REPO_IN_CONTAINER="${HOME_IN_CONTAINER}/repo"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(pwd)"
 
-# User-managed config lives OUTSIDE the repo, under a dedicated XDG-style dir
-# (~/.config/claude-in-docker by default; override with CLAUDE_DOCKER_CONFIG_DIR
-# or XDG_CONFIG_HOME). scripts/paths.sh is the single source of truth for that
-# location and for the per-project key below, shared with proxy/up.sh and the
-# config CLI (config.sh). `make init` seeds the config dir; `make migrate` moves
-# a pre-existing repo-root config into it.
+# User-managed config lives OUTSIDE the repo, under an XDG-style dir. See
+# scripts/paths.sh — the single source of truth for that location and the
+# per-project key, shared with proxy/up.sh and config.sh. `make init` seeds it.
 source "${SCRIPT_DIR}/scripts/paths.sh"
 CONFIG_DIR="$(config_dir)"
 
-# Refuse to run against an un-initialized config dir before doing anything else:
-# `make init` seeds the config dir (including the baseline .env this guard checks
-# for), and the rest of the script assumes that config exists. Sourced so it can
-# `exit` with a `make init` pointer for first-time users. See the guard file.
+# Refuse to run against an un-initialized config dir (points first-timers at
+# `make init`). Sourced so it can `exit`. See the guard file.
 source "${SCRIPT_DIR}/guards/config-initialized.sh"
 
-# Pre-flight security guards. Each lives in guards/ and is sourced (not run as a
-# subprocess) so it can abort the whole run with `exit` before any build, volume,
-# or container work happens. They read PROJECT_DIR / HOME / MCP_GH_BEARER /
-# CLAUDE_ALLOW_PROJECT_SETTINGS from this scope. See each file for details.
+# Pre-flight security guards, each sourced (not subprocessed) so it can abort the
+# run with `exit` before any build/volume/container work. They read PROJECT_DIR /
+# HOME / MCP_GH_BEARER / CLAUDE_ALLOW_PROJECT_SETTINGS from this scope.
 source "${SCRIPT_DIR}/guards/no-home-dir.sh"
 source "${SCRIPT_DIR}/guards/project-settings.sh"
 source "${SCRIPT_DIR}/guards/mcp-bearer-readonly.sh"
 
-# 1. Build the image when it doesn't exist or when the build context has changed.
-#    A SHA-256 hash of the key files is stored as an image label at build time;
-#    on each run we recompute it and rebuild if it differs.
+# 1. Build the image when missing or when the build context changed. A SHA-256
+#    of the key files is stored as an image label at build time; each run
+#    recomputes it and rebuilds on mismatch.
 context_hash() {
   local files=(
     "${SCRIPT_DIR}/Dockerfile"
@@ -58,10 +47,9 @@ context_hash() {
     "${SCRIPT_DIR}/package.json"
     "${SCRIPT_DIR}/package-lock.json"
   )
-  # Filter to files that actually exist, then hash them
   local existing=()
   for f in "${files[@]}"; do [ -f "$f" ] && existing+=("$f"); done
-  # Include caller identity: the image embeds the host UID/GID/username via
+  # Include caller identity: the image embeds host UID/GID/username via
   # --build-arg, so a different user must get a fresh image.
   { if command -v sha256sum >/dev/null 2>&1; then sha256sum "${existing[@]}"
     else shasum -a 256 "${existing[@]}"; fi
@@ -85,41 +73,34 @@ if [[ "$BASE_IMAGE_HASH" != "$CURRENT_HASH" ]]; then
 fi
 
 # 2. Stable per-project volume name: claude-<dirname>-<short hash of full path>.
-#    The hash disambiguates same-named dirs in different locations; the name is
-#    stable so re-running in this folder reuses the same volume (enables resume).
-#    Override with CLAUDE_VOLUME=... if you want a specific/throwaway one.
-# path_hash() and safe_name() come from scripts/paths.sh (sourced above).
+#    The hash disambiguates same-named dirs; the stable name lets re-running in
+#    this folder reuse the volume (enables resume). Override with CLAUDE_VOLUME.
+#    path_hash()/safe_name() come from scripts/paths.sh.
 SAFE_NAME="$(safe_name "${PROJECT_DIR}")"
 VOLUME="${CLAUDE_VOLUME:-claude-${SAFE_NAME:-repo}-$(path_hash "${PROJECT_DIR}")}"
 echo ">> session volume: ${VOLUME}  (docker volume inspect ${VOLUME})"
 
-# 2b. Container name: human-readable base (no path hash) + a random suffix, so
-#     several sessions can run in the same folder against the SAME shared volume
-#     without colliding on --name. Decoupled from VOLUME on purpose. The
-#     container is removed on exit (--rm), so the suffix is throwaway. $RANDOM is
-#     a bash builtin (no pipe → safe under pipefail); two of them give 30 bits,
-#     ample for a handful of concurrent containers. Override with
-#     CLAUDE_CONTAINER_NAME=... to pin a specific name.
+# 2b. Container name: readable base + random suffix, so several sessions can run
+#     in the same folder against the SAME shared volume without colliding on
+#     --name (decoupled from VOLUME). Throwaway since --rm. Two $RANDOM give 30
+#     bits, ample for concurrent containers. Override with CLAUDE_CONTAINER_NAME.
 CONTAINER_NAME="${CLAUDE_CONTAINER_NAME:-claude-${SAFE_NAME:-repo}-$(printf '%04x%04x' "${RANDOM}" "${RANDOM}")}"
 echo ">> container name: ${CONTAINER_NAME}"
 
-# 2c. Per-project config directory: <config-dir>/projects/<safe-name>-<path-hash>/.
-#     Files placed here override the root-level defaults on a file-by-file basis
-#     (more specific wins). The directory is created — and seeded with editable
-#     starting points — automatically on first run. Supported overrides:
-#     allowed-domains.txt, .env, container-CLAUDE.md, install_additional_packages.sh.
-#     Inspect it with `config.sh project`.
+# 2c. Per-project config dir: <config-dir>/projects/<safe-name>-<path-hash>/.
+#     Files here override root-level defaults file-by-file (more specific wins);
+#     created and seeded on first run. Overrides: allowed-domains.txt, .env,
+#     container-CLAUDE.md, install_additional_packages.sh. See `config.sh project`.
 PROJECT_KEY="$(project_key "${PROJECT_DIR}")"
-# Base dir holding all per-project config dirs (see scripts/paths.sh). Defaults
-# to projects/ under the config dir; override with CLAUDE_PROJECTS_DIR (the test
-# suite points this at a throwaway dir so test runs never write into it).
+# Base dir for all per-project config dirs (see scripts/paths.sh). Override with
+# CLAUDE_PROJECTS_DIR (the test suite points this at a throwaway dir).
 PROJECTS_DIR="$(projects_dir)"
 PROJECT_CONFIG_DIR="${PROJECTS_DIR}/${PROJECT_KEY}"
 if [[ ! -d "${PROJECT_CONFIG_DIR}" ]]; then
   mkdir -p "${PROJECT_CONFIG_DIR}"
-  # Seed an install_additional_packages.sh stub. While it holds only comments /
-  # blank lines it counts as empty (see 2d) and the shared base image is used
-  # as-is; add real commands and the next run bakes them into a per-project image.
+  # Seed an install_additional_packages.sh stub. While comments/blank-only it
+  # counts as empty (see 2d) and the base image is used as-is; add commands and
+  # the next run bakes them into a per-project image.
   cat > "${PROJECT_CONFIG_DIR}/install_additional_packages.sh" <<'STUB'
 #!/bin/bash
 #
@@ -133,9 +114,8 @@ if [[ ! -d "${PROJECT_CONFIG_DIR}" ]]; then
 #   curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh -s v2.3.1
 STUB
   # Seed allowed-domains.txt: prefer the active root list, else the committed
-  # template (the root copy is gitignored and absent on a fresh checkout). The
-  # Squid proxy reads it live as this project's egress allowlist (see step 3f and
-  # docs/egress-proxy.md) — edit it and the change applies within ~30s, no rebuild.
+  # template. Squid reads it live as this project's egress allowlist (see 3f and
+  # docs/egress-proxy.md) — edits apply within ~30s, no rebuild.
   _seed_domains="${CONFIG_DIR}/allowed-domains.txt"
   [[ -f "${_seed_domains}" ]] || _seed_domains="${SCRIPT_DIR}/templates/allowed-domains.txt"
   [[ -f "${_seed_domains}" ]] && \
@@ -157,14 +137,12 @@ resolve_config_file() {  # <filename>
   fi
 }
 
-# 2d. Per-project image. The base image (built above) already carries the
-#     root-level install_additional_packages.sh. When a project supplies its OWN
-#     install script, bake those packages into a thin image FROM the base — once,
-#     at build time — so they persist instead of being reinstalled by the
-#     entrypoint on every container start. The Dockerfile is generated on the fly
-#     and piped in via `--file -`; nothing is written into the project dir. A
-#     project whose script is still the all-comments stub counts as empty and
-#     runs the base image directly.
+# 2d. Per-project image. The base image already carries the root-level install
+#     script. When a project supplies its OWN, bake those packages into a thin
+#     image FROM the base — once, at build time — so they persist across
+#     container starts. The Dockerfile is generated on the fly and piped via
+#     `--file -`; nothing is written into the project dir. An all-comments stub
+#     counts as empty and runs the base image directly.
 IMAGE="${BASE_IMAGE}"
 _PROJECT_INSTALL="${PROJECT_CONFIG_DIR}/install_additional_packages.sh"
 # "active" = at least one line that is neither blank nor a pure comment.
@@ -208,8 +186,8 @@ add_rw_mount() {  # <host_path> <container_path>
   else echo ">> skipping (not found on host): $1" >&2; fi
 }
 # --- harmless config to share (edit as needed) ---
-# Each file lives in the config dir, seeded by `make init` (run once) and mounted
-# only if present. View them with `config.sh list` / `config.sh show <file>`.
+# Each file lives in the config dir, seeded by `make init`, mounted only if
+# present. View with `config.sh list` / `config.sh show <file>`.
 add_ro_mount "${CONFIG_DIR}/settings.json" "${HOME_IN_CONTAINER}/.claude/settings.json"
 add_rw_mount "${CONFIG_DIR}/claude.json"   "${HOME_IN_CONTAINER}/.claude.json"
 add_rw_mount "${CONFIG_DIR}/.credentials.json" "${HOME_IN_CONTAINER}/.claude/.credentials.json"
@@ -221,12 +199,10 @@ add_ro_mount "${CONFIG_DIR}/.gitconfig"      "${HOME_IN_CONTAINER}/.gitconfig"
 add_ro_mount "${CONFIG_DIR}/.gitignore_global" "${HOME_IN_CONTAINER}/.config/git/ignore"
 
 # 3a. MCP servers from a dedicated file, kept OUT of the mutable claude.json
-#     state blob. mcp-servers.json holds just {"mcpServers": {...}}; we mount it
-#     read-only and point `claude --mcp-config` at it, so it's the single source
-#     of truth — edit it and the next container start picks up the change, no
-#     rebuild. A per-project projects/<key>/mcp-servers.json overrides the root
-#     copy. ${MCP_GH_BEARER} inside the file is still expanded by claude from the
-#     container env. See docs/mcp-servers.md.
+#     state blob. mcp-servers.json holds just {"mcpServers": {...}}, mounted
+#     read-only with `claude --mcp-config` pointed at it — edits apply on next
+#     start, no rebuild. A per-project copy overrides the root one. ${MCP_GH_BEARER}
+#     in the file is expanded by claude from the container env. See docs/mcp-servers.md.
 MCP_ARGS=()
 _MCP_FILE="$(resolve_config_file mcp-servers.json)"
 if [[ -f "${_MCP_FILE}" ]]; then
@@ -235,12 +211,10 @@ if [[ -f "${_MCP_FILE}" ]]; then
   echo ">> mcp config: ${_MCP_FILE}"
 fi
 
-# 3b. Extra project mounts. scripts/extra-mounts.sh turns CLAUDE_MOUNTS (a
-#     comma-separated list of host folders) into `--volume=...` tokens, one per
-#     line, which we append to the mount list. See that script for the syntax
-#     (read-only default, ":rw"/":ro", ~ and relative paths). The primary repo
-#     and the per-project session volume are unaffected; usage tracking still
-#     keys off the primary repo only.
+# 3b. Extra project mounts. scripts/extra-mounts.sh turns CLAUDE_MOUNTS (comma-
+#     separated host folders) into `--volume=...` tokens; see it for the syntax
+#     (ro default, ":rw"/":ro", ~ and relative paths). The primary repo and
+#     session volume are unaffected; usage tracking keys off the primary repo.
 while IFS= read -r vol; do
   RO_MOUNTS+=("$vol")
 done < <(
@@ -250,13 +224,11 @@ done < <(
   "${SCRIPT_DIR}/scripts/extra-mounts.sh"
 )
 
-# 3c. Published ports. scripts/extra-ports.sh turns CLAUDE_PORTS (a
-#     comma-separated list) into `docker run --publish` specs so the host can
-#     reach a server inside the container. Each line is "<spec>\t<cport/proto>":
-#     the spec becomes a --publish flag; the container ports are collected into
-#     CONTAINER_OPEN_PORTS and passed to the in-container firewall, which must
-#     open them explicitly (its INPUT policy is DROP — publishing alone is not
-#     enough). See that script for the entry syntax.
+# 3c. Published ports. scripts/extra-ports.sh turns CLAUDE_PORTS into --publish
+#     specs so the host can reach a server in the container. Each line is
+#     "<spec>\t<cport/proto>": the spec becomes --publish; the container ports go
+#     into CONTAINER_OPEN_PORTS for the firewall to open explicitly (its INPUT
+#     policy is DROP — publishing alone isn't enough). See that script's syntax.
 PUBLISH_ARGS=()
 OPEN_PORTS=()
 while IFS=$'\t' read -r spec cport; do
@@ -267,21 +239,17 @@ done < <(CLAUDE_PORTS="${CLAUDE_PORTS:-}" "${SCRIPT_DIR}/scripts/extra-ports.sh"
 CONTAINER_OPEN_PORTS="$(IFS=,; printf '%s' "${OPEN_PORTS[*]+${OPEN_PORTS[*]}}")"
 
 # 3d. In-repo paths backed by named volumes — SECURE BY DEFAULT. Each path gets
-#     its own per-project named volume mounted at that path INSIDE the bind-
-#     mounted repo, so the path lives only in the container/volume and NOT on the
-#     host — keeping installed (untrusted) packages off the host disk while
-#     persisting them across runs. Nesting a volume over the repo bind mount is a
-#     standard Docker pattern (no conflict; the deeper mount wins for that
-#     subtree). A fresh volume is root-owned, so we chown it to the runtime UID
-#     once on creation (bypassing the entrypoint, which needs NET_ADMIN it isn't
-#     granted here).
+#     its own per-project volume mounted at that path INSIDE the repo bind mount,
+#     so it lives only in the container/volume and NOT on the host — keeping
+#     installed (untrusted) packages off the host disk while persisting them
+#     across runs. Nesting a volume over the bind mount is standard Docker (the
+#     deeper mount wins). A fresh volume is root-owned, so we chown it to the
+#     runtime UID once on creation (the entrypoint can't — no NET_ADMIN here).
 #
-#     By default every node_modules location is covered automatically: each
-#     directory containing a package.json (scripts/find-node-modules-paths.sh).
-#     Non-JS projects just pay one cheap find. Add more paths (e.g. a Deno cache)
-#     via CLAUDE_VOLUME_PATHS (comma-separated, repo-relative; "auto" re-triggers
-#     the node_modules scan). Opt OUT entirely by setting SKIP_CLAUDE_VOLUME_PATHS
-#     to any non-empty value (e.g. 1 or true).
+#     By default every package.json dir is covered (find-node-modules-paths.sh);
+#     non-JS projects just pay one cheap find. Add paths via CLAUDE_VOLUME_PATHS
+#     (comma-separated, repo-relative; "auto" re-triggers the scan). Opt out with
+#     SKIP_CLAUDE_VOLUME_PATHS set to any non-empty value.
 VOLUME_PATH_MOUNTS=()
 _seen_vol_paths=" "
 prepare_path_volume() {  # <repo-relative path>
@@ -291,8 +259,8 @@ prepare_path_volume() {  # <repo-relative path>
   esac
   case "$_seen_vol_paths" in *" ${rel} "*) return ;; esac   # dedup (auto + explicit may overlap)
   _seen_vol_paths+="${rel} "
-  # If the host already holds files here, the volume masks them inside the
-  # container but the host copy persists — warn so the host can be kept clean.
+  # If the host already holds files here, the volume masks them in the container
+  # but the host copy persists — warn so the host can be kept clean.
   if [ -n "$(ls -A "${PROJECT_DIR}/${rel}" 2>/dev/null)" ]; then
     echo ">> WARNING: ${rel} already has contents on the host; the volume hides them in the container but the host copy remains — delete it to keep the host clean." >&2
   fi
@@ -327,31 +295,26 @@ else
   fi
 fi
 
-# 3e. Arbitrary env vars from the config-dir `.env`, via `docker --env-file`. A
-#     per-project .env in projects/<key>/.env takes precedence when present; the
-#     config-initialized guard guarantees the baseline config-dir .env exists, so
-#     this always resolves to a real file and --env-file is unconditional (the
-#     file may be empty/comment-only). Emitted before the explicit `--env` flags
-#     so it can't clobber them (last duplicate wins). See docs/passing-env-vars.md.
+# 3e. Env vars from the config-dir `.env` via `docker --env-file`. A per-project
+#     projects/<key>/.env takes precedence; the config-initialized guard
+#     guarantees the baseline exists, so --env-file is unconditional (the file
+#     may be empty). Emitted before the explicit `--env` flags so it can't
+#     clobber them (last duplicate wins). See docs/passing-env-vars.md.
 ENV_FILE="$(resolve_config_file .env)"
 echo ">> env file: ${ENV_FILE}"
 
-# (Per-project install packages are baked into a derived image at build time;
-#  see 2d. There is no longer a runtime install mount.)
-
-# 3f. Centralized egress proxy — the sole egress path. The container egresses
-#     through the shared Squid proxy (proxy/up.sh): it joins the proxy network,
-#     its HTTP(S)_PROXY points at Squid carrying PROJECT_KEY as the proxy
-#     username, and EGRESS_PROXY_HOST tells init-firewall.sh to lock egress to
-#     Squid only (all other outbound rejected). Squid enforces this project's
-#     allowed-domains.txt, keyed by that username. See docs/egress-proxy.md.
+# 3f. Centralized egress proxy — the sole egress path. The container joins the
+#     shared Squid network (proxy/up.sh); its HTTP(S)_PROXY points at Squid with
+#     PROJECT_KEY as the proxy username, and EGRESS_PROXY_HOST tells
+#     init-firewall.sh to lock egress to Squid only. Squid enforces this
+#     project's allowed-domains.txt, keyed by that username. See docs/egress-proxy.md.
 EGRESS_NETWORK="${CLAUDE_EGRESS_NETWORK:-claude-egress}"
 EGRESS_PROXY_NAME="${CLAUDE_EGRESS_PROXY_NAME:-claude-egress-proxy}"
 PROXY_URL="http://${PROJECT_KEY}:x@squid:3128"
 # Bring the shared proxy up if it isn't already running (up.sh is idempotent).
 if [[ "$(docker container inspect -f '{{.State.Running}}' "${EGRESS_PROXY_NAME}" 2>/dev/null || true)" != "true" ]]; then
   echo ">> egress proxy '${EGRESS_PROXY_NAME}' not running — starting it"
-  # Forward the config/projects locations so the proxy reads the SAME baseline
+  # Forward config/projects locations so the proxy reads the SAME baseline
   # allowlist and per-project dirs that run.sh mounts from.
   CLAUDE_EGRESS_NETWORK="${EGRESS_NETWORK}" \
   CLAUDE_EGRESS_PROXY_NAME="${EGRESS_PROXY_NAME}" \
@@ -369,14 +332,11 @@ PROXY_ENV_ARGS=(
 )
 echo ">> egress via central proxy: network ${EGRESS_NETWORK}, project key ${PROJECT_KEY}"
 
-# 4. Run as your host UID:GID; HOME forced so "~" resolves for the passwd-less UID.
-#    NET_ADMIN is required for the nftables egress-lock that confines outbound
-#    traffic to the Squid proxy; it is only exercisable via the sudo rule scoped
-#    to /usr/local/bin/init-firewall.sh — no other escalation is possible from
-#    the non-root runtime user.
-#    "${ARR[@]+...}" keeps it safe under `set -u` on macOS bash 3.2.
-# Run without `exec` so control returns to this script after the session ends,
-# allowing the usage archive to be updated below.
+# 4. Run as your host UID:GID; HOME forced so "~" resolves for the passwd-less
+#    UID. NET_ADMIN is needed for the nftables egress-lock, only exercisable via
+#    the sudo rule scoped to init-firewall.sh — no other escalation is possible.
+#    "${ARR[@]+...}" keeps it safe under `set -u` on macOS bash 3.2. No `exec` so
+#    control returns here to update the usage archive below.
 STATUS=0
 docker run \
   --name "${CONTAINER_NAME}" \
@@ -401,14 +361,11 @@ docker run \
   "${IMAGE}" \
   claude ${MCP_ARGS[@]+"${MCP_ARGS[@]}"} "$@" || STATUS=$?
 
-# 5. Copy this session's usage records into the shared archive
-#    (~/.claude-docker-usage) so `ccusage` can read them from the host. The
-#    transform lives in sync-volume.sh (shared with usage.sh): an allowlist that
-#    keeps only the cost fields ccusage reads, with cwd relabeled to
-#    /home/dev/<PROJ> for per-project reporting — conversation text, tool I/O,
-#    file snapshots, and attachments never leave the volume. See usage.sh for
-#    the same sync across every volume, plus the report. Set CLAUDE_AUTO_USAGE=0
-#    (or false/no/off) to skip.
+# 5. Copy this session's usage records into the shared archive so `ccusage` can
+#    read them from the host. The transform lives in sync-volume.sh (shared with
+#    usage.sh): an allowlist keeping only the cost fields, cwd relabeled to
+#    /home/dev/<PROJ> — conversation text, tool I/O, and attachments never leave
+#    the volume. Set CLAUDE_AUTO_USAGE=0 (or false/no/off) to skip.
 case "${CLAUDE_AUTO_USAGE:-1}" in 0|false|no|off|FALSE|NO|OFF) AUTO_USAGE=0 ;; *) AUTO_USAGE=1 ;; esac
 if [[ "${AUTO_USAGE}" == "1" ]]; then
   ARCHIVE="${CLAUDE_USAGE_DIR:-${HOME}/.claude-docker-usage}"

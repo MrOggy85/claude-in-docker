@@ -1,8 +1,7 @@
-# Config files are created from their committed templates in templates/ into a
-# dedicated config dir (~/.config/claude-in-docker by default) — NOT the repo, so
-# a checkout stays clean. Each file is its own target with no prerequisites, so
-# `make init` creates the missing ones and leaves your edits untouched. Override
-# the location with CLAUDE_DOCKER_CONFIG_DIR or XDG_CONFIG_HOME (see scripts/paths.sh).
+# Config files are copied from templates/ into a dedicated config dir (NOT the
+# repo, so a checkout stays clean). Each file is its own prerequisite-less target,
+# so `make init` creates missing ones and leaves your edits untouched. Override
+# the location with CLAUDE_DOCKER_CONFIG_DIR or XDG_CONFIG_HOME.
 XDG_CONFIG_HOME ?= $(HOME)/.config
 CLAUDE_DOCKER_CONFIG_DIR ?= $(XDG_CONFIG_HOME)/claude-in-docker
 CONFIG_DIR := $(CLAUDE_DOCKER_CONFIG_DIR)
@@ -11,8 +10,7 @@ GLOBAL_CONFIG := settings.json claude.json mcp-servers.json container-CLAUDE.md 
 
 .PHONY: init migrate bats test test-extra-mounts test-extra-ports test-run test-e2e test-ext-allowlist lockfile pin-digest proxy-up proxy-down
 # install_additional_packages.sh stays in the repo: it is COPY'd into the base
-# image at build time (build context = repo dir), so unlike the others it can't
-# be mounted from the config dir.
+# image at build time (build context = repo dir), so it can't be mounted.
 init: $(addprefix $(CONFIG_DIR)/,$(GLOBAL_CONFIG)) $(CONFIG_DIR)/.credentials.json install_additional_packages.sh
 	@echo ">> config ready in $(CONFIG_DIR)  (view it with ./config.sh list)"
 
@@ -21,10 +19,9 @@ init: $(addprefix $(CONFIG_DIR)/,$(GLOBAL_CONFIG)) $(CONFIG_DIR)/.credentials.js
 migrate:
 	./scripts/migrate-config.sh
 
-# Bring up / tear down the centralized egress proxy — the sole egress path for
-# every Claude container (see docs/egress-proxy.md). run.sh auto-starts it, but
-# running this explicitly is clearer for a long-lived shared service. proxy-up is
-# idempotent and re-applies squid.conf / helper edits.
+# Bring up / tear down the centralized egress proxy (see docs/egress-proxy.md).
+# run.sh auto-starts it; running this explicitly is clearer for a long-lived
+# shared service. proxy-up is idempotent and re-applies squid.conf / helper edits.
 proxy-up:
 	./proxy/up.sh
 
@@ -41,10 +38,8 @@ bats:
 	  sudo apt install bats; \
 	fi
 
-# Run all bats unit tests.
-# Install bats first with `make bats`, or see
-# https://bats-core.readthedocs.io/en/stable/installation.html
-#   CI: uses .github/workflows/test.yml (bats-core/bats-action)
+# Run all bats unit tests. Install bats first with `make bats`.
+# CI: .github/workflows/test.yml (bats-core/bats-action)
 test:
 	@command -v bats >/dev/null 2>&1 || { \
 	  echo "bats not found. Install from https://bats-core.readthedocs.io/en/stable/installation.html"; \
@@ -67,18 +62,14 @@ test-e2e:
 test-ext-allowlist:
 	bats test/ext-allowlist.bats
 
-# Generate / refresh package-lock.json from package.json.
-# Run this after adding or changing a package in package.json, then commit
-# the result. Once package-lock.json is present the Docker build uses
-# `npm ci` for integrity-checked reproducible installs.
+# Refresh package-lock.json from package.json (run after changing a package,
+# then commit). Once present, the Docker build uses `npm ci` for reproducible installs.
 lockfile:
 	npm install --package-lock-only
 
-# Fetch the current amd64 digest of debian:trixie-slim and write it into the
-# FROM line of the Dockerfile. Run after upstream security patches, then rebuild.
-# Requires docker (or skopeo: replace the command below with
-#   skopeo inspect --no-creds docker://debian:trixie-slim | jq -r '.Digest'
-# if docker is not available).
+# Fetch the current amd64 digest of debian:trixie-slim into the Dockerfile FROM
+# line. Run after upstream security patches, then rebuild. Requires docker (or
+# swap in `skopeo inspect --no-creds docker://debian:trixie-slim | jq -r '.Digest'`).
 pin-digest:
 	@DIGEST=$$(docker manifest inspect debian:trixie-slim \
 	  | jq -r '.manifests[] | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest') && \
@@ -86,23 +77,21 @@ pin-digest:
 	  echo "Pinned to $$DIGEST"
 
 # Pattern rule: create any config-dir file from its same-named template. No
-# prerequisite on the template, so an existing (edited) file is left untouched.
+# template prerequisite, so an existing (edited) file is left untouched.
 $(CONFIG_DIR)/%:
 	@mkdir -p $(CONFIG_DIR)
 	cp templates/$* $@
 
-# Credentials need mode 600. This explicit rule is more specific than the pattern
-# rule above, so make prefers it. Seeded "{}" so Docker mounts it as a file;
-# `/login` writes the real token in place. Delete it to force a re-login —
-# `make init` re-creates it empty.
+# Credentials need mode 600 — this rule is more specific than the pattern above,
+# so make prefers it. Seeded "{}" so Docker mounts it as a file; `/login` writes
+# the real token in place. Delete it to force a re-login.
 $(CONFIG_DIR)/.credentials.json:
 	@mkdir -p $(CONFIG_DIR)
 	cp templates/.credentials.json $@
 	chmod 600 $@
 
-# User-supplied extra packages, baked into the base image at build time (see
-# Dockerfile). Stays in the repo (gitignored) because it must be in the build
-# context. Edit it, then rebuild the image.
+# User-supplied extra packages, baked into the base image at build time. Stays
+# in the repo (gitignored) because it must be in the build context. Edit, then rebuild.
 install_additional_packages.sh:
 	cp templates/install_additional_packages.sh install_additional_packages.sh
 	chmod +x install_additional_packages.sh

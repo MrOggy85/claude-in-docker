@@ -1,37 +1,30 @@
 #!/usr/bin/env bash
 #
 # Strip-and-copy the usage records from ONE session volume into the shared host
-# archive, so `ccusage` can read them from the host. This is the single home of
-# the transform — run.sh (after each session) and usage.sh (across every
-# volume) both delegate here, so the allowlist cannot drift between them.
+# archive so `ccusage` can read them. The single home of the transform — run.sh
+# (per session) and usage.sh (all volumes) both delegate here, so the allowlist
+# can't drift between them.
 #
 # Usage: sync-volume.sh <volume> <project-name> <archive-dir>
 # Env:   IMAGE  image that ships jq (default: claude-code:local)
 #
-# Privacy: this is an allowlist, not a denylist. For every *.jsonl in the
-# volume it writes a copy under <archive-dir>/projects/<project-name>/
-# containing only the records that carry token usage, each rebuilt from
-# scratch with just the fields ccusage reads:
+# Privacy: an allowlist, not a denylist. For every *.jsonl it writes a copy under
+# <archive-dir>/projects/<project-name>/ keeping only records with token usage,
+# each rebuilt from scratch with just the fields ccusage reads:
 #   - timestamp             date grouping
-#   - message.usage         token counts — the basis of every cost number; only
-#                           input_tokens, output_tokens, cache_read_input_tokens,
-#                           cache_creation_input_tokens and the cache_creation
-#                           5m/1h split are kept (the split is priced separately).
-#                           The rest of the usage blob — iterations (a full second
-#                           copy of these counts), server_tool_use, service_tier,
-#                           inference_geo, speed — is dropped: ccusage never reads it.
+#   - message.usage         token counts — only input/output_tokens, the two
+#                           cache_* counts, and the cache_creation 5m/1h split
+#                           (priced separately). The rest (iterations,
+#                           server_tool_use, service_tier, …) is dropped.
 #   - message.model         which price list to apply
-#   - message.id, requestId ccusage's dedup keys, so resynced/resumed sessions
-#                           are never double-counted
-#   - costUSD               precomputed cost, when Claude Code already recorded it
-#   - isApiErrorMessage     lets ccusage exclude API-error turns from the total
-#   - cwd, rewritten to /home/dev/<PROJ> for per-project reporting (the in-volume
-#     path is always the fixed container dir, which would otherwise collapse every
-#     project into one); the destination folder carries the real name too.
-# Any record without message.usage is dropped, and any field not listed above is
-# never copied — so conversation text, thinking, tool I/O, file snapshots, AI
-# titles, and attachments cannot leak even if Claude Code adds new record types.
-# A file with any unparseable line is skipped wholesale, never copied verbatim.
+#   - message.id, requestId ccusage's dedup keys (resumed sessions never double-count)
+#   - costUSD               precomputed cost, when Claude Code recorded it
+#   - isApiErrorMessage     lets ccusage exclude API-error turns
+#   - cwd, rewritten to /home/dev/<PROJ> for per-project grouping (the in-volume
+#     path is a fixed container dir that would collapse every project into one)
+# Any field not listed is never copied, so conversation text, tool I/O, and
+# attachments can't leak even if new record types appear. A file with any
+# unparseable line is skipped wholesale.
 set -euo pipefail
 
 USAGE="usage: sync-volume.sh <volume> <project-name> <archive-dir>"
@@ -40,17 +33,15 @@ PROJ="${2:?${USAGE}}"
 ARCHIVE="${3:?${USAGE}}"
 IMAGE="${IMAGE:-claude-code:local}"
 
-# jq ships in the image, not necessarily on the host, so the transform runs in
-# a throwaway container. The image is built locally by run.sh and cannot be
-# pulled, so fail with a hint rather than a raw docker error when it is missing
-# (e.g. usage.sh before the first session, or after an image prune).
+# jq ships in the image (not necessarily the host), so the transform runs in a
+# throwaway container. The image is built locally and can't be pulled, so fail
+# with a hint when missing (e.g. before the first session, or after a prune).
 if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
   echo "Image ${IMAGE} not found — run ./run.sh once to build it." >&2
   exit 1
 fi
 
-# The archive contains usage metadata, so restrict it to the owner (0700)
-# before anything is written into it.
+# The archive holds usage metadata, so restrict it to the owner (0700).
 mkdir -p "${ARCHIVE}/projects"
 chmod 700 "${ARCHIVE}" "${ARCHIVE}/projects"
 
@@ -68,11 +59,10 @@ find . -name "*.jsonl" -type f | while IFS= read -r f; do
   fi
 done'
 
-# Mount the session volume read-only (live sessions are never touched) and the
-# archive read-write. We override the image entrypoint (skip the firewall init —
-# no NET_ADMIN needed here) and run as the host UID so the copied files are
-# owned by you. Refreshing resumed sessions is safe: ccusage dedups by message
-# id, so re-running never inflates totals.
+# Mount the session volume read-only (live sessions untouched) and the archive
+# read-write. Override the entrypoint (skip firewall init — no NET_ADMIN needed)
+# and run as the host UID so copied files are owned by you. Re-running is safe:
+# ccusage dedups by message id, so totals never inflate.
 docker run --rm \
   --user "$(id -u):$(id -g)" \
   --entrypoint sh \
