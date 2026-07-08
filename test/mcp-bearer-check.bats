@@ -27,11 +27,13 @@ setup() {
 
   # Keep the config dir and per-project config dirs out of the developer's real
   # ~/.config and the repo (both under STUB_DIR, cleaned with it). Seed a baseline
-  # .env so the config-initialized guard passes and the bearer guard under test runs.
+  # .env and mcp-servers.json (both required by run.sh) so the config-initialized
+  # guard passes and the bearer guard under test runs.
   export CLAUDE_DOCKER_CONFIG_DIR="${STUB_DIR}/config"
   export CLAUDE_PROJECTS_DIR="${STUB_DIR}/projects"
   mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}"
   : > "${CLAUDE_DOCKER_CONFIG_DIR}/.env"
+  printf '{"mcpServers":{}}\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/mcp-servers.json"
 
   mkdir -p "${STUB_DIR}/bin" "${STUB_DIR}/no-curl-bin"
 
@@ -132,7 +134,7 @@ teardown() {
   # absolute path so env can find it even though /usr/bin (where curl also
   # lives) is absent from PATH.
   local _cmd _bin
-  for _cmd in bash dirname basename tr sed cut id sha256sum shasum mkdir cat cp grep; do
+  for _cmd in bash dirname basename tr sed cut id sha256sum shasum mkdir cat touch grep; do
     _bin="$(command -v "$_cmd" 2>/dev/null)" || true
     [[ -n "$_bin" && ! -e "${STUB_DIR}/no-curl-bin/${_cmd}" ]] && \
       ln -sf "$_bin" "${STUB_DIR}/no-curl-bin/${_cmd}"
