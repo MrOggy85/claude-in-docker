@@ -18,11 +18,13 @@ setup() {
 
   # Keep the config dir and per-project config dirs out of the developer's real
   # ~/.config and the repo (both under STUB_DIR, cleaned with it). Seed a baseline
-  # .env so the config-initialized guard passes and the guards under test run.
+  # .env and mcp-servers.json (both required by run.sh) so the config-initialized
+  # guard passes and the guards under test run.
   export CLAUDE_DOCKER_CONFIG_DIR="${STUB_DIR}/config"
   export CLAUDE_PROJECTS_DIR="${STUB_DIR}/projects"
   mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}"
   : > "${CLAUDE_DOCKER_CONFIG_DIR}/.env"
+  printf '{"mcpServers":{}}\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/mcp-servers.json"
 
   # Minimal docker stub: succeed at everything so a clean run reaches (a no-op)
   # `docker run` and exits 0. Guards that abort exit before any docker call.

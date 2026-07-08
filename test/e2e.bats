@@ -126,10 +126,12 @@ setup() {
   CLAUDE_DOCKER_CONFIG_DIR="${TEST_TMP}/config"
   CLAUDE_PROJECTS_DIR="${TEST_TMP}/projects"
   export DOCKER_ARGS_FILE MOCK_BIN TEST_TMP CLAUDE_DOCKER_CONFIG_DIR CLAUDE_PROJECTS_DIR
-  # Seed a baseline .env so the config-initialized guard treats this as an
-  # already-initialized config dir (mirrors `make init`).
+  # Seed a baseline .env and mcp-servers.json so the config-initialized guard and
+  # the required-MCP check treat this as an already-initialized config dir
+  # (mirrors `make init`).
   mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}"
   : > "${CLAUDE_DOCKER_CONFIG_DIR}/.env"
+  printf '{"mcpServers":{}}\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/mcp-servers.json"
 }
 
 teardown() {

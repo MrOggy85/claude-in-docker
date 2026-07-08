@@ -98,31 +98,24 @@ PROJECTS_DIR="$(projects_dir)"
 PROJECT_CONFIG_DIR="${PROJECTS_DIR}/${PROJECT_KEY}"
 if [[ ! -d "${PROJECT_CONFIG_DIR}" ]]; then
   mkdir -p "${PROJECT_CONFIG_DIR}"
+  echo ">> created per-project config dir: ${PROJECT_CONFIG_DIR}"
   # Seed an install_additional_packages.sh stub. While comments/blank-only it
   # counts as empty (see 2d) and the base image is used as-is; add commands and
   # the next run bakes them into a per-project image.
   cat > "${PROJECT_CONFIG_DIR}/install_additional_packages.sh" <<'STUB'
 #!/bin/bash
 #
-# Per-project packages. Add commands below and the next run bakes them into a
-# per-project Docker image (FROM the shared base), so they install once at build
-# time instead of on every container start. While this file holds only comments
-# and blank lines it is treated as empty and the base image is used unchanged.
+# Per-project packages.
+# Add commands below and the next run bakes them into per-project Docker image (FROM the shared base).
+# Installed once at build time.
+# Comments/blank lines only = treated as empty, base image used unchanged.
 #
 # Example:
 #   set -euo pipefail
 #   curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh -s v2.3.1
 STUB
-  # Seed allowed-domains.txt: prefer the active root list, else the committed
-  # template. Squid reads it live as this project's egress allowlist (see 3f and
-  # docs/egress-proxy.md) — edits apply within ~30s, no rebuild.
-  _seed_domains="${CONFIG_DIR}/allowed-domains.txt"
-  [[ -f "${_seed_domains}" ]] || _seed_domains="${SCRIPT_DIR}/templates/allowed-domains.txt"
-  [[ -f "${_seed_domains}" ]] && \
-    cp "${_seed_domains}" "${PROJECT_CONFIG_DIR}/allowed-domains.txt"
-  echo ">> created per-project config dir: ${PROJECT_CONFIG_DIR}"
-  echo ">>   edit install_additional_packages.sh / allowed-domains.txt there to"
-  echo ">>   override defaults; .env and container-CLAUDE.md also work"
+  # Empty per-project allowlist; Squid already applies the baseline (see 3f).
+  touch "${PROJECT_CONFIG_DIR}/allowed-domains.txt"
 else
   echo ">> per-project config dir: ${PROJECT_CONFIG_DIR}"
 fi
@@ -200,16 +193,17 @@ add_ro_mount "${CONFIG_DIR}/.gitignore_global" "${HOME_IN_CONTAINER}/.config/git
 
 # 3a. MCP servers from a dedicated file, kept OUT of the mutable claude.json
 #     state blob. mcp-servers.json holds just {"mcpServers": {...}}, mounted
-#     read-only with `claude --mcp-config` pointed at it — edits apply on next
-#     start, no rebuild. A per-project copy overrides the root one. ${MCP_GH_BEARER}
-#     in the file is expanded by claude from the container env. See docs/mcp-servers.md.
-MCP_ARGS=()
-_MCP_FILE="$(resolve_config_file mcp-servers.json)"
-if [[ -f "${_MCP_FILE}" ]]; then
-  add_ro_mount "${_MCP_FILE}" "${HOME_IN_CONTAINER}/.mcp-servers.json"
-  MCP_ARGS=(--mcp-config "${HOME_IN_CONTAINER}/.mcp-servers.json")
-  echo ">> mcp config: ${_MCP_FILE}"
+#     read-only with `claude --mcp-config` pointed at it. Required (a per-project
+#     copy overrides the root); ${MCP_GH_BEARER} is expanded by claude from the
+#     container env. See docs/mcp-servers.md.
+MCP_FILE="$(resolve_config_file mcp-servers.json)"
+if [[ ! -f "${MCP_FILE}" ]]; then
+  echo "ERROR: no mcp-servers.json found in ${PROJECT_CONFIG_DIR} or ${CONFIG_DIR}" >&2
+  echo "  Run \`make init\` to seed the baseline one, then re-run." >&2
+  exit 1
 fi
+add_ro_mount "${MCP_FILE}" "${HOME_IN_CONTAINER}/.mcp-servers.json"
+echo ">> mcp config: ${MCP_FILE}"
 
 # 3b. Extra project mounts. scripts/extra-mounts.sh turns CLAUDE_MOUNTS (comma-
 #     separated host folders) into `--volume=...` tokens; see it for the syntax
@@ -359,7 +353,7 @@ docker run \
   ${RO_MOUNTS[@]+"${RO_MOUNTS[@]}"} \
   --workdir "${REPO_IN_CONTAINER}" \
   "${IMAGE}" \
-  claude ${MCP_ARGS[@]+"${MCP_ARGS[@]}"} "$@" || STATUS=$?
+  claude --mcp-config "${HOME_IN_CONTAINER}/.mcp-servers.json" "$@" || STATUS=$?
 
 # 5. Copy this session's usage records into the shared archive so `ccusage` can
 #    read them from the host. The transform lives in sync-volume.sh (shared with

@@ -31,6 +31,9 @@ setup() {
   # so seed one: every test runs from an "already ran make init" state. Tests that
   # exercise .env behaviour overwrite it; the guard test removes it deliberately.
   : > "${CLAUDE_DOCKER_CONFIG_DIR}/.env"
+  # mcp-servers.json is likewise required by run.sh (part of the make-init
+  # baseline), so seed a minimal one. MCP tests overwrite/remove it deliberately.
+  printf '{"mcpServers":{}}\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/mcp-servers.json"
 
   # Create the docker stub. EOF is unquoted so ${STUB_DIR} vars expand now;
   # \$1, \$@, etc. are escaped and become real $ in the written script.
@@ -469,13 +472,15 @@ refute_run_arg() {
   ! grep -qF "/etc/allowed-domains.txt" "${DOCKER_RUN_ARGS}"
 }
 
-@test "first run seeds an install stub and an allowed-domains.txt copy" {
+@test "first run seeds an install stub and an empty allowed-domains.txt" {
   rm -rf "${PROJECT_CONFIG_DIR}"
   cd "${TEST_PROJECT_DIR}"
   run "${RUN_CMD[@]}"
   [ "$status" -eq 0 ]
   [ -f "${PROJECT_CONFIG_DIR}/install_additional_packages.sh" ]
+  # Not seeded from the baseline — Squid already applies it; created empty.
   [ -f "${PROJECT_CONFIG_DIR}/allowed-domains.txt" ]
+  [ ! -s "${PROJECT_CONFIG_DIR}/allowed-domains.txt" ]
   # The seeded stub is all comments -> inert -> base image, no derived build.
   assert_run_arg "claude-code:local"
 }
@@ -511,11 +516,13 @@ refute_run_arg() {
 # mcp-servers.json (--mcp-config) integration
 # ---------------------------------------------------------------------------
 
-@test "no mcp-servers.json: no --mcp-config flag in docker run" {
+@test "no mcp-servers.json anywhere: run aborts with an error" {
+  rm -f "${MCP_ROOT}"
+  rm -rf "${PROJECT_CONFIG_DIR}"
   cd "${TEST_PROJECT_DIR}"
   run "${RUN_CMD[@]}"
-  [ "$status" -eq 0 ]
-  refute_run_arg "--mcp-config"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no mcp-servers.json found"* ]]
 }
 
 @test "per-project mcp-servers.json: --mcp-config flag and read-only mount appear" {
