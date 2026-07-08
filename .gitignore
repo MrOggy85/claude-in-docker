@@ -16,7 +16,6 @@
 /.credentials.json
 /allowed-domains.txt
 /.env
-/projects/*/
 
 # install_additional_packages.sh still lives in the repo: it is baked into the
 # base image at build time, so it must stay in the Docker build context.
