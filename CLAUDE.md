@@ -17,6 +17,8 @@ one exception is `install_additional_packages.sh`, which stays in the repo becau
 it is baked into the image at build time (Docker build context = repo dir).
 
 ## Comments
+In general keep any comments very breif while still informative
+
 `run.sh` is the orchestrator; the detail lives in the files it sources and links
 (`guards/*`, `scripts/paths.sh`, `proxy/`, `docs/`). When a sourced or referenced
 file already carries the full explanation, keep the comment at the call site
