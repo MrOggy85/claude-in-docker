@@ -72,21 +72,18 @@ ENV PATH="$NVM_DIR/default/bin:${PATH}"
 
 # Install Claude Code + deps to /usr/local as root (readable by all; self-updater
 # disabled, DISABLE_AUTOUPDATER below, since the runtime user can't write it).
-# With package-lock.json committed (`make lockfile`) the build uses `npm ci` for
-# verified reproducible installs, else an unlocked fallback.
+# The manifest is COPY'd into /usr/local and npm runs there (NOT --prefix, which
+# makes `npm ci` read the lockfile from the prefix and miss a cwd copy). With
+# package-lock.json committed (`make lockfile`) the build uses `npm ci` for
+# verified reproducible installs, else an unlocked fallback from package.json.
 #
 # ccusage ships its native binary non-executable and chmods it on first run,
 # which EPERMs for the non-root user; set the bit here so ccusage skips it. Path
 # is arch-specific (@ccusage/ccusage-linux-<arch>), matched by glob.
-COPY package.json package-lock.json* /tmp/npm-install/
-RUN if [ -f /tmp/npm-install/package-lock.json ]; then \
-      cd /tmp/npm-install && npm ci --prefix /usr/local; \
-    else \
-      jq -r '.dependencies | to_entries[] | "\(.key)@\(.value)"' /tmp/npm-install/package.json \
-        | xargs npm install --prefix /usr/local; \
-    fi \
- && find /usr/local/node_modules -type f -path '*@ccusage/*/bin/*' -exec chmod a+rx {} + \
- && rm -rf /tmp/npm-install
+COPY package.json package-lock.json* /usr/local/
+RUN cd /usr/local \
+ && if [ -f package-lock.json ]; then npm ci; else npm install; fi \
+ && find /usr/local/node_modules -type f -path '*@ccusage/*/bin/*' -exec chmod a+rx {} +
 ENV DISABLE_AUTOUPDATER=1
 # npm puts dep bin symlinks in node_modules/.bin/; add to PATH so `claude`,
 # `ccusage`, `tsc`, etc. resolve without a full path.
