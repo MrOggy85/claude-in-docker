@@ -78,15 +78,17 @@ ENV PATH="$NVM_DIR/default/bin:${PATH}"
 # ccusage ships its native binary non-executable and chmods it on first run,
 # which EPERMs for the non-root user; set the bit here so ccusage skips it. Path
 # is arch-specific (@ccusage/ccusage-linux-<arch>), matched by glob.
-COPY package.json package-lock.json* /tmp/npm-install/
-RUN if [ -f /tmp/npm-install/package-lock.json ]; then \
-      cd /tmp/npm-install && npm ci --prefix /usr/local; \
+# npm's --prefix sets the dir it reads package.json/package-lock.json from, so the
+# manifests must be staged in /usr/local itself (a cd is ignored by npm ci).
+COPY package.json package-lock.json* /usr/local/
+RUN if [ -f /usr/local/package-lock.json ]; then \
+      npm ci --prefix /usr/local; \
     else \
-      jq -r '.dependencies | to_entries[] | "\(.key)@\(.value)"' /tmp/npm-install/package.json \
+      jq -r '.dependencies | to_entries[] | "\(.key)@\(.value)"' /usr/local/package.json \
         | xargs npm install --prefix /usr/local; \
     fi \
  && find /usr/local/node_modules -type f -path '*@ccusage/*/bin/*' -exec chmod a+rx {} + \
- && rm -rf /tmp/npm-install
+ && rm -f /usr/local/package.json /usr/local/package-lock.json
 ENV DISABLE_AUTOUPDATER=1
 # npm puts dep bin symlinks in node_modules/.bin/; add to PATH so `claude`,
 # `ccusage`, `tsc`, etc. resolve without a full path.
