@@ -21,9 +21,11 @@ PROJECTS_DIR="$(projects_dir)"
 
 NETWORK="${CLAUDE_EGRESS_NETWORK:-claude-egress}"
 PROXY_NAME="${CLAUDE_EGRESS_PROXY_NAME:-claude-egress-proxy}"
-# For supply-chain safety, pin a digest via CLAUDE_EGRESS_IMAGE
-# (docker manifest inspect ubuntu/squid:latest → @sha256:...).
-IMAGE="${CLAUDE_EGRESS_IMAGE:-ubuntu/squid:latest}"
+# Pinned by digest, not floating :latest — a silent :latest re-pull to a
+# bash-less base once crash-looped the Squid helper at 100% CPU. Override with
+# CLAUDE_EGRESS_IMAGE; bump via `docker manifest inspect ubuntu/squid:latest`.
+# Digest = ubuntu/squid:latest (squid 6.x) as of 2025-11-24.
+IMAGE="${CLAUDE_EGRESS_IMAGE:-ubuntu/squid@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029}"
 
 # Mounting preserves host perms, so make the helpers executable first.
 chmod +x "${SCRIPT_DIR}/ext-allowlist.sh" "${SCRIPT_DIR}/auth-ok.sh"

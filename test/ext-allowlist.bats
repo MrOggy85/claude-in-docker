@@ -44,7 +44,10 @@ EOF
 # Squid sends three whitespace tokens: "<project-key> <host> -" (it appends a
 # trailing "-" placeholder), so every line here mirrors that exactly.
 ask() {  # <project-key> <host>
-  run bash "${HELPER}" <<< "$1 $2 -"
+  # Run under /bin/sh (not bash): the helper ships as POSIX sh and Squid execs
+  # it with whatever /bin/sh the base image provides. This guards the shebang
+  # contract — a stray bashism would fail here.
+  run sh "${HELPER}" <<< "$1 $2 -"
 }
 
 # ---------------------------------------------------------------------------
@@ -152,7 +155,7 @@ ask() {  # <project-key> <host>
 }
 
 @test "host with :port is matched on the host portion" {
-  run bash "${HELPER}" <<< "proj-aaa111 api.anthropic.com:443 -"
+  run sh "${HELPER}" <<< "proj-aaa111 api.anthropic.com:443 -"
   [ "$output" = "OK" ]
 }
 
@@ -166,7 +169,7 @@ ask() {  # <project-key> <host>
 # ---------------------------------------------------------------------------
 
 @test "empty host is denied" {
-  run bash "${HELPER}" <<< "proj-aaa111  -"
+  run sh "${HELPER}" <<< "proj-aaa111  -"
   [ "$output" = "ERR" ]
 }
 
@@ -185,7 +188,7 @@ ask() {  # <project-key> <host>
 # ---------------------------------------------------------------------------
 
 @test "multiple request lines yield verdicts in order" {
-  run bash "${HELPER}" <<EOF
+  run sh "${HELPER}" <<EOF
 proj-aaa111 api.anthropic.com -
 proj-aaa111 evil.test -
 proj-aaa111 internal.aaa.test -
