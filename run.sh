@@ -232,6 +232,13 @@ while IFS=$'\t' read -r spec cport; do
 done < <(CLAUDE_PORTS="${CLAUDE_PORTS:-}" "${SCRIPT_DIR}/scripts/extra-ports.sh")
 CONTAINER_OPEN_PORTS="$(IFS=,; printf '%s' "${OPEN_PORTS[*]+${OPEN_PORTS[*]}}")"
 
+# 3c-b. Host-outbound ports. The container egresses only via Squid (see 3f),
+#       except for direct connections to the Docker host on this explicit port
+#       allowlist. SOUND_PORT (default 4767, the host sound server) is merged with
+#       any CLAUDE_HOST_OUTBOUND_PORTS the user sets; init-firewall.sh opens one
+#       OUTPUT rule per port. See docs/host-outbound-ports.md.
+CONTAINER_HOST_OUTBOUND_PORTS="${SOUND_PORT:-4767}${CLAUDE_HOST_OUTBOUND_PORTS:+,${CLAUDE_HOST_OUTBOUND_PORTS}}"
+
 # 3d. In-repo paths backed by named volumes — SECURE BY DEFAULT. Each path gets
 #     its own per-project volume mounted at that path INSIDE the repo bind mount,
 #     so it lives only in the container/volume and NOT on the host — keeping
@@ -345,7 +352,7 @@ docker run \
   --env CLAUDE_HOST_PROJECT_DIR="${PROJECT_DIR}" \
   --env MCP_GH_BEARER \
   --env CONTAINER_OPEN_PORTS="${CONTAINER_OPEN_PORTS}" \
-  --env SOUND_PORT="${SOUND_PORT:-4767}" \
+  --env CONTAINER_HOST_OUTBOUND_PORTS="${CONTAINER_HOST_OUTBOUND_PORTS}" \
   ${PUBLISH_ARGS[@]+"${PUBLISH_ARGS[@]}"} \
   --volume "${PROJECT_DIR}:${REPO_IN_CONTAINER}" \
   ${VOLUME_PATH_MOUNTS[@]+"${VOLUME_PATH_MOUNTS[@]}"} \

@@ -21,9 +21,12 @@ log() { echo "[firewall] $*" >&2; }
 # CLAUDE_PORTS via run.sh / entrypoint.sh. Optional; empty when unset.
 OPEN_PORTS="${1:-}"
 
-# Host-side sound-server port to allow OUTBOUND to (see the host rule below),
-# from SOUND_PORT via run.sh / entrypoint.sh. Defaults to 4767.
-SOUND_PORT="${2:-4767}"
+# Comma-separated host-outbound ports to allow OUTBOUND to the Docker host (see
+# the host rules below), each "<port>" or "<port>/<proto>" (proto tcp|udp,
+# default tcp), from CONTAINER_HOST_OUTBOUND_PORTS via run.sh / entrypoint.sh.
+# run.sh merges SOUND_PORT (host sound server, default 4767) with any
+# CLAUDE_HOST_OUTBOUND_PORTS. Empty means no direct host egress at all.
+HOST_OUTBOUND_PORTS="${2:-}"
 
 # Egress-proxy host (the Squid network alias), from EGRESS_PROXY_HOST via run.sh
 # / entrypoint.sh. Defaults to "squid" as defence-in-depth: if it ever arrives
@@ -52,21 +55,30 @@ PROXY_RULES=""
 [[ -n "$PROXY_IP"  ]] && PROXY_RULES+="        ip daddr ${PROXY_IP} tcp dport ${PROXY_PORT} accept"$'\n'
 [[ -n "$PROXY_IP6" ]] && PROXY_RULES+="        ip6 daddr ${PROXY_IP6} tcp dport ${PROXY_PORT} accept"$'\n'
 
-# Allow OUTBOUND to the Docker host on the sound-server port only, so hooks can
-# reach the host-side sound daemon. Docker publishes the host into /etc/hosts
-# (not DNS); resolve it to IPv4. Scoped to one tcp port so no other host service
-# is reachable.
-HOST_RULE=""
-if [[ "$SOUND_PORT" =~ ^[0-9]+$ ]] && (( 10#$SOUND_PORT >= 1 && 10#$SOUND_PORT <= 65535 )); then
+# Allow OUTBOUND to the Docker host on an explicit port allowlist, so hooks/tools
+# can reach host-side services (e.g. the sound daemon). Docker publishes the host
+# into /etc/hosts (not DNS); resolve it to IPv4 once. Each port is scoped
+# individually so no other host service is reachable. Values validated defensively
+# since this runs as root. See docs/host-outbound-ports.md.
+HOST_RULES=""
+if [[ -n "$HOST_OUTBOUND_PORTS" ]]; then
   HOST_IP="$(getent ahostsv4 host.docker.internal 2>/dev/null | awk '{print $1; exit}' || true)"
-  if [[ -n "$HOST_IP" ]]; then
-    HOST_RULE="        ip daddr ${HOST_IP} tcp dport ${SOUND_PORT} accept"
-    log "allow host: ${HOST_IP}:${SOUND_PORT}/tcp (sound server)"
+  if [[ -z "$HOST_IP" ]]; then
+    log "warn: host.docker.internal did not resolve — host services unreachable from container"
   else
-    log "warn: host.docker.internal did not resolve — sound server unreachable from container"
+    IFS=',' read -r -a _hports <<< "$HOST_OUTBOUND_PORTS"
+    for pp in ${_hports[@]+"${_hports[@]}"}; do
+      pp="${pp#"${pp%%[![:space:]]*}"}"; pp="${pp%"${pp##*[![:space:]]}"}"  # trim
+      [[ -z "$pp" ]] && continue
+      port="${pp%%/*}"; proto="tcp"; [[ "$pp" == */* ]] && proto="${pp##*/}"
+      if [[ ! "$port" =~ ^[0-9]+$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
+        log "warn: ignoring invalid host-outbound port spec '$pp'"; continue
+      fi
+      case "$proto" in tcp|udp) ;; *) log "warn: ignoring invalid proto in '$pp'"; continue ;; esac
+      HOST_RULES+="        ip daddr ${HOST_IP} ${proto} dport ${port} accept"$'\n'
+      log "allow host egress: ${HOST_IP}:${port}/${proto}"
+    done
   fi
-else
-  log "warn: invalid SOUND_PORT '$SOUND_PORT' — not opening host sound port"
 fi
 
 # Published inbound ports (docker run --publish) arrive as NEW connections the
@@ -96,7 +108,7 @@ fi
 #   - loopback and established/related flows
 #   - DNS only to Docker's embedded resolver (127.0.0.11) — external DNS shut
 #   - the proxy port to the resolved Squid address(es)
-#   - any published inbound ports; the host sound port
+#   - any published inbound ports; the allowlisted host-outbound ports
 #   - fast-reject the rest (TCP RST / ICMP unreachable) so blocked connections
 #     fail immediately and name the host instead of hanging until timeout
 nft -f - <<NFT_EOF
@@ -120,7 +132,7 @@ ${INPUT_RULES}    }
         ct state established,related accept
         ip daddr 127.0.0.11 udp dport 53 accept
         ip daddr 127.0.0.11 tcp dport 53 accept
-${PROXY_RULES}${HOST_RULE}
+${PROXY_RULES}${HOST_RULES}
         meta l4proto tcp reject with tcp reset
         reject
     }

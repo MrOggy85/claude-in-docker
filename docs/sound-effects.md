@@ -62,3 +62,9 @@ Docker containers have no access to audio hardware. The workaround is a small HT
 ```
 
 The server defaults to port `4767`. Override with the `SOUND_PORT` environment variable.
+
+`SOUND_PORT` is a special case of the general host-egress allowlist: the firewall
+opens `SOUND_PORT` outbound to the host by default so sound works with zero extra
+config. To reach *other* host ports from the container (a dev server, a database,
+etc.), use `CLAUDE_HOST_OUTBOUND_PORTS` — see
+[Host-Outbound Ports](host-outbound-ports.md).
