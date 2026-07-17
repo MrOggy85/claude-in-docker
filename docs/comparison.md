@@ -88,9 +88,10 @@ experience.
 
 These pieces are uncommon-to-absent in the alternatives above:
 
-- **Read-only GitHub MCP token validation** — `guards/mcp-bearer-readonly.sh`
-  aborts the run if the GitHub MCP token has write-capable scopes, so Claude
-  can't mutate repos through it.
+- **No-code-push GitHub MCP token validation** — `guards/mcp-bearer-no-push.sh`
+  aborts the run if the GitHub MCP token can push code (Contents:write), so
+  Claude can't mutate repository contents through it. Issues / Pull requests
+  write is permitted.
 - **Project-settings / hooks consent gate** — `guards/project-settings.sh`
   prompts before honoring a repo's `.claude/settings.json` (which can register
   arbitrary hook commands).

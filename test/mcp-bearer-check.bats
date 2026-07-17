@@ -227,7 +227,7 @@ teardown() {
     CURL_STUB_SCOPES="read:user,read:org" \
     bash "${RUN_SH}"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verified read-only"* ]]
+  [[ "$output" == *"no code-push"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -260,7 +260,7 @@ teardown() {
     CURL_STUB_REPOS_PUSH="false" \
     bash "${RUN_SH}"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verified read-only"* ]]
+  [[ "$output" == *"no code-push"* ]]
 }
 
 # ---------------------------------------------------------------------------

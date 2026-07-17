@@ -33,7 +33,7 @@ source "${SCRIPT_DIR}/guards/config-initialized.sh"
 # HOME / MCP_GH_BEARER / CLAUDE_ALLOW_PROJECT_SETTINGS from this scope.
 source "${SCRIPT_DIR}/guards/no-home-dir.sh"
 source "${SCRIPT_DIR}/guards/project-settings.sh"
-source "${SCRIPT_DIR}/guards/mcp-bearer-readonly.sh"
+source "${SCRIPT_DIR}/guards/mcp-bearer-no-push.sh"
 
 # 1. Build the image when missing or when the build context changed. A SHA-256
 #    of the key files is stored as an image label at build time; each run
