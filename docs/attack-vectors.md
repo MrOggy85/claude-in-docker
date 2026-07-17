@@ -34,7 +34,7 @@ ones:
 - **`permissions.allow`** — pre-approves matching tool calls (e.g. `Bash(*)`).
 - **`enableAllProjectMcpServers`** — combined with a project `.mcp.json`,
   auto-launches the `command` of every MCP server defined there (command
-  execution sourced from a sibling file; `guards/mcp-bearer-readonly.sh` only
+  execution sourced from a sibling file; `guards/mcp-bearer-no-push.sh` only
   vets the GitHub token, not arbitrary `.mcp.json` server commands).
 
 (`env` is a softer, indirect risk: it injects variables into every subprocess
@@ -77,7 +77,7 @@ The one way to turn this into a silent launch is `enableAllProjectMcpServers` (o
 prompting — but that route is already caught by the [project settings
 guard](#project-level-claude-settings-mitigated-by-default) above, which trips on
 the presence of any `.claude/settings.json`. Note that
-`guards/mcp-bearer-readonly.sh` only vets the GitHub MCP token; it does not
+`guards/mcp-bearer-no-push.sh` only vets the GitHub MCP token; it does not
 inspect `.mcp.json` server commands — Claude Code's own approval prompt is what
 covers them.
 
@@ -165,6 +165,16 @@ It does **not** fully close the channel. `127.0.0.11` is a recursive forwarder �
 - **DNS egress monitoring** — log outgoing queries and alert/block on suspicious patterns (high query rate, high-entropy labels, unlisted second-level domains, unusual TLDs).
 
 Neither is implemented. The residual one-hop channel is the practical gap; it is narrower than the prior unrestricted-port-53 channel but, like the [fast-fail disclosure](#egress-boundary-disclosure-via-fast-fail), it remains a way to move data out without reaching a blocked destination directly.
+
+## GitHub MCP Token Write Access (Accepted Trade-off)
+
+The GitHub MCP token (`MCP_GH_BEARER`) may hold **Issues** and **Pull requests** write access, so Claude can open, comment on, and update issues and PRs on your behalf. `guards/mcp-bearer-no-push.sh` still rejects any token with **Contents: write** (code push), so repository *contents* cannot be mutated through it — see [docs/mcp-servers.md](mcp-servers.md). Two residual risks come with the write scope; both are the price of the convenience, not defects.
+
+**Exfiltration sink.** Issue, PR, and comment bodies are attacker-writable free text. A compromised in-container process — or a prompt-injected Claude — can encode stolen data into a comment or a new issue on any repo the token can write to, and read it back later from a location it controls (e.g. an issue on a public repo). The **egress allowlist does not stop this**: the data leaves via GitHub, an already-allowed destination (the MCP endpoint `api.githubcopilot.com`), so it looks like ordinary API traffic. This is a working exfil channel of the same character as the [DNS](#dns-exfiltration-partially-mitigated) and [fast-fail](#egress-boundary-disclosure-via-fast-fail) channels — it moves data out without reaching a *blocked* host. The enabler is the write scope itself, not any one hostname; adding or removing `api.github.com` from the allowlist does not change it, because the same operations are already reachable through the MCP server.
+
+**Unwanted writes.** The same access lets a compromised session create, edit, close, or comment on issues and PRs — noise, misleading content, or a merge of an already-open PR — bounded to the repos and orgs the token is scoped to.
+
+**Reducing it:** scope the fine-grained token to the **minimum set of repositories** it needs (not "all repositories"), and drop Issues / Pull requests write entirely if you do not need Claude acting on your behalf — a read-only token removes this channel. The code-push guard bounds the blast radius (no contents mutation) but does not close the write-to-issues channel; that is inherent to granting the scope.
 
 ## Untrusted Package Artifacts on the Host
 
