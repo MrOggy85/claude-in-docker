@@ -262,6 +262,42 @@ refute_run_arg() {
   refute_run_arg "--publish"
 }
 
+@test "default: CONTAINER_HOST_OUTBOUND_PORTS is the sound port 4767" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "CONTAINER_HOST_OUTBOUND_PORTS=4767"
+}
+
+@test "CLAUDE_HOST_OUTBOUND_PORTS: merged after the default sound port" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_HOST_OUTBOUND_PORTS="8080,9000/udp" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "CONTAINER_HOST_OUTBOUND_PORTS=4767,8080,9000/udp"
+}
+
+@test "SOUND_PORT override is merged with CLAUDE_HOST_OUTBOUND_PORTS" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    SOUND_PORT="5000" \
+    CLAUDE_HOST_OUTBOUND_PORTS="8080" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "CONTAINER_HOST_OUTBOUND_PORTS=5000,8080"
+}
+
 # ---------------------------------------------------------------------------
 # CLAUDE_MOUNTS (RO_MOUNTS) integration
 # ---------------------------------------------------------------------------

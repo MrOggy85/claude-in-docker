@@ -23,7 +23,8 @@ All are optional — with none set, the container runs with its defaults.
 | `SKIP_CLAUDE_VOLUME_PATHS` | _(unset)_ | When set, disables all volume-backing, including the default `node_modules`. | [Volume-Backed Paths](volume-backed-paths.md) |
 | `MCP_GH_BEARER` | _(unset)_ | Read-only GitHub token forwarded to the GitHub MCP server. The run aborts if the token is write-capable. | [MCP Servers](mcp-servers.md) |
 | `CLAUDE_ALLOW_PROJECT_SETTINGS` | _(unset)_ | Accepts `1`/`true`/`yes`/`on`. Skips the prompt that warns about a project-level `.claude/settings.json` and proceeds with it. | [Known Attack Vectors](attack-vectors.md#project-level-claude-settings-mitigated-by-default) |
-| `SOUND_PORT` | `4767` | Host port the container reaches to play sound effects. | [Sound Effects](sound-effects.md) |
+| `SOUND_PORT` | `4767` | Host port the container reaches to play sound effects. Opened outbound to the host by default; a special case of `CLAUDE_HOST_OUTBOUND_PORTS`. | [Sound Effects](sound-effects.md) |
+| `CLAUDE_HOST_OUTBOUND_PORTS` | _(unset)_ | Extra host ports the container may connect **out** to (direct to `host.docker.internal`, bypassing Squid). Comma-separated `PORT` or `PORT/udp`. Merged with `SOUND_PORT`. | [Host-Outbound Ports](host-outbound-ports.md) |
 | `CLAUDE_VOLUME` | `claude-<project>-<hash>` | Override the per-project session volume name (e.g. a throwaway one). | — |
 | `CLAUDE_CONTAINER_NAME` | `claude-<project>-<random>` | Pin a specific container name instead of the randomized default. | — |
 
