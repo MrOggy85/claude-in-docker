@@ -10,6 +10,10 @@
       "headers": {
         "Authorization": "Bearer ${MCP_GH_BEARER}"
       }
+    },
+    "chrome-devtools": {
+      "type": "http",
+      "url": "http://host.docker.internal:9333/mcp"
     }
   }
 }

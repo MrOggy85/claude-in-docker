@@ -25,6 +25,8 @@ All are optional — with none set, the container runs with its defaults.
 | `CLAUDE_ALLOW_PROJECT_SETTINGS` | _(unset)_ | Accepts `1`/`true`/`yes`/`on`. Skips the prompt that warns about a project-level `.claude/settings.json` and proceeds with it. | [Known Attack Vectors](attack-vectors.md#project-level-claude-settings-mitigated-by-default) |
 | `SOUND_PORT` | `4767` | Host port the container reaches to play sound effects. Opened outbound to the host by default; a special case of `CLAUDE_HOST_OUTBOUND_PORTS`. | [Sound Effects](sound-effects.md) |
 | `CLAUDE_HOST_OUTBOUND_PORTS` | _(unset)_ | Extra host ports the container may connect **out** to (direct to `host.docker.internal`, bypassing Squid). Comma-separated `PORT` or `PORT/udp`. Merged with `SOUND_PORT`. | [Host-Outbound Ports](host-outbound-ports.md) |
+| `CHROME_DEVTOOLS_MCP_PORT` | `9333` | Host port the `chrome-devtools-mcp` HTTP bridge listens on. Read by the host bridge, **not** by `run.sh` — unlike `SOUND_PORT` it is not auto-merged into the firewall, so open it yourself with `CLAUDE_HOST_OUTBOUND_PORTS="9333"`. | [Chrome DevTools MCP](chrome-devtools-mcp.md) |
+| `CHROME_DEVTOOLS_MCP_EXTRA_ARGS` | _(unset)_ | Extra space-separated flags the host bridge passes to `chrome-devtools-mcp` (e.g. `--channel canary`). Host-only, not read by `run.sh`. | [Chrome DevTools MCP](chrome-devtools-mcp.md) |
 | `CLAUDE_VOLUME` | `claude-<project>-<hash>` | Override the per-project session volume name (e.g. a throwaway one). | — |
 | `CLAUDE_CONTAINER_NAME` | `claude-<project>-<random>` | Pin a specific container name instead of the randomized default. | — |
 

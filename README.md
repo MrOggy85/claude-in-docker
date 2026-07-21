@@ -112,6 +112,7 @@ function claude {
 - [Mounting extra folders](docs/mounting-extra-folders.md) — make additional host folders visible inside the container via `CLAUDE_MOUNTS`
 - [Publishing ports](docs/publishing-ports.md) — expose a server running inside the container to the host via `CLAUDE_PORTS`
 - [Host-outbound ports](docs/host-outbound-ports.md) — let the container connect out to host services via `CLAUDE_HOST_OUTBOUND_PORTS` (generalizes `SOUND_PORT`)
+- [Chrome DevTools MCP](docs/chrome-devtools-mcp.md) — drive a real Chrome on the host from the container via the `chrome-devtools-mcp` server, bridged over HTTP (host MCP + `CLAUDE_HOST_OUTBOUND_PORTS`)
 - [Passing environment variables](docs/passing-env-vars.md) — inject arbitrary env vars into the container via a `.env` file in the config dir
 - [Per-project launch config](docs/per-project-env.md) — keep per-repo mounts, ports, and secrets in a gitignored `.claude-env` sourced at launch
 - [Volume-backed paths](docs/volume-backed-paths.md) — `node_modules` is kept off the host disk by default (named volumes); add paths with `CLAUDE_VOLUME_PATHS`, opt out with `SKIP_CLAUDE_VOLUME_PATHS`
