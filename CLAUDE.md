@@ -57,4 +57,10 @@ sourced file, not in `run.sh`.
 - `templates/` + `Makefile` (`make init`) — user-local config is copied from the
   committed templates in `templates/` into the config dir. Edit the file in
   `templates/` when changing defaults.
+- `chrome-devtools-mcp/` — host-side bridge (mirrors `sound-effects/`): an
+  nvm-sourcing launcher + a macOS launchd plist that run a small zero-dep Node
+  bridge (`host-chrome-devtools-mcp.js`) which spawns the stdio `chrome-devtools-mcp`
+  server on the host and re-exposes it over MCP Streamable HTTP; the container
+  reaches it via `host.docker.internal` on a host-outbound port. See
+  docs/chrome-devtools-mcp.md.
 - `docs/` — feature guides.
