@@ -23,7 +23,9 @@ This copies every template in `templates/` into your **config directory** —
 `~/.config/claude-in-docker/` by default (override with `CLAUDE_DOCKER_CONFIG_DIR`,
 or point `XDG_CONFIG_HOME` elsewhere) — in one step; existing files are left
 untouched, and the repo itself stays clean. Then edit the copies. List and inspect
-them any time with `./config.sh list` / `./config.sh show <file>`.
+them any time with `./cid list` / `./cid show <file>`. `cid` also **edits** the
+egress allowlists in place — `cid domains add <host>` / `cid domains rm <host>`
+— so you rarely need to open the files by hand. See [The `cid` config CLI](docs/config-cli.md).
 
 > **Upgrading?** Older versions kept these files gitignored in the repo root. Run
 > `make migrate` once to move your config — and your per-project dirs — into the
@@ -47,8 +49,9 @@ it is `COPY`'d into the image and Docker's build context is the repo directory.
 Per-project overrides (a per-repo `allowed-domains.txt`, `.env`, `container-CLAUDE.md`,
 `mcp-servers.json`, or `install_additional_packages.sh`) live under
 `<config-dir>/projects/<key>/`, created automatically the first time you run in a
-project. Find the right directory with `./config.sh project` and see the effective
-egress allowlist with `./config.sh domains`.
+project. Find the right directory with `./cid project`, see the effective egress
+allowlist with `./cid domains`, and add/remove entries with `./cid domains add|rm
+<host>` (per-project by default, or `-g` for the shared baseline).
 
 ## Run
 
@@ -108,6 +111,7 @@ function claude {
 
 ## Additional Features
 
+- [The `cid` config CLI](docs/config-cli.md) — inspect config and add/remove egress-allowlist domains (`cid domains add|rm`, per-project or `-g` baseline) without hand-editing files; put it on `$PATH` and ships zsh completion
 - [MCP Servers](docs/mcp-servers.md) — configure user-level, project-level, and GitHub MCP servers
 - [Mounting extra folders](docs/mounting-extra-folders.md) — make additional host folders visible inside the container via `CLAUDE_MOUNTS`
 - [Publishing ports](docs/publishing-ports.md) — expose a server running inside the container to the host via `CLAUDE_PORTS`
