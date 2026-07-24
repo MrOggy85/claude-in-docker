@@ -23,7 +23,16 @@ const EXTRA = (process.env.CHROME_DEVTOOLS_MCP_EXTRA_ARGS || '').split(' ').filt
 // --no-usage-statistics: don't send telemetry to Google (host egress bypasses
 // Squid). Add --no-performance-crux via EXTRA_ARGS to also stop the perf tools
 // hitting the CrUX API. Flags per `npx -y chrome-devtools-mcp@latest --help`.
-const MCP_ARGS = ['-y', 'chrome-devtools-mcp@latest', '--isolated', '--no-usage-statistics', ...EXTRA];
+const FLAGS = ['--isolated', '--no-usage-statistics', ...EXTRA];
+// Default: fetch the server via npx at launch (@latest, pin with
+// CHROME_DEVTOOLS_MCP_VERSION). Set CHROME_DEVTOOLS_MCP_CMD to a pre-installed
+// binary (e.g. a global `chrome-devtools-mcp`) to skip npx and the registry
+// round-trip entirely — no registry auth needed in launchd's bare environment.
+const CMD = process.env.CHROME_DEVTOOLS_MCP_CMD;
+const VERSION = process.env.CHROME_DEVTOOLS_MCP_VERSION || 'latest';
+const [MCP_BIN, MCP_ARGS] = CMD
+  ? [CMD, FLAGS]
+  : ['npx', ['-y', `chrome-devtools-mcp@${VERSION}`, ...FLAGS]];
 
 let session = null; // { id, child, pending: Map<jsonrpcId, entry>, getStream, queue }
 
@@ -47,7 +56,7 @@ function endSession() {
 function startSession() {
   endSession(); // enforce a single active session (one Chrome at a time)
   const id = crypto.randomUUID();
-  const child = spawn('npx', MCP_ARGS, { stdio: ['pipe', 'pipe', 'inherit'] });
+  const child = spawn(MCP_BIN, MCP_ARGS, { stdio: ['pipe', 'pipe', 'inherit'] });
   const s = { id, child, pending: new Map(), getStream: null, queue: [] };
   session = s;
 
