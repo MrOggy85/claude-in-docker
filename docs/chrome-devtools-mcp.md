@@ -81,6 +81,12 @@ in your `claude` alias or a per-project `.claude-env` so you don't forget it —
   others (`--channel`, `--executablePath`, `--no-performance-crux`) via
   `CHROME_DEVTOOLS_MCP_EXTRA_ARGS` (space-separated); see
   `npx -y chrome-devtools-mcp@latest --help`.
+- **Server command / version** — by default the bridge fetches the server at each
+  launch with `npx -y chrome-devtools-mcp@latest`. Pin the version with
+  `CHROME_DEVTOOLS_MCP_VERSION` (e.g. `1.2.3`), or bypass `npx` entirely by pointing
+  `CHROME_DEVTOOLS_MCP_CMD` at a pre-installed binary (e.g. a global
+  `chrome-devtools-mcp`). Bypassing `npx` skips the launch-time registry round-trip —
+  see [Troubleshooting](#troubleshooting) if you use a private npm registry.
 
 ## File outputs
 
@@ -149,3 +155,70 @@ carries browser automation:
    tools enumerated (Chrome launches on the host on first tool use).
 7. Ask Claude to navigate to `https://example.com` and take a snapshot; confirm a
    real Chrome appears on the host and the tool returns page content.
+
+## Troubleshooting
+
+### `npm error code E401` / auth failures when using a private npm registry
+
+**Symptom.** The bridge starts fine (`lsof` shows it listening), but the first
+Chrome tool call fails and `/tmp/claude-chrome-devtools-mcp.log` shows an npm auth
+error such as `npm error code E401 Incorrect or missing password` or `Incorrect or
+missing credentials`.
+
+**Cause.** By default the bridge runs `npx -y chrome-devtools-mcp@latest`, which
+resolves and downloads the package through your **default** npm registry. If your
+`~/.npmrc` points at a private registry (Nexus, Artifactory, Verdaccio, …) that
+authenticates with a token via an env var — e.g.
+
+```
+registry=https://registry.example.com/npm/
+//registry.example.com/npm/:_authToken=${MY_NPM_TOKEN}
+```
+
+— then that `${MY_NPM_TOKEN}` must be present in the environment npm runs in. It
+works from your interactive shell (your shell rc exports the token) but **not under
+launchd**, which gives the agent a minimal environment with no shell rc and no such
+token. So npm can't authenticate and the server never installs. Note `@latest` means
+npm re-resolves the version against the registry on **every** session start, so
+pre-warming the npx cache does **not** avoid the auth round-trip.
+
+**Fix A — pre-install the server, skip the registry at launch (recommended).**
+Install once from your interactive shell (where the token is set), then point the
+bridge at the installed binary via `CHROME_DEVTOOLS_MCP_CMD` so it never invokes
+`npx`:
+
+```sh
+npm i -g chrome-devtools-mcp            # token comes from your shell env
+which chrome-devtools-mcp               # e.g. ~/.nvm/versions/node/<ver>/bin/chrome-devtools-mcp
+```
+
+Then add to the launchd plist's top-level `<dict>` (and `bootout` + `bootstrap` to
+reload — see [Setup](#1-start-the-bridge-on-your-host)):
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+    <key>CHROME_DEVTOOLS_MCP_CMD</key>
+    <string>chrome-devtools-mcp</string>
+</dict>
+```
+
+The bare name resolves because the wrapper sources nvm and puts that version's bin
+on `PATH`; use an absolute path if you don't want to depend on the nvm default.
+Trade-off: you now update the server manually (`npm i -g chrome-devtools-mcp@latest`)
+instead of getting `@latest` on each launch.
+
+**Fix B — give the token to launchd, keep `@latest`.** If you prefer automatic
+updates, make the token available to the agent instead. Keep the secret out of the
+repo and the plist: export it in the wrapper `host-chrome-devtools-mcp.sh` before it
+`exec`s node, reading from the macOS Keychain or a mode-`600` file, e.g.
+
+```sh
+export MY_NPM_TOKEN="$(security find-generic-password -s my-npm-token -w)"
+```
+
+Avoid putting the raw token in the plist's `EnvironmentVariables` (world-readable
+plaintext) or in `launchctl setenv` (leaks into the whole launchd session).
+
+The same root cause and fixes apply to the [sound server](sound-effects.md) only if
+you make it depend on private packages — by default it has no npm dependencies.
