@@ -71,4 +71,4 @@ fi
 
 echo ">> done: ${moved} moved, ${skipped} skipped."
 [[ "${skipped}" -gt 0 ]] && echo ">> skipped items were NOT overwritten — reconcile them by hand if needed."
-echo ">> view the result with: ./config.sh list"
+echo ">> view the result with: ./cid list"

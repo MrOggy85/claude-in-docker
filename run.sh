@@ -20,7 +20,7 @@ PROJECT_DIR="$(pwd)"
 
 # User-managed config lives OUTSIDE the repo, under an XDG-style dir. See
 # scripts/paths.sh — the single source of truth for that location and the
-# per-project key, shared with proxy/up.sh and config.sh. `make init` seeds it.
+# per-project key, shared with proxy/up.sh and cid. `make init` seeds it.
 source "${SCRIPT_DIR}/scripts/paths.sh"
 CONFIG_DIR="$(config_dir)"
 
@@ -90,7 +90,7 @@ echo ">> container name: ${CONTAINER_NAME}"
 # 2c. Per-project config dir: <config-dir>/projects/<safe-name>-<path-hash>/.
 #     Files here override root-level defaults file-by-file (more specific wins);
 #     created and seeded on first run. Overrides: allowed-domains.txt, .env,
-#     container-CLAUDE.md, install_additional_packages.sh. See `config.sh project`.
+#     container-CLAUDE.md, install_additional_packages.sh. See `cid project`.
 PROJECT_KEY="$(project_key "${PROJECT_DIR}")"
 # Base dir for all per-project config dirs (see scripts/paths.sh). Override with
 # CLAUDE_PROJECTS_DIR (the test suite points this at a throwaway dir).
@@ -180,7 +180,7 @@ add_rw_mount() {  # <host_path> <container_path>
 }
 # --- harmless config to share (edit as needed) ---
 # Each file lives in the config dir, seeded by `make init`, mounted only if
-# present. View with `config.sh list` / `config.sh show <file>`.
+# present. View with `cid list` / `cid show <file>`.
 add_ro_mount "${CONFIG_DIR}/settings.json" "${HOME_IN_CONTAINER}/.claude/settings.json"
 add_rw_mount "${CONFIG_DIR}/claude.json"   "${HOME_IN_CONTAINER}/.claude.json"
 add_rw_mount "${CONFIG_DIR}/.credentials.json" "${HOME_IN_CONTAINER}/.claude/.credentials.json"

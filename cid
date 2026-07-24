@@ -1,0 +1,362 @@
+#!/usr/bin/env bash
+#
+# cid — inspect and edit the claude-in-docker (CID) configuration.
+#
+# All user config lives OUTSIDE this repo, in a dedicated dir
+# (~/.config/claude-in-docker by default; see scripts/paths.sh). The inspection
+# commands (list/show/project/domains) are read-only viewers; the `domains
+# add|rm` commands edit the egress allowlists in place so you don't have to open
+# the files by hand.
+#
+# Usage:
+#   cid [list]                 Show the config dir and every global config file
+#                              (present / missing), plus the projects dir.
+#   cid show <file>            Print a global config file (e.g. settings.json,
+#                              allowed-domains.txt). Credentials are never dumped.
+#   cid project [dir]          Show the per-project key + config dir for a project
+#                              (default: current dir) and which overrides exist.
+#   cid domains [dir]          Show the effective egress allowlist for a project:
+#                              the baseline plus any per-project additions.
+#   cid domains add <host>...  Add host(s) to the per-project allowlist (default)
+#                              or, with -g, the shared baseline list.
+#   cid domains rm  <host>...  Remove host(s) from the per-project allowlist
+#                              (default) or, with -g, the shared baseline list.
+#   cid help                   This help.
+#
+# domains add|rm flags:
+#   -g, --global               Target the shared baseline list instead of the
+#                              current project's per-project list.
+#   -C, --dir <dir>            Select the project by directory (default: PWD).
+#                              Ignored with -g (the baseline is not per-project).
+#
+# The allowlist is read live by the Squid proxy (30s cache), so add/rm take
+# effect within ~30s — no image rebuild or proxy restart. See docs/config-cli.md.
+
+set -euo pipefail
+
+# Resolve symlinks so `cid` finds its sibling scripts/ when linked onto $PATH
+# (e.g. ~/.local/bin/cid -> repo/cid). Portable across BSD/macOS + GNU readlink.
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "${SOURCE}" ]]; do
+  _dir="$(cd -P "$(dirname "${SOURCE}")" && pwd)"
+  SOURCE="$(readlink "${SOURCE}")"
+  [[ "${SOURCE}" != /* ]] && SOURCE="${_dir}/${SOURCE}"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "${SOURCE}")" && pwd)"
+source "${SCRIPT_DIR}/scripts/paths.sh"
+
+CONFIG_DIR="$(config_dir)"
+PROJECTS_DIR="$(projects_dir)"
+TEMPLATES_DIR="${SCRIPT_DIR}/templates"
+
+# Global config files run.sh mounts from the config dir, with a one-line note.
+# (install_additional_packages.sh is deliberately absent: it is baked into the
+#  image at build time, so it lives in the repo, not the config dir — see below.)
+GLOBAL_FILES=(
+  "settings.json|Claude Code settings mounted at ~/.claude/settings.json"
+  "claude.json|Onboarding state + user-level config (mounted read-write)"
+  "mcp-servers.json|MCP server definitions, injected via --mcp-config"
+  "container-CLAUDE.md|Personal instructions mounted at ~/.claude/CLAUDE.md"
+  ".gitconfig|git user.name / user.email"
+  ".gitignore_global|Global gitignore mounted at ~/.config/git/ignore"
+  ".credentials.json|Claude auth token (secret; not printed by 'show')"
+  "allowed-domains.txt|Baseline egress allowlist enforced by the Squid proxy"
+  ".env|Arbitrary KEY=VALUE env vars injected via --env-file"
+)
+
+err()  { printf '%s\n' "$*" >&2; }
+note() { printf '>> %s\n' "$*"; }
+head_() { printf '\n== %s ==\n' "$*"; }
+
+cmd_list() {
+  head_ "Config directory"
+  printf '  %s' "${CONFIG_DIR}"
+  [[ -d "${CONFIG_DIR}" ]] || printf '   (does not exist yet — run: make init)'
+  printf '\n'
+
+  head_ "Global config files"
+  local entry fname desc path status
+  for entry in "${GLOBAL_FILES[@]}"; do
+    fname="${entry%%|*}"; desc="${entry#*|}"
+    path="${CONFIG_DIR}/${fname}"
+    if [[ -f "${path}" ]]; then status="present"; else status="missing"; fi
+    printf '  [%-7s] %-28s %s\n' "${status}" "${fname}" "${desc}"
+  done
+
+  head_ "Build-time config (stays in the repo)"
+  local ipath="${SCRIPT_DIR}/install_additional_packages.sh"
+  if [[ -f "${ipath}" ]]; then status="present"; else status="missing"; fi
+  printf '  [%-7s] %-28s %s\n' "${status}" "install_additional_packages.sh" \
+    "Baked into the base image; lives at ${ipath}"
+
+  head_ "Per-project config"
+  printf '  projects dir: %s\n' "${PROJECTS_DIR}"
+  if [[ -d "${PROJECTS_DIR}" ]]; then
+    local n; n="$(find "${PROJECTS_DIR}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+    printf '  %s project dir(s). Inspect one with: cid project [dir]\n' "${n}"
+  else
+    printf '  (none yet — created on first run in a project)\n'
+  fi
+  printf '\n'
+}
+
+cmd_show() {
+  local fname="${1:-}"
+  [[ -n "${fname}" ]] || { err "usage: cid show <file>"; return 2; }
+  # Basename only — no path components, so 'show' can never read outside the
+  # config dir (or the repo, for the one build-time file).
+  if [[ "${fname}" == */* || "${fname}" == "." || "${fname}" == ".." ]]; then
+    err "refusing: give a bare filename, e.g. 'cid show settings.json'"
+    return 2
+  fi
+  if [[ "${fname}" == ".credentials.json" ]]; then
+    local cpath="${CONFIG_DIR}/.credentials.json"
+    if [[ -f "${cpath}" ]]; then
+      err "Refusing to print credentials. ${cpath} exists (mode $(stat -c '%a' "${cpath}" 2>/dev/null || stat -f '%A' "${cpath}" 2>/dev/null))."
+    else
+      err "${cpath} does not exist. Run: make init"
+    fi
+    return 1
+  fi
+  local path
+  if [[ "${fname}" == "install_additional_packages.sh" ]]; then
+    path="${SCRIPT_DIR}/${fname}"   # build-time file, stays in the repo
+  else
+    path="${CONFIG_DIR}/${fname}"
+  fi
+  if [[ ! -f "${path}" ]]; then
+    err "not found: ${path}"
+    err "known files: $(printf '%s ' "${GLOBAL_FILES[@]%%|*}")install_additional_packages.sh"
+    return 1
+  fi
+  printf '# %s\n' "${path}"
+  cat "${path}"
+}
+
+cmd_project() {
+  local dir; dir="$(cd "${1:-$PWD}" 2>/dev/null && pwd)" || { err "no such dir: ${1:-$PWD}"; return 1; }
+  local key pdir
+  key="$(project_key "${dir}")"
+  pdir="${PROJECTS_DIR}/${key}"
+  head_ "Project"
+  printf '  path:  %s\n' "${dir}"
+  printf '  key:   %s   (Squid proxy username / volume suffix)\n' "${key}"
+  printf '  dir:   %s' "${pdir}"
+  [[ -d "${pdir}" ]] || printf '   (not created yet — created on first run here)'
+  printf '\n'
+
+  head_ "Overrides (fall back to the global file when absent)"
+  local f
+  for f in allowed-domains.txt .env container-CLAUDE.md mcp-servers.json install_additional_packages.sh; do
+    if [[ -f "${pdir}/${f}" ]]; then
+      printf '  [override] %s\n' "${f}"
+    else
+      printf '  [global  ] %s\n' "${f}"
+    fi
+  done
+  printf '\n'
+}
+
+# ---- allowlist editing -----------------------------------------------------
+
+# The bare entry on an allowlist line: everything before '#', whitespace-stripped.
+# Mirrors proxy/ext-allowlist.sh so "present" here means the same as "allowed".
+_entry_of() { local l="${1%%#*}"; printf '%s' "${l}" | tr -d '[:space:]'; }
+
+# Reject anything that isn't a plausible hostname / wildcard entry, so we never
+# append a line the proxy would ignore or that smuggles in a comment/whitespace.
+# Accepts a leading '.' (wildcard: apex + subdomains), letters, digits, '-', '.'.
+_valid_host() {  # <host>
+  local h="$1"
+  [[ -n "${h}" ]] || return 1
+  [[ "${h}" =~ ^\.?([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]]
+}
+
+# Is <host> already an entry in <file>?
+_host_in_file() {  # <host> <file>
+  local host="$1" file="$2" line
+  [[ -f "${file}" ]] || return 1
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ "$(_entry_of "${line}")" == "${host}" ]] && return 0
+  done < "${file}"
+  return 1
+}
+
+# Resolve the target allowlist file for add/rm. Sets globals TARGET_FILE and
+# TARGET_LABEL. For the baseline, requires `make init` to have seeded the file
+# (the proxy mounts exactly that path). For a project, creates the dir on demand.
+_resolve_target() {  # <global?0|1> <dir>
+  local is_global="$1" dir="$2"
+  if [[ "${is_global}" == 1 ]]; then
+    TARGET_FILE="${CONFIG_DIR}/allowed-domains.txt"
+    TARGET_LABEL="baseline"
+    if [[ ! -f "${TARGET_FILE}" ]]; then
+      err "baseline allowlist not found: ${TARGET_FILE}"
+      err "run 'make init' first (the proxy mounts exactly this file)."
+      return 1
+    fi
+    return 0
+  fi
+  local rdir; rdir="$(cd "${dir}" 2>/dev/null && pwd)" || { err "no such dir: ${dir}"; return 1; }
+  local key; key="$(project_key "${rdir}")"
+  TARGET_FILE="${PROJECTS_DIR}/${key}/allowed-domains.txt"
+  TARGET_LABEL="project ${key}"
+}
+
+cmd_domains_add() {  # <global> <dir> <host>...
+  local is_global="$1" dir="$2"; shift 2
+  [[ $# -ge 1 ]] || { err "usage: cid domains add [-g] [-C dir] <host>..."; return 2; }
+  local TARGET_FILE TARGET_LABEL
+  _resolve_target "${is_global}" "${dir}" || return 1
+
+  local host added=0
+  for host in "$@"; do
+    host="$(printf '%s' "${host}" | tr '[:upper:]' '[:lower:]')"
+    if ! _valid_host "${host}"; then
+      err "  skip '${host}' — not a valid hostname (letters, digits, '.', '-'; leading '.' = wildcard)"
+      continue
+    fi
+    if _host_in_file "${host}" "${TARGET_FILE}"; then
+      note "already in ${TARGET_LABEL}: ${host}"
+      continue
+    fi
+    mkdir -p "$(dirname "${TARGET_FILE}")"
+    printf '%s\n' "${host}" >> "${TARGET_FILE}"
+    note "added to ${TARGET_LABEL}: ${host}"
+    added=$((added + 1))
+  done
+  [[ "${added}" -gt 0 ]] && note "→ ${TARGET_FILE} (applies within ~30s, no restart)"
+  return 0
+}
+
+cmd_domains_rm() {  # <global> <dir> <host>...
+  local is_global="$1" dir="$2"; shift 2
+  [[ $# -ge 1 ]] || { err "usage: cid domains rm [-g] [-C dir] <host>..."; return 2; }
+  local TARGET_FILE TARGET_LABEL
+  _resolve_target "${is_global}" "${dir}" || return 1
+
+  if [[ ! -f "${TARGET_FILE}" ]]; then
+    note "no ${TARGET_LABEL} allowlist yet (${TARGET_FILE}); nothing to remove"
+    return 0
+  fi
+
+  local host removed=0
+  for host in "$@"; do
+    host="$(printf '%s' "${host}" | tr '[:upper:]' '[:lower:]')"
+    if ! _host_in_file "${host}" "${TARGET_FILE}"; then
+      note "not in ${TARGET_LABEL}: ${host}"
+      continue
+    fi
+    # Rewrite without the matching entry, preserving every other line verbatim
+    # (comments, blanks, formatting). Only lines whose bare entry equals the host
+    # are dropped.
+    local tmp line
+    tmp="$(mktemp "${TARGET_FILE}.XXXXXX")"
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+      [[ "$(_entry_of "${line}")" == "${host}" ]] && continue
+      printf '%s\n' "${line}"
+    done < "${TARGET_FILE}" > "${tmp}"
+    mv "${tmp}" "${TARGET_FILE}"
+    note "removed from ${TARGET_LABEL}: ${host}"
+    removed=$((removed + 1))
+  done
+  [[ "${removed}" -gt 0 ]] && note "→ ${TARGET_FILE} (applies within ~30s, no restart)"
+  return 0
+}
+
+# Print a file with a header, or a "using template" / "none" note.
+_dump_domains() {  # <label> <path> [fallback-path]
+  local label="$1" path="$2" fallback="${3:-}"
+  if [[ -f "${path}" ]]; then
+    printf '# %s: %s\n' "${label}" "${path}"
+    cat "${path}"
+  elif [[ -n "${fallback}" && -f "${fallback}" ]]; then
+    printf '# %s: %s (config copy absent — this template is what the proxy uses)\n' "${label}" "${fallback}"
+    cat "${fallback}"
+  else
+    printf '# %s: none\n' "${label}"
+  fi
+  printf '\n'
+}
+
+cmd_domains_show() {  # [dir]
+  local dir; dir="$(cd "${1:-$PWD}" 2>/dev/null && pwd)" || { err "no such dir: ${1:-$PWD}"; return 1; }
+  local key pdir
+  key="$(project_key "${dir}")"
+  pdir="${PROJECTS_DIR}/${key}"
+  head_ "Effective egress allowlist for ${key}"
+  printf 'The proxy allows a host if it matches EITHER list below.\n'
+  _dump_domains "Baseline" "${CONFIG_DIR}/allowed-domains.txt" "${TEMPLATES_DIR}/allowed-domains.txt"
+  _dump_domains "Per-project additions" "${pdir}/allowed-domains.txt"
+}
+
+# domains dispatcher: parse the optional sub-verb (add/rm/ls) and its -g / -C
+# flags, then hand off. With no sub-verb it shows the effective allowlist.
+cmd_domains() {
+  local sub="" is_global=0 dir="${PWD}"
+  local -a hosts=()
+  local a
+  while [[ $# -gt 0 ]]; do
+    a="$1"; shift
+    case "${a}" in
+      -g|--global)        is_global=1 ;;
+      -C|--dir|--project) dir="${1:?-C needs a directory}"; shift ;;
+      add)             if [[ -z "${sub}" ]]; then sub='add';  else hosts+=("${a}"); fi ;;
+      rm|remove)       if [[ -z "${sub}" ]]; then sub='rm';   else hosts+=("${a}"); fi ;;
+      ls|show|list)    if [[ -z "${sub}" ]]; then sub='show'; else hosts+=("${a}"); fi ;;
+      -h|--help)       cmd_help; return 0 ;;
+      -*)              err "unknown flag: ${a}"; return 2 ;;
+      *)               hosts+=("${a}") ;;
+    esac
+  done
+
+  case "${sub}" in
+    add)  cmd_domains_add "${is_global}" "${dir}" "${hosts[@]+"${hosts[@]}"}" ;;
+    rm)   cmd_domains_rm  "${is_global}" "${dir}" "${hosts[@]+"${hosts[@]}"}" ;;
+    show|"") cmd_domains_show "${hosts[0]:-${dir}}" ;;
+  esac
+}
+
+cmd_help() {
+  cat <<EOF
+cid — inspect and edit the claude-in-docker configuration.
+
+Config lives in: ${CONFIG_DIR}
+
+Commands:
+  list                    Config dir + every global file (present/missing) + projects dir
+  show <file>             Print a global config file (credentials are never dumped)
+  project [dir]           Per-project key, config dir, and which overrides exist
+  domains [dir]           Effective egress allowlist (baseline + per-project) for a project
+  domains add <host>...   Add host(s) to the per-project list (-g for the baseline)
+  domains rm  <host>...   Remove host(s) from the per-project list (-g for the baseline)
+  help                    This help
+
+domains add|rm flags:
+  -g, --global            Target the shared baseline list (not the current project)
+  -C, --dir <dir>         Select the project by directory (default: current dir)
+
+Examples:
+  cid domains add example.com              # allow example.com for THIS project
+  cid domains add .githubusercontent.com   # wildcard: apex + all subdomains
+  cid domains add -g registry.npmjs.org    # allow for EVERY project (baseline)
+  cid domains rm  example.com              # remove from this project's list
+
+Edits apply within ~30s (Squid re-reads the lists live — no rebuild/restart).
+Seed the config dir with 'make init'; migrate an old repo-root config with 'make migrate'.
+EOF
+}
+
+main() {
+  local cmd="${1:-list}"; shift || true
+  case "${cmd}" in
+    list|"")     cmd_list ;;
+    show)        cmd_show "$@" ;;
+    project)     cmd_project "$@" ;;
+    domains)     cmd_domains "$@" ;;
+    help|-h|--help) cmd_help ;;
+    *) err "unknown command: ${cmd}"; err "run: cid help"; return 2 ;;
+  esac
+}
+
+main "$@"

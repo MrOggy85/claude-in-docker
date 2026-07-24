@@ -1,5 +1,6 @@
 # Additional Information
 
+- [The `cid` config CLI](config-cli.md) — inspect the config and add/remove egress-allowlist domains (per-project or the shared baseline) without hand-editing files; ships zsh completion
 - [Centralized Egress Proxy](egress-proxy.md) — the network boundary: every container egresses through one shared Squid proxy that filters by hostname per project, with a thin nftables rule locking egress to the proxy
 - [MCP Servers](mcp-servers.md) — configure user-level, project-level, and GitHub MCP servers
 - [Mounting Extra Folders](mounting-extra-folders.md) — mount additional host folders into the container via `CLAUDE_MOUNTS`

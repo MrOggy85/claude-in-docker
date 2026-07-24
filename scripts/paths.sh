@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Shared path & identifier helpers, sourced (not executed) by run.sh, the egress
-# proxy (proxy/up.sh), and the config CLI (config.sh). Keeping the derivations in
+# proxy (proxy/up.sh), and the config CLI (cid). Keeping the derivations in
 # one place guarantees that the config directory the CLI shows, the files run.sh
 # mounts, and the per-project allowlist the proxy enforces all agree.
 #

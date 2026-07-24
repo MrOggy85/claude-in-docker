@@ -8,11 +8,11 @@ CONFIG_DIR := $(CLAUDE_DOCKER_CONFIG_DIR)
 
 GLOBAL_CONFIG := settings.json claude.json mcp-servers.json container-CLAUDE.md allowed-domains.txt .gitconfig .gitignore_global .env
 
-.PHONY: init migrate bats test test-extra-mounts test-extra-ports test-run test-e2e test-ext-allowlist test-chrome-devtools-mcp lockfile pin-digest proxy-up proxy-down
+.PHONY: init migrate bats test test-extra-mounts test-extra-ports test-run test-e2e test-ext-allowlist test-chrome-devtools-mcp test-cid lockfile pin-digest proxy-up proxy-down
 # install_additional_packages.sh stays in the repo: it is COPY'd into the base
 # image at build time (build context = repo dir), so it can't be mounted.
 init: $(addprefix $(CONFIG_DIR)/,$(GLOBAL_CONFIG)) $(CONFIG_DIR)/.credentials.json install_additional_packages.sh
-	@echo ">> config ready in $(CONFIG_DIR)  (view it with ./config.sh list)"
+	@echo ">> config ready in $(CONFIG_DIR)  (view it with ./cid list)"
 
 # Move a pre-existing repo-root config (from older versions of this tool) into
 # the config dir. Non-destructive — never overwrites files already there.
@@ -64,6 +64,9 @@ test-ext-allowlist:
 
 test-chrome-devtools-mcp:
 	bats test/chrome-devtools-mcp.bats
+
+test-cid:
+	bats test/cid.bats
 
 # Refresh package-lock.json from package.json (run after changing a package,
 # then commit). Once present, the Docker build uses `npm ci` for reproducible installs.

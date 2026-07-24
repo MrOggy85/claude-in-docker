@@ -1,0 +1,97 @@
+#compdef cid
+# zsh completion for the `cid` CLI.
+#
+# Install: see the "Shell completion" section in docs/config-cli.md. In short,
+# put this file's directory on $fpath before compinit, e.g. in ~/.zshrc:
+#
+#   fpath=(/path/to/repo/completions $fpath)
+#   autoload -Uz compinit && compinit
+#
+# Works for `cid`, `./cid`, and `/abs/path/cid` (zsh falls back to the basename).
+
+# The config dir, resolved the same way scripts/paths.sh does.
+_cid_config_dir() {
+  print -r -- "${CLAUDE_DOCKER_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-in-docker}"
+}
+
+# Bare filenames `show` accepts (global config files + the one build-time file).
+_cid_files() {
+  local -a files
+  files=(
+    settings.json claude.json mcp-servers.json container-CLAUDE.md
+    .gitconfig .gitignore_global .credentials.json allowed-domains.txt .env
+    install_additional_packages.sh
+  )
+  _describe -t files 'config file' files
+}
+
+# Hosts already on any allowlist (baseline + every project) — completion hints
+# for `domains rm`. It's only a hint; rm still resolves the right file itself.
+_cid_hosts() {
+  local cfg; cfg=$(_cid_config_dir)
+  local -a hosts=() f
+  for f in "$cfg/allowed-domains.txt" "$cfg"/projects/*/allowed-domains.txt(N); do
+    [[ -f $f ]] || continue
+    hosts+=(${(f)"$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' -e 's/[[:space:]]//g' "$f" 2>/dev/null)"})
+  done
+  (( ${#hosts} )) && _describe -t hosts 'allowed host' hosts
+}
+
+_cid() {
+  local curcontext="$curcontext" state line
+  local -a cmds
+  cmds=(
+    'list:config dir + global files + projects dir'
+    'show:print a global config file'
+    'project:per-project key, config dir, and overrides'
+    'domains:show or edit the egress allowlist'
+    'help:show usage'
+  )
+
+  _arguments -C \
+    '(-h --help)'{-h,--help}'[show usage]' \
+    '1: :->cmd' \
+    '*:: :->args'
+
+  case $state in
+    cmd)
+      _describe -t commands 'cid command' cmds
+      ;;
+    args)
+      case ${line[1]} in
+        show)
+          _cid_files
+          ;;
+        project|domains)
+          # Second word: for domains, the add/rm/ls verbs; then flags/hosts.
+          if [[ ${line[1]} == domains ]]; then
+            _arguments \
+              '(-g --global)'{-g,--global}'[target the shared baseline list]' \
+              '(-C --dir --project)'{-C,--dir,--project}'[select project by directory]:dir:_files -/' \
+              '1: :->sub' \
+              '*:: :->rest'
+            case $state in
+              sub)
+                local -a subs
+                subs=(
+                  'add:add host(s) to the allowlist'
+                  'rm:remove host(s) from the allowlist'
+                  'ls:show the effective allowlist'
+                )
+                _describe -t subcommands 'domains action' subs
+                _files -/
+                ;;
+              rest)
+                [[ ${line[1]} == rm ]] && _cid_hosts
+                ;;
+            esac
+          else
+            _files -/
+          fi
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_cid "$@"
