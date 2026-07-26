@@ -138,6 +138,42 @@ proj_file() { echo "${CLAUDE_PROJECTS_DIR}"/*/allowed-domains.txt; }
   [[ "$output" == *"example.com"* ]]           # per-project
 }
 
+@test "env: lists a known variable under its section header" {
+  run "${CID}" env
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Configuration"* ]]
+  [[ "$output" == *"CLAUDE_MOUNTS"* ]]
+  [[ "$output" == *"Egress proxy"* ]]
+  [[ "$output" == *"Usage tracking"* ]]
+}
+
+@test "env: marks a currently-set variable with a leading *" {
+  CLAUDE_MOUNTS="/x:/y" run "${CID}" env
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"* CLAUDE_MOUNTS"* ]]
+}
+
+@test "env: never prints a secret's value" {
+  MCP_GH_BEARER="github_pat_TOPSECRET" run "${CID}" env
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"TOPSECRET"* ]]
+  [[ "$output" == *"<set: hidden>"* ]]
+}
+
+@test "env: filter narrows to matching names" {
+  run "${CID}" env EGRESS
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CLAUDE_EGRESS_NETWORK"* ]]
+  # SOUND_PORT is a non-matching row and (unlike CLAUDE_MOUNTS) not in the banner.
+  [[ "$output" != *"SOUND_PORT"* ]]
+}
+
+@test "env: an unmatched filter exits non-zero" {
+  run "${CID}" env n/a-nope
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no variable name matches"* ]]
+}
+
 @test "list: runs and names the config dir" {
   run "${CID}" list
   [ "$status" -eq 0 ]
