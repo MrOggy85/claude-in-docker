@@ -25,6 +25,22 @@ _cid_files() {
   _describe -t files 'config file' files
 }
 
+# Names of the settable env vars — the optional filter argument to `cid env`.
+# Kept in step with the ENV_VARS list in the `cid` script.
+_cid_envvars() {
+  local -a vars
+  vars=(
+    CLAUDE_DOCKER_CONFIG_DIR CLAUDE_PROJECTS_DIR CLAUDE_MOUNTS CLAUDE_PORTS
+    CLAUDE_VOLUME_PATHS SKIP_CLAUDE_VOLUME_PATHS MCP_GH_BEARER
+    CLAUDE_ALLOW_PROJECT_SETTINGS SOUND_PORT CLAUDE_HOST_OUTBOUND_PORTS
+    CHROME_DEVTOOLS_MCP_PORT CHROME_DEVTOOLS_MCP_EXTRA_ARGS CLAUDE_VOLUME
+    CLAUDE_CONTAINER_NAME CLAUDE_EGRESS_NETWORK CLAUDE_EGRESS_PROXY_NAME
+    CLAUDE_EGRESS_IMAGE CLAUDE_AUTO_USAGE CLAUDE_USAGE_DIR CLAUDE_USAGE_ONLINE
+    CCUSAGE_VERSION
+  )
+  _describe -t envvars 'environment variable' vars
+}
+
 # Hosts already on any allowlist (baseline + every project) — completion hints
 # for `domains rm`. It's only a hint; rm still resolves the right file itself.
 _cid_hosts() {
@@ -45,6 +61,7 @@ _cid() {
     'show:print a global config file'
     'project:per-project key, config dir, and overrides'
     'domains:show or edit the egress allowlist'
+    'env:list the environment variables you can set'
     'help:show usage'
   )
 
@@ -61,6 +78,9 @@ _cid() {
       case ${line[1]} in
         show)
           _cid_files
+          ;;
+        env)
+          _cid_envvars
           ;;
         project|domains)
           # Second word: for domains, the add/rm/ls verbs; then flags/hosts.

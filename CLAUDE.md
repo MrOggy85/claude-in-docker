@@ -35,9 +35,11 @@ sourced file, not in `run.sh`.
   `path_hash()`, `safe_name()`, `project_key()`. Change config-location or
   key-derivation logic here, never inline.
 - `cid` — the config CLI. Read-only viewers (`list` / `show` / `project` /
-  `domains`) plus in-place allowlist editing (`domains add|rm <host>`, `-g` for
-  the shared baseline, `-C dir` to pick the project). Meant to go on `$PATH`.
-  Ships a zsh completion in `completions/_cid`. See docs/config-cli.md.
+  `domains` / `env`) plus in-place allowlist editing (`domains add|rm <host>`,
+  `-g` for the shared baseline, `-C dir` to pick the project). `env` lists the
+  settable host env vars (terminal mirror of docs/environment-variables.md —
+  keep the ENV_VARS list in sync). Meant to go on `$PATH`; ships a zsh
+  completion in `completions/_cid`. See docs/config-cli.md.
 - `scripts/migrate-config.sh` — `make migrate`: moves a pre-existing repo-root
   config (and per-project dirs) into the config dir, non-destructively.
 - `Dockerfile`, `entrypoint.sh`, `init-firewall.sh` — image build context; their

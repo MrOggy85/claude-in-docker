@@ -15,6 +15,7 @@ to open `allowed-domains.txt` by hand.
 ./cid domains [dir]           # effective allowlist = baseline + this project's additions
 ./cid domains add <host>...   # add host(s) to the allowlist
 ./cid domains rm  <host>...   # remove host(s) from the allowlist
+./cid env [filter]            # list the env vars you can set (current value / default)
 ./cid help
 ```
 
@@ -50,6 +51,23 @@ Edits take effect **within ~30s** — Squid re-reads the baseline and per-projec
 lists live on each request and caches verdicts for 30 seconds (`ttl=30` in
 `proxy/squid.conf`). No image rebuild and no proxy restart. (Adding the very
 baseline file for the first time still needs `make init`, which the proxy mounts.)
+
+## Listing environment variables
+
+`cid env` prints every environment variable you can set on the host to change how
+the container runs, grouped by area, with each variable's current value or
+default and a one-line description. A leading `*` marks the ones set in your
+current environment; secret values (e.g. `MCP_GH_BEARER`) are shown as
+`<set: hidden>`. Pass a substring to filter by name:
+
+```bash
+cid env             # everything
+cid env EGRESS      # just the egress-proxy variables
+cid env USAGE       # just the ccusage variables
+```
+
+It is a terminal mirror of [Environment Variables](environment-variables.md),
+which carries the full descriptions and per-variable reference links.
 
 ## Putting `cid` on your PATH
 

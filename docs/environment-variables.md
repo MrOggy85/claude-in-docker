@@ -11,6 +11,10 @@ CLAUDE_MOUNTS="$HOME/data:/data" ./run.sh
 
 All are optional — with none set, the container runs with its defaults.
 
+> For a quick terminal reference, run `cid env` (optionally with a name filter,
+> e.g. `cid env EGRESS`). It lists these variables with their current value or
+> default and flags which are currently set. See [The `cid` config CLI](config-cli.md).
+
 ## Configuration variables
 
 | Variable | Default | Description | Reference |

@@ -21,6 +21,9 @@
 #                              or, with -g, the shared baseline list.
 #   cid domains rm  <host>...  Remove host(s) from the per-project allowlist
 #                              (default) or, with -g, the shared baseline list.
+#   cid env [filter]           List the environment variables you can set on the
+#                              host, with current value / default (optional name
+#                              filter). A terminal mirror of docs/environment-variables.md.
 #   cid help                   This help.
 #
 # domains add|rm flags:
@@ -67,6 +70,11 @@ GLOBAL_FILES=(
 err()  { printf '%s\n' "$*" >&2; }
 note() { printf '>> %s\n' "$*"; }
 head_() { printf '\n== %s ==\n' "$*"; }
+
+# Is the named env var currently set (even if empty)? Portable to bash 3.2
+# (macOS's /bin/bash), which lacks `[[ -v name ]]`. The name comes from our own
+# vetted ENV_VARS list, so the eval is safe.
+_is_set() { eval "[ \"\${${1}+x}\" = x ]"; }
 
 cmd_list() {
   head_ "Config directory"
@@ -317,6 +325,76 @@ cmd_domains() {
   esac
 }
 
+# ---- environment variables -------------------------------------------------
+
+# The host env vars a user may set before `run.sh`. A terse mirror of
+# docs/environment-variables.md (the fuller reference) — keep the two in sync
+# when adding a variable. Each entry: "group|NAME|default|description".
+# (Secret values are masked in the output; see SECRET_VARS below.)
+ENV_VARS=(
+  "Configuration|CLAUDE_DOCKER_CONFIG_DIR|~/.config/claude-in-docker|Directory holding all user config (settings, credentials, allowlists)"
+  "Configuration|CLAUDE_PROJECTS_DIR|<config-dir>/projects|Base directory for the per-project config dirs"
+  "Configuration|CLAUDE_MOUNTS|(unset)|Extra host folders to bind-mount into the container"
+  "Configuration|CLAUDE_PORTS|(unset)|Ports to publish from the container to the host"
+  "Configuration|CLAUDE_VOLUME_PATHS|(unset)|Extra in-container paths to back with named volumes"
+  "Configuration|SKIP_CLAUDE_VOLUME_PATHS|(unset)|Disable all volume-backing, including node_modules"
+  "Configuration|MCP_GH_BEARER|(unset)|Read-only GitHub token for the GitHub MCP server"
+  "Configuration|CLAUDE_ALLOW_PROJECT_SETTINGS|(unset)|Auto-accept a project-level .claude/settings.json"
+  "Configuration|SOUND_PORT|4767|Host port the container reaches to play sound effects"
+  "Configuration|CLAUDE_HOST_OUTBOUND_PORTS|(unset)|Extra host ports the container may connect out to"
+  "Configuration|CHROME_DEVTOOLS_MCP_PORT|9333|Host port for the chrome-devtools-mcp bridge (host-only)"
+  "Configuration|CHROME_DEVTOOLS_MCP_EXTRA_ARGS|(unset)|Extra flags passed to chrome-devtools-mcp (host-only)"
+  "Configuration|CLAUDE_VOLUME|claude-<project>-<hash>|Override the per-project session volume name"
+  "Configuration|CLAUDE_CONTAINER_NAME|claude-<project>-<random>|Pin the container name instead of the random default"
+  "Egress proxy|CLAUDE_EGRESS_NETWORK|claude-egress|Docker network shared by the proxy and containers"
+  "Egress proxy|CLAUDE_EGRESS_PROXY_NAME|claude-egress-proxy|Name of the long-running Squid container"
+  "Egress proxy|CLAUDE_EGRESS_IMAGE|ubuntu/squid:latest|Squid image proxy/up.sh runs (pin a digest)"
+  "Usage tracking|CLAUDE_AUTO_USAGE|1|Set 0 to skip the automatic usage sync after each run"
+  "Usage tracking|CLAUDE_USAGE_DIR|~/.claude-docker-usage|Where the cost-only usage logs are kept"
+  "Usage tracking|CLAUDE_USAGE_ONLINE|(unset)|Fetch live LiteLLM pricing instead of offline"
+  "Usage tracking|CCUSAGE_VERSION|latest|npm version used for the npx ccusage fallback"
+)
+
+# Names whose value must never be printed (tokens/secrets); shown as <set: hidden>.
+SECRET_VARS=" MCP_GH_BEARER "
+
+cmd_env() {
+  local filter="${1:-}"
+  head_ "Environment variables you can set"
+  printf 'Set inline for one run (e.g. CLAUDE_MOUNTS=… run.sh) or export from your\n'
+  printf 'shell profile / claude alias. A leading * marks ones set right now.\n'
+  printf 'Fuller reference: docs/environment-variables.md\n'
+
+  local last_group="" entry group name def desc mark val shown=0
+  for entry in "${ENV_VARS[@]}"; do
+    IFS='|' read -r group name def desc <<< "${entry}"
+    [[ -n "${filter}" && "${name}" != *"${filter}"* ]] && continue
+    shown=$((shown + 1))
+    if [[ "${group}" != "${last_group}" ]]; then
+      printf '\n%s\n' "${group}"; last_group="${group}"
+    fi
+    # Show the resolved paths for the two config-location vars.
+    case "${name}" in
+      CLAUDE_DOCKER_CONFIG_DIR) def="${CONFIG_DIR}" ;;
+      CLAUDE_PROJECTS_DIR)      def="${PROJECTS_DIR}" ;;
+    esac
+    if _is_set "${name}"; then
+      mark='*'
+      if [[ "${SECRET_VARS}" == *" ${name} "* ]]; then val='<set: hidden>'; else val="${!name}"; fi
+    else
+      mark=' '
+      val="${def}"
+    fi
+    printf ' %s %-31s %-26s %s\n' "${mark}" "${name}" "${val}" "${desc}"
+  done
+
+  if [[ "${shown}" -eq 0 ]]; then
+    printf '\n(no variable name matches "%s")\n\n' "${filter}"
+    return 1
+  fi
+  printf '\nPlus: any KEY=VALUE line in %s/.env is injected into the container.\n\n' "${CONFIG_DIR}"
+}
+
 cmd_help() {
   cat <<EOF
 cid — inspect and edit the claude-in-docker configuration.
@@ -330,6 +408,7 @@ Commands:
   domains [dir]           Effective egress allowlist (baseline + per-project) for a project
   domains add <host>...   Add host(s) to the per-project list (-g for the baseline)
   domains rm  <host>...   Remove host(s) from the per-project list (-g for the baseline)
+  env [filter]            List the env vars you can set (current value / default)
   help                    This help
 
 domains add|rm flags:
@@ -354,6 +433,7 @@ main() {
     show)        cmd_show "$@" ;;
     project)     cmd_project "$@" ;;
     domains)     cmd_domains "$@" ;;
+    env)         cmd_env "$@" ;;
     help|-h|--help) cmd_help ;;
     *) err "unknown command: ${cmd}"; err "run: cid help"; return 2 ;;
   esac
