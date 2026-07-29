@@ -71,18 +71,17 @@ RUN mkdir -p "$NVM_DIR" \
 ENV PATH="$NVM_DIR/default/bin:${PATH}"
 
 # Install Claude Code + deps to /usr/local as root (readable by all; self-updater
-# disabled, DISABLE_AUTOUPDATER below, since the runtime user can't write it).
-# The manifest is COPY'd into /usr/local and npm runs there (NOT --prefix, which
-# makes `npm ci` read the lockfile from the prefix and miss a cwd copy). With
-# package-lock.json committed (`make lockfile`) the build uses `npm ci` for
-# verified reproducible installs, else an unlocked fallback from package.json.
+# off via DISABLE_AUTOUPDATER below, since the runtime user can't write it).
+# npm runs in /usr/local (NOT --prefix, which reads the lock from the prefix).
+# `npm ci` needs the committed package-lock.json for a reproducible install; the
+# build fails without it. To bump Claude Code, see docs/updating-claude-code.md.
 #
 # ccusage ships its native binary non-executable and chmods it on first run,
 # which EPERMs for the non-root user; set the bit here so ccusage skips it. Path
 # is arch-specific (@ccusage/ccusage-linux-<arch>), matched by glob.
-COPY package.json package-lock.json* /usr/local/
+COPY package.json package-lock.json /usr/local/
 RUN cd /usr/local \
- && if [ -f package-lock.json ]; then npm ci; else npm install; fi \
+ && npm ci \
  && find /usr/local/node_modules -type f -path '*@ccusage/*/bin/*' -exec chmod a+rx {} +
 ENV DISABLE_AUTOUPDATER=1
 # Suppress the feedback survey and non-essential telemetry/traffic.
