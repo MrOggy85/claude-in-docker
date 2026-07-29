@@ -8,7 +8,7 @@ CONFIG_DIR := $(CLAUDE_DOCKER_CONFIG_DIR)
 
 GLOBAL_CONFIG := settings.json claude.json mcp-servers.json container-CLAUDE.md allowed-domains.txt .gitconfig .gitignore_global .env
 
-.PHONY: init migrate bats test test-extra-mounts test-extra-ports test-run test-e2e test-ext-allowlist test-chrome-devtools-mcp test-cid lockfile pin-digest proxy-up proxy-down
+.PHONY: init migrate bats test test-extra-mounts test-extra-ports test-run test-e2e test-ext-allowlist test-chrome-devtools-mcp test-cid lockfile update-claude pin-digest proxy-up proxy-down
 # install_additional_packages.sh stays in the repo: it is COPY'd into the base
 # image at build time (build context = repo dir), so it can't be mounted.
 init: $(addprefix $(CONFIG_DIR)/,$(GLOBAL_CONFIG)) $(CONFIG_DIR)/.credentials.json install_additional_packages.sh
@@ -68,10 +68,17 @@ test-chrome-devtools-mcp:
 test-cid:
 	bats test/cid.bats
 
-# Refresh package-lock.json from package.json (run after changing a package,
-# then commit). Once present, the Docker build uses `npm ci` for reproducible installs.
+# Regenerate package-lock.json from package.json (run after adding/removing a
+# package, then commit). Does NOT bump an already-pinned version — npm treats the
+# locked version as satisfying the `latest` tag. Use `make update-claude` to upgrade.
 lockfile:
 	npm install --package-lock-only
+
+# Bump @anthropic-ai/claude-code to the latest published version in the lockfile
+# (package.json stays "latest"; only the lock's pin moves). Commit the result;
+# the next `run.sh` rebuilds the image. See docs/updating-claude-code.md.
+update-claude:
+	npm update @anthropic-ai/claude-code --package-lock-only
 
 # Fetch the current amd64 digest of debian:trixie-slim into the Dockerfile FROM
 # line. Run after upstream security patches, then rebuild. Requires docker (or
