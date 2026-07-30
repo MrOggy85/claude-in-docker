@@ -1,10 +1,30 @@
 name: Tests
+# Note: the two path lists are duplicated on purpose — GitHub Actions' workflow
+# parser rejects YAML anchors/aliases, so they cannot be shared.
 on:
   push:
     branches: [master]
-    paths: ['run.sh', 'guards/**', 'scripts/**', 'test/**', 'e2e/**', '.github/workflows/test.yml']
+    paths:
+      - 'run.sh'
+      - 'cid'
+      - 'guards/**'
+      - 'scripts/**'
+      - 'test/**'
+      - 'e2e/**'
+      - 'docker-bridge/**'
+      - 'chrome-devtools-mcp/**'
+      - '.github/workflows/test.yml'
   pull_request:
-    paths: ['run.sh', 'guards/**', 'scripts/**', 'test/**', 'e2e/**', '.github/workflows/test.yml']
+    paths:
+      - 'run.sh'
+      - 'cid'
+      - 'guards/**'
+      - 'scripts/**'
+      - 'test/**'
+      - 'e2e/**'
+      - 'docker-bridge/**'
+      - 'chrome-devtools-mcp/**'
+      - '.github/workflows/test.yml'
 jobs:
   bats:
     runs-on: ubuntu-latest
