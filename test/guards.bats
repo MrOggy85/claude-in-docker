@@ -141,3 +141,92 @@ run_no_tty() {
   run env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
   [ "$status" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# guards/docker-bridge.sh
+#
+# The guard only runs when CLAUDE_DOCKER_BRIDGE is on, and its job is to refuse
+# an allowlist that is absent (silent misconfiguration) or broad enough to expose
+# the other Claude sessions / the egress proxy. See docs/docker-bridge.md.
+# ---------------------------------------------------------------------------
+
+# Path to this project's container allowlist, creating the per-project dir.
+_containers_file() {
+  local key; key="$(cd "${SCRIPT_DIR}" && . scripts/paths.sh && project_key "${TEST_PROJECT_DIR}")"
+  mkdir -p "${CLAUDE_PROJECTS_DIR}/${key}"
+  printf '%s' "${CLAUDE_PROJECTS_DIR}/${key}/docker-containers.txt"
+}
+
+@test "docker-bridge guard: off by default, so no allowlist is required" {
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"docker bridge"* ]]
+}
+
+@test "docker-bridge guard: enabled with no allowlist aborts with exit 1" {
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" CLAUDE_DOCKER_BRIDGE=1 bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no containers are allowlisted"* ]]
+}
+
+@test "docker-bridge guard: an allowlist with only comments still aborts" {
+  printf '# nothing yet\n\n' > "$(_containers_file)"
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" CLAUDE_DOCKER_BRIDGE=1 bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no containers are allowlisted"* ]]
+}
+
+@test "docker-bridge guard: a bare '*' aborts" {
+  printf '*\n' > "$(_containers_file)"
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" CLAUDE_DOCKER_BRIDGE=1 bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"matches every container"* ]]
+}
+
+@test "docker-bridge guard: a 'claude-*' entry aborts" {
+  printf 'myapp-web\nclaude-*\n' > "$(_containers_file)"
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" CLAUDE_DOCKER_BRIDGE=1 bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Claude session containers"* ]]
+}
+
+@test "docker-bridge guard: a glob that also covers the egress proxy aborts" {
+  printf 'c*\n' > "$(_containers_file)"
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" CLAUDE_DOCKER_BRIDGE=1 bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"egress proxy"* ]]
+}
+
+@test "docker-bridge guard: the egress proxy by name aborts" {
+  printf 'claude-egress-proxy\n' > "$(_containers_file)"
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" CLAUDE_DOCKER_BRIDGE=1 bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"unsafe entries"* ]]
+}
+
+@test "docker-bridge guard: a sane allowlist proceeds, mints a 600 token, opens the port" {
+  local cfile; cfile="$(_containers_file)"
+  printf 'myapp-web\nmyapp-*\n' > "${cfile}"
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" CLAUDE_DOCKER_BRIDGE=1 bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"docker bridge: read-only docker via host.docker.internal:9334"* ]]
+  local tfile="$(dirname "${cfile}")/docker-bridge.token"
+  [ -s "${tfile}" ]
+  local mode; mode="$(stat -c '%a' "${tfile}" 2>/dev/null || stat -f '%A' "${tfile}")"
+  [ "${mode}" = "600" ]
+}
+
+@test "docker-bridge guard: the baseline allowlist alone satisfies it" {
+  printf 'infra-db\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/docker-containers.txt"
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" CLAUDE_DOCKER_BRIDGE=1 bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 0 ]
+}

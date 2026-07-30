@@ -138,6 +138,73 @@ proj_file() { echo "${CLAUDE_PROJECTS_DIR}"/*/allowed-domains.txt; }
   [[ "$output" == *"example.com"* ]]           # per-project
 }
 
+# ---------------------------------------------------------------------------
+# containers add|rm|show — the docker-bridge allowlist, same machinery as
+# domains but with container-name validation and no lowercasing.
+# ---------------------------------------------------------------------------
+
+# Path to the (single) per-project container allowlist file.
+proj_containers() { echo "${CLAUDE_PROJECTS_DIR}"/*/docker-containers.txt; }
+
+@test "containers add: creates the per-project list and writes the name" {
+  run "${CID}" containers add myapp-web -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_containers)"
+  [ "$output" = "myapp-web" ]
+}
+
+@test "containers add: a trailing '*' prefix glob is accepted" {
+  run "${CID}" containers add 'myapp-*' -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_containers)"
+  [ "$output" = "myapp-*" ]
+}
+
+@test "containers add: preserves case (container names are case-sensitive)" {
+  run "${CID}" containers add MyApp -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_containers)"
+  [ "$output" = "MyApp" ]
+}
+
+@test "containers add: rejects a name with shell metacharacters" {
+  run "${CID}" containers add 'web; rm -rf /' -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"not a valid container name"* ]]
+  [ ! -f "$(proj_containers)" ]
+}
+
+@test "containers add -g: appends to the baseline list, creating it" {
+  run "${CID}" containers add -g infra-db
+  [ "$status" -eq 0 ]
+  run cat "${CLAUDE_DOCKER_CONFIG_DIR}/docker-containers.txt"
+  [ "$output" = "infra-db" ]
+}
+
+@test "containers rm: removes the entry and keeps comments" {
+  "${CID}" containers add myapp-web -C "${PROJ}"
+  printf '# keep me\n' >> "$(proj_containers)"
+  run "${CID}" containers rm myapp-web -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_containers)"
+  [ "$output" = "# keep me" ]
+}
+
+@test "containers: shows baseline and per-project additions" {
+  "${CID}" containers add -g infra-db
+  "${CID}" containers add myapp-web -C "${PROJ}"
+  run "${CID}" containers "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"infra-db"* ]]
+  [[ "$output" == *"myapp-web"* ]]
+}
+
+@test "containers: editing does not touch the egress allowlist" {
+  "${CID}" containers add myapp-web -C "${PROJ}"
+  run cat "${CLAUDE_DOCKER_CONFIG_DIR}/allowed-domains.txt"
+  [[ "$output" != *"myapp-web"* ]]
+}
+
 @test "env: lists a known variable under its section header" {
   run "${CID}" env
   [ "$status" -eq 0 ]

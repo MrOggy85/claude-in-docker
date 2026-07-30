@@ -68,3 +68,9 @@ opens `SOUND_PORT` outbound to the host by default so sound works with zero extr
 config. To reach *other* host ports from the container (a dev server, a database,
 etc.), use `CLAUDE_HOST_OUTBOUND_PORTS` — see
 [Host-Outbound Ports](host-outbound-ports.md).
+
+The server binds `0.0.0.0` (required — the container reaches the host over the
+Docker gateway) and has **no authentication**: anything that can reach the port
+can play a file from `sound-effects/sounds/`. That is the whole capability, but
+see [Known Attack Vectors](attack-vectors.md#host-bridges-on-host-outbound-ports-accepted-trade-off-opt-in)
+for how the three host bridges compare.

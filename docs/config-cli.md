@@ -3,19 +3,22 @@
 `cid` inspects and edits the claude-in-docker configuration. All config lives
 outside the repo, in the config dir (`~/.config/claude-in-docker/` by default —
 see [Environment Variables](environment-variables.md)). `cid` finds those files
-for you, prints them, and edits the egress allowlists in place so you don't have
-to open `allowed-domains.txt` by hand.
+for you, prints them, and edits the allowlists in place so you don't have to open
+`allowed-domains.txt` or `docker-containers.txt` by hand.
 
 ## Commands
 
 ```bash
-./cid list                    # config dir + every global file (present/missing) + projects dir
-./cid show <file>             # print a global config file (credentials are never dumped)
-./cid project [dir]           # per-project key, config dir, and which overrides exist
-./cid domains [dir]           # effective allowlist = baseline + this project's additions
-./cid domains add <host>...   # add host(s) to the allowlist
-./cid domains rm  <host>...   # remove host(s) from the allowlist
-./cid env [filter]            # list the env vars you can set (current value / default)
+./cid list                       # config dir + every global file (present/missing) + projects dir
+./cid show <file>                # print a global config file (credentials are never dumped)
+./cid project [dir]              # per-project key, config dir, and which overrides exist
+./cid domains [dir]              # effective allowlist = baseline + this project's additions
+./cid domains add <host>...      # add host(s) to the egress allowlist
+./cid domains rm  <host>...      # remove host(s) from the egress allowlist
+./cid containers [dir]           # containers the docker bridge may inspect (baseline + project)
+./cid containers add <name>...   # allow container(s) for the docker bridge
+./cid containers rm  <name>...   # remove container(s) from that allowlist
+./cid env [filter]               # list the env vars you can set (current value / default)
 ./cid help
 ```
 
@@ -52,6 +55,32 @@ lists live on each request and caches verdicts for 30 seconds (`ttl=30` in
 `proxy/squid.conf`). No image rebuild and no proxy restart. (Adding the very
 baseline file for the first time still needs `make init`, which the proxy mounts.)
 
+### `containers add` / `containers rm`
+
+The same machinery against `docker-containers.txt`: the list of host containers
+the [read-only docker bridge](docker-bridge.md) may inspect. `-g` and `-C` mean
+exactly what they do for `domains`, and the baseline file is created on demand
+(unlike `allowed-domains.txt`, nothing mounts it, so there is no `make init`
+prerequisite).
+
+An entry is either an exact container name or a **prefix glob** with a trailing
+`*` — quote it so your shell doesn't expand it. Names are validated against
+Docker's own charset and kept case-sensitive (unlike hostnames, which are
+lowercased).
+
+```bash
+cid containers add myapp-web myapp-db    # allow two containers for THIS project
+cid containers add 'myapp-*'             # prefix glob (quoted)
+cid containers add -g infra-db           # allow for EVERY project (baseline)
+cid containers rm  myapp-db              # remove from this project's list
+cid containers                           # show the effective list
+```
+
+Edits apply on the **next bridge call** — the bridge re-reads the file every time,
+so no session restart. With an empty list nothing is visible and `run.sh` refuses
+to launch with `CLAUDE_DOCKER_BRIDGE=1`; `guards/docker-bridge.sh` also rejects a
+bare `*` or anything matching the other Claude sessions / the egress proxy.
+
 ## Listing environment variables
 
 `cid env` prints every environment variable you can set on the host to change how
@@ -84,8 +113,9 @@ Then `cid domains add foo.com` works from inside any project directory.
 
 `cid` ships a zsh completion at `completions/_cid`. After `cid ` press Tab for
 subcommands; after `cid show ` press Tab for config filenames; after
-`cid domains ` press Tab for `add` / `rm` / `ls`; and after `cid domains rm `
-press Tab to list hosts already on an allowlist.
+`cid domains ` or `cid containers ` press Tab for `add` / `rm` / `ls`; and after
+`cid domains rm ` / `cid containers rm ` press Tab to list entries already on the
+corresponding allowlist.
 
 Install (zsh) by putting the `completions` dir on your `fpath` before
 `compinit`, e.g. in `~/.zshrc`:

@@ -30,10 +30,12 @@ source "${SCRIPT_DIR}/guards/config-initialized.sh"
 
 # Pre-flight security guards, each sourced (not subprocessed) so it can abort the
 # run with `exit` before any build/volume/container work. They read PROJECT_DIR /
-# HOME / MCP_GH_BEARER / CLAUDE_ALLOW_PROJECT_SETTINGS from this scope.
+# HOME / MCP_GH_BEARER / CLAUDE_ALLOW_PROJECT_SETTINGS / CLAUDE_DOCKER_BRIDGE from
+# this scope.
 source "${SCRIPT_DIR}/guards/no-home-dir.sh"
 source "${SCRIPT_DIR}/guards/project-settings.sh"
 source "${SCRIPT_DIR}/guards/mcp-bearer-no-push.sh"
+source "${SCRIPT_DIR}/guards/docker-bridge.sh"
 
 # 1. Build the image when missing or when the build context changed. A SHA-256
 #    of the key files is stored as an image label at build time; each run
@@ -239,6 +241,34 @@ CONTAINER_OPEN_PORTS="$(IFS=,; printf '%s' "${OPEN_PORTS[*]+${OPEN_PORTS[*]}}")"
 #       OUTPUT rule per port. See docs/host-outbound-ports.md.
 CONTAINER_HOST_OUTBOUND_PORTS="${SOUND_PORT:-4767}${CLAUDE_HOST_OUTBOUND_PORTS:+,${CLAUDE_HOST_OUTBOUND_PORTS}}"
 
+# 3c-c. Host docker bridge — OPT-IN, off by default. CLAUDE_DOCKER_BRIDGE=1 mints
+#       a per-project token, forwards it, and opens the bridge port; with the
+#       switch off there is no firewall rule, so the port is unreachable even if
+#       the host daemon is running. The token both authenticates and identifies the
+#       project: the bridge maps it to this project's docker-containers.txt, so the
+#       container never asserts which allowlist applies to it. Exported and passed
+#       by bare name (like MCP_GH_BEARER) to keep it out of `docker run`'s argv,
+#       which host `ps` exposes. Sanity checks live in guards/docker-bridge.sh;
+#       see docs/docker-bridge.md.
+DOCKER_BRIDGE_ARGS=()
+case "${CLAUDE_DOCKER_BRIDGE:-}" in
+  1|true|yes|on|TRUE|YES|ON)
+    _DB_PORT="${DOCKER_BRIDGE_PORT:-9334}"
+    _DB_TOKEN_FILE="${PROJECT_CONFIG_DIR}/docker-bridge.token"
+    if [[ ! -s "${_DB_TOKEN_FILE}" ]]; then
+      # 32 random bytes, hex. od+/dev/urandom rather than openssl: no extra dep.
+      od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > "${_DB_TOKEN_FILE}"
+      chmod 600 "${_DB_TOKEN_FILE}"
+      echo ">> minted docker bridge token: ${_DB_TOKEN_FILE}"
+    fi
+    DOCKER_BRIDGE_TOKEN="$(cat "${_DB_TOKEN_FILE}")"
+    export DOCKER_BRIDGE_TOKEN
+    DOCKER_BRIDGE_ARGS=(--env DOCKER_BRIDGE_TOKEN)
+    CONTAINER_HOST_OUTBOUND_PORTS+=",${_DB_PORT}"
+    echo ">> docker bridge: read-only docker via host.docker.internal:${_DB_PORT}"
+    ;;
+esac
+
 # 3d. In-repo paths backed by named volumes — SECURE BY DEFAULT. Each path gets
 #     its own per-project volume mounted at that path INSIDE the repo bind mount,
 #     so it lives only in the container/volume and NOT on the host — keeping
@@ -351,6 +381,7 @@ docker run \
   --env COLORTERM=truecolor \
   --env CLAUDE_HOST_PROJECT_DIR="${PROJECT_DIR}" \
   --env MCP_GH_BEARER \
+  ${DOCKER_BRIDGE_ARGS[@]+"${DOCKER_BRIDGE_ARGS[@]}"} \
   --env CONTAINER_OPEN_PORTS="${CONTAINER_OPEN_PORTS}" \
   --env CONTAINER_HOST_OUTBOUND_PORTS="${CONTAINER_HOST_OUTBOUND_PORTS}" \
   ${PUBLISH_ARGS[@]+"${PUBLISH_ARGS[@]}"} \

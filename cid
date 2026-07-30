@@ -4,9 +4,9 @@
 #
 # All user config lives OUTSIDE this repo, in a dedicated dir
 # (~/.config/claude-in-docker by default; see scripts/paths.sh). The inspection
-# commands (list/show/project/domains) are read-only viewers; the `domains
-# add|rm` commands edit the egress allowlists in place so you don't have to open
-# the files by hand.
+# commands (list/show/project/domains/containers) are read-only viewers; the
+# `domains add|rm` and `containers add|rm` commands edit the allowlists in place
+# so you don't have to open the files by hand.
 #
 # Usage:
 #   cid [list]                 Show the config dir and every global config file
@@ -21,19 +21,24 @@
 #                              or, with -g, the shared baseline list.
 #   cid domains rm  <host>...  Remove host(s) from the per-project allowlist
 #                              (default) or, with -g, the shared baseline list.
+#   cid containers [dir]       Show which Docker containers the host docker bridge
+#                              may inspect for a project (baseline + per-project).
+#   cid containers add <name>… Allow container(s) for this project (-g: baseline).
+#   cid containers rm  <name>… Disallow container(s) (-g: baseline).
 #   cid env [filter]           List the environment variables you can set on the
 #                              host, with current value / default (optional name
 #                              filter). A terminal mirror of docs/environment-variables.md.
 #   cid help                   This help.
 #
-# domains add|rm flags:
+# domains|containers add|rm flags:
 #   -g, --global               Target the shared baseline list instead of the
 #                              current project's per-project list.
 #   -C, --dir <dir>            Select the project by directory (default: PWD).
 #                              Ignored with -g (the baseline is not per-project).
 #
-# The allowlist is read live by the Squid proxy (30s cache), so add/rm take
-# effect within ~30s — no image rebuild or proxy restart. See docs/config-cli.md.
+# The domain allowlist is read live by the Squid proxy (30s cache), so add/rm take
+# effect within ~30s — no image rebuild or proxy restart. The container allowlist
+# is read per bridge call, so it applies immediately. See docs/config-cli.md.
 
 set -euo pipefail
 
@@ -64,6 +69,7 @@ GLOBAL_FILES=(
   ".gitignore_global|Global gitignore mounted at ~/.config/git/ignore"
   ".credentials.json|Claude auth token (secret; not printed by 'show')"
   "allowed-domains.txt|Baseline egress allowlist enforced by the Squid proxy"
+  "docker-containers.txt|Baseline container allowlist for the docker bridge (optional)"
   ".env|Arbitrary KEY=VALUE env vars injected via --env-file"
 )
 
@@ -155,7 +161,7 @@ cmd_project() {
 
   head_ "Overrides (fall back to the global file when absent)"
   local f
-  for f in allowed-domains.txt .env container-CLAUDE.md mcp-servers.json install_additional_packages.sh; do
+  for f in allowed-domains.txt docker-containers.txt .env container-CLAUDE.md mcp-servers.json install_additional_packages.sh; do
     if [[ -f "${pdir}/${f}" ]]; then
       printf '  [override] %s\n' "${f}"
     else
@@ -166,6 +172,12 @@ cmd_project() {
 }
 
 # ---- allowlist editing -----------------------------------------------------
+#
+# Two allowlists share this machinery, both "one bare entry per line, '#'
+# comments": allowed-domains.txt (egress hosts, enforced by Squid) and
+# docker-containers.txt (containers the docker bridge may inspect). The kind is
+# resolved once by _resolve_target, which sets the TARGET_* globals the generic
+# add/rm use.
 
 # The bare entry on an allowlist line: everything before '#', whitespace-stripped.
 # Mirrors proxy/ext-allowlist.sh so "present" here means the same as "allowed".
@@ -180,25 +192,53 @@ _valid_host() {  # <host>
   [[ "${h}" =~ ^\.?([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]]
 }
 
-# Is <host> already an entry in <file>?
-_host_in_file() {  # <host> <file>
-  local host="$1" file="$2" line
+# Docker's own container-name charset, plus an optional trailing '*' the bridge
+# reads as a prefix glob. Mirrors NAME_RE in docker-bridge/host-docker-bridge.js.
+_valid_container() {  # <name>
+  local n="$1"
+  [[ -n "${n}" ]] || return 1
+  [[ "${n}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\*?$ ]]
+}
+
+# Is <entry> already a line in <file>?
+_entry_in_file() {  # <entry> <file>
+  local entry="$1" file="$2" line
   [[ -f "${file}" ]] || return 1
   while IFS= read -r line || [[ -n "${line}" ]]; do
-    [[ "$(_entry_of "${line}")" == "${host}" ]] && return 0
+    [[ "$(_entry_of "${line}")" == "${entry}" ]] && return 0
   done < "${file}"
   return 1
 }
 
-# Resolve the target allowlist file for add/rm. Sets globals TARGET_FILE and
-# TARGET_LABEL. For the baseline, requires `make init` to have seeded the file
-# (the proxy mounts exactly that path). For a project, creates the dir on demand.
-_resolve_target() {  # <global?0|1> <dir>
-  local is_global="$1" dir="$2"
+# Resolve the target allowlist for add/rm. Sets TARGET_FILE, TARGET_LABEL and the
+# per-kind TARGET_VALIDATOR / TARGET_HINT / TARGET_APPLIES / TARGET_LOWER. The
+# baseline allowed-domains.txt must already exist (the proxy mounts exactly that
+# path, so a typo'd new file would silently do nothing); every other file is
+# created on demand.
+_resolve_target() {  # <global?0|1> <dir> <kind: domains|containers>
+  local is_global="$1" dir="$2" kind="$3" name
+  case "${kind}" in
+    domains)
+      name='allowed-domains.txt'
+      TARGET_VALIDATOR='_valid_host'
+      TARGET_HINT="not a valid hostname (letters, digits, '.', '-'; leading '.' = wildcard)"
+      TARGET_APPLIES='applies within ~30s, no restart'
+      TARGET_LOWER=1
+      ;;
+    containers)
+      name='docker-containers.txt'
+      TARGET_VALIDATOR='_valid_container'
+      TARGET_HINT="not a valid container name (letters, digits, '_', '.', '-'; trailing '*' = prefix glob)"
+      TARGET_APPLIES='applies to the next bridge call — no session restart'
+      TARGET_LOWER=0
+      ;;
+    *) err "internal: unknown allowlist kind '${kind}'"; return 1 ;;
+  esac
+
   if [[ "${is_global}" == 1 ]]; then
-    TARGET_FILE="${CONFIG_DIR}/allowed-domains.txt"
+    TARGET_FILE="${CONFIG_DIR}/${name}"
     TARGET_LABEL="baseline"
-    if [[ ! -f "${TARGET_FILE}" ]]; then
+    if [[ "${kind}" == domains && ! -f "${TARGET_FILE}" ]]; then
       err "baseline allowlist not found: ${TARGET_FILE}"
       err "run 'make init' first (the proxy mounts exactly this file)."
       return 1
@@ -207,73 +247,91 @@ _resolve_target() {  # <global?0|1> <dir>
   fi
   local rdir; rdir="$(cd "${dir}" 2>/dev/null && pwd)" || { err "no such dir: ${dir}"; return 1; }
   local key; key="$(project_key "${rdir}")"
-  TARGET_FILE="${PROJECTS_DIR}/${key}/allowed-domains.txt"
+  TARGET_FILE="${PROJECTS_DIR}/${key}/${name}"
   TARGET_LABEL="project ${key}"
 }
 
-cmd_domains_add() {  # <global> <dir> <host>...
-  local is_global="$1" dir="$2"; shift 2
-  [[ $# -ge 1 ]] || { err "usage: cid domains add [-g] [-C dir] <host>..."; return 2; }
-  local TARGET_FILE TARGET_LABEL
-  _resolve_target "${is_global}" "${dir}" || return 1
+_entries_add() {  # <kind> <global> <dir> <entry>...
+  local kind="$1" is_global="$2" dir="$3"; shift 3
+  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_HINT TARGET_APPLIES TARGET_LOWER
+  _resolve_target "${is_global}" "${dir}" "${kind}" || return 1
 
-  local host added=0
-  for host in "$@"; do
-    host="$(printf '%s' "${host}" | tr '[:upper:]' '[:lower:]')"
-    if ! _valid_host "${host}"; then
-      err "  skip '${host}' — not a valid hostname (letters, digits, '.', '-'; leading '.' = wildcard)"
+  local entry added=0
+  for entry in "$@"; do
+    [[ "${TARGET_LOWER}" == 1 ]] && entry="$(printf '%s' "${entry}" | tr '[:upper:]' '[:lower:]')"
+    if ! "${TARGET_VALIDATOR}" "${entry}"; then
+      err "  skip '${entry}' — ${TARGET_HINT}"
       continue
     fi
-    if _host_in_file "${host}" "${TARGET_FILE}"; then
-      note "already in ${TARGET_LABEL}: ${host}"
+    if _entry_in_file "${entry}" "${TARGET_FILE}"; then
+      note "already in ${TARGET_LABEL}: ${entry}"
       continue
     fi
     mkdir -p "$(dirname "${TARGET_FILE}")"
-    printf '%s\n' "${host}" >> "${TARGET_FILE}"
-    note "added to ${TARGET_LABEL}: ${host}"
+    printf '%s\n' "${entry}" >> "${TARGET_FILE}"
+    note "added to ${TARGET_LABEL}: ${entry}"
     added=$((added + 1))
   done
-  [[ "${added}" -gt 0 ]] && note "→ ${TARGET_FILE} (applies within ~30s, no restart)"
+  [[ "${added}" -gt 0 ]] && note "→ ${TARGET_FILE} (${TARGET_APPLIES})"
   return 0
 }
 
-cmd_domains_rm() {  # <global> <dir> <host>...
-  local is_global="$1" dir="$2"; shift 2
-  [[ $# -ge 1 ]] || { err "usage: cid domains rm [-g] [-C dir] <host>..."; return 2; }
-  local TARGET_FILE TARGET_LABEL
-  _resolve_target "${is_global}" "${dir}" || return 1
+_entries_rm() {  # <kind> <global> <dir> <entry>...
+  local kind="$1" is_global="$2" dir="$3"; shift 3
+  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_HINT TARGET_APPLIES TARGET_LOWER
+  _resolve_target "${is_global}" "${dir}" "${kind}" || return 1
 
   if [[ ! -f "${TARGET_FILE}" ]]; then
     note "no ${TARGET_LABEL} allowlist yet (${TARGET_FILE}); nothing to remove"
     return 0
   fi
 
-  local host removed=0
-  for host in "$@"; do
-    host="$(printf '%s' "${host}" | tr '[:upper:]' '[:lower:]')"
-    if ! _host_in_file "${host}" "${TARGET_FILE}"; then
-      note "not in ${TARGET_LABEL}: ${host}"
+  local entry removed=0
+  for entry in "$@"; do
+    [[ "${TARGET_LOWER}" == 1 ]] && entry="$(printf '%s' "${entry}" | tr '[:upper:]' '[:lower:]')"
+    if ! _entry_in_file "${entry}" "${TARGET_FILE}"; then
+      note "not in ${TARGET_LABEL}: ${entry}"
       continue
     fi
     # Rewrite without the matching entry, preserving every other line verbatim
-    # (comments, blanks, formatting). Only lines whose bare entry equals the host
-    # are dropped.
+    # (comments, blanks, formatting). Only lines whose bare entry equals it are
+    # dropped.
     local tmp line
     tmp="$(mktemp "${TARGET_FILE}.XXXXXX")"
     while IFS= read -r line || [[ -n "${line}" ]]; do
-      [[ "$(_entry_of "${line}")" == "${host}" ]] && continue
+      [[ "$(_entry_of "${line}")" == "${entry}" ]] && continue
       printf '%s\n' "${line}"
     done < "${TARGET_FILE}" > "${tmp}"
     mv "${tmp}" "${TARGET_FILE}"
-    note "removed from ${TARGET_LABEL}: ${host}"
+    note "removed from ${TARGET_LABEL}: ${entry}"
     removed=$((removed + 1))
   done
-  [[ "${removed}" -gt 0 ]] && note "→ ${TARGET_FILE} (applies within ~30s, no restart)"
+  [[ "${removed}" -gt 0 ]] && note "→ ${TARGET_FILE} (${TARGET_APPLIES})"
   return 0
 }
 
+cmd_domains_add() {  # <global> <dir> <host>...
+  [[ $# -ge 3 ]] || { err "usage: cid domains add [-g] [-C dir] <host>..."; return 2; }
+  _entries_add domains "$@"
+}
+
+cmd_domains_rm() {  # <global> <dir> <host>...
+  [[ $# -ge 3 ]] || { err "usage: cid domains rm [-g] [-C dir] <host>..."; return 2; }
+  _entries_rm domains "$@"
+}
+
+cmd_containers_add() {  # <global> <dir> <name>...
+  [[ $# -ge 3 ]] || { err "usage: cid containers add [-g] [-C dir] <name>..."; return 2; }
+  _entries_add containers "$@"
+}
+
+cmd_containers_rm() {  # <global> <dir> <name>...
+  [[ $# -ge 3 ]] || { err "usage: cid containers rm [-g] [-C dir] <name>..."; return 2; }
+  _entries_rm containers "$@"
+}
+
 # Print a file with a header, or a "using template" / "none" note.
-_dump_domains() {  # <label> <path> [fallback-path]
+_dump_list() {  # <label> <path> [fallback-path]
   local label="$1" path="$2" fallback="${3:-}"
   if [[ -f "${path}" ]]; then
     printf '# %s: %s\n' "${label}" "${path}"
@@ -294,34 +352,48 @@ cmd_domains_show() {  # [dir]
   pdir="${PROJECTS_DIR}/${key}"
   head_ "Effective egress allowlist for ${key}"
   printf 'The proxy allows a host if it matches EITHER list below.\n'
-  _dump_domains "Baseline" "${CONFIG_DIR}/allowed-domains.txt" "${TEMPLATES_DIR}/allowed-domains.txt"
-  _dump_domains "Per-project additions" "${pdir}/allowed-domains.txt"
+  _dump_list "Baseline" "${CONFIG_DIR}/allowed-domains.txt" "${TEMPLATES_DIR}/allowed-domains.txt"
+  _dump_list "Per-project additions" "${pdir}/allowed-domains.txt"
 }
 
-# domains dispatcher: parse the optional sub-verb (add/rm/ls) and its -g / -C
-# flags, then hand off. With no sub-verb it shows the effective allowlist.
-cmd_domains() {
+cmd_containers_show() {  # [dir]
+  local dir; dir="$(cd "${1:-$PWD}" 2>/dev/null && pwd)" || { err "no such dir: ${1:-$PWD}"; return 1; }
+  local key pdir
+  key="$(project_key "${dir}")"
+  pdir="${PROJECTS_DIR}/${key}"
+  head_ "Docker containers the bridge may inspect for ${key}"
+  printf 'Only containers matching EITHER list below are visible, and only when\n'
+  printf 'the bridge is enabled (CLAUDE_DOCKER_BRIDGE=1). See docs/docker-bridge.md.\n'
+  _dump_list "Baseline" "${CONFIG_DIR}/docker-containers.txt"
+  _dump_list "Per-project additions" "${pdir}/docker-containers.txt"
+}
+
+# Shared dispatcher for `cid domains` / `cid containers`: parse the optional
+# sub-verb (add/rm/ls) and its -g / -C flags, then hand off. With no sub-verb it
+# shows the effective list.
+_cmd_allowlist() {  # <kind: domains|containers> [args...]
+  local kind="$1"; shift
   local sub="" is_global=0 dir="${PWD}"
-  local -a hosts=()
+  local -a items=()
   local a
   while [[ $# -gt 0 ]]; do
     a="$1"; shift
     case "${a}" in
       -g|--global)        is_global=1 ;;
       -C|--dir|--project) dir="${1:?-C needs a directory}"; shift ;;
-      add)             if [[ -z "${sub}" ]]; then sub='add';  else hosts+=("${a}"); fi ;;
-      rm|remove)       if [[ -z "${sub}" ]]; then sub='rm';   else hosts+=("${a}"); fi ;;
-      ls|show|list)    if [[ -z "${sub}" ]]; then sub='show'; else hosts+=("${a}"); fi ;;
+      add)             if [[ -z "${sub}" ]]; then sub='add';  else items+=("${a}"); fi ;;
+      rm|remove)       if [[ -z "${sub}" ]]; then sub='rm';   else items+=("${a}"); fi ;;
+      ls|show|list)    if [[ -z "${sub}" ]]; then sub='show'; else items+=("${a}"); fi ;;
       -h|--help)       cmd_help; return 0 ;;
       -*)              err "unknown flag: ${a}"; return 2 ;;
-      *)               hosts+=("${a}") ;;
+      *)               items+=("${a}") ;;
     esac
   done
 
   case "${sub}" in
-    add)  cmd_domains_add "${is_global}" "${dir}" "${hosts[@]+"${hosts[@]}"}" ;;
-    rm)   cmd_domains_rm  "${is_global}" "${dir}" "${hosts[@]+"${hosts[@]}"}" ;;
-    show|"") cmd_domains_show "${hosts[0]:-${dir}}" ;;
+    add)  "cmd_${kind}_add" "${is_global}" "${dir}" "${items[@]+"${items[@]}"}" ;;
+    rm)   "cmd_${kind}_rm"  "${is_global}" "${dir}" "${items[@]+"${items[@]}"}" ;;
+    show|"") "cmd_${kind}_show" "${items[0]:-${dir}}" ;;
   esac
 }
 
@@ -344,6 +416,10 @@ ENV_VARS=(
   "Configuration|CLAUDE_HOST_OUTBOUND_PORTS|(unset)|Extra host ports the container may connect out to"
   "Configuration|CHROME_DEVTOOLS_MCP_PORT|9333|Host port for the chrome-devtools-mcp bridge (host-only)"
   "Configuration|CHROME_DEVTOOLS_MCP_EXTRA_ARGS|(unset)|Extra flags passed to chrome-devtools-mcp (host-only)"
+  "Configuration|CLAUDE_DOCKER_BRIDGE|(unset)|Set 1 to enable read-only host docker access (off by default)"
+  "Configuration|DOCKER_BRIDGE_PORT|9334|Host port for the read-only docker bridge"
+  "Configuration|DOCKER_BRIDGE_BIND|0.0.0.0|Address the docker bridge listens on (host-only)"
+  "Configuration|DOCKER_BRIDGE_DOCKER_CMD|docker|Path to the docker CLI the bridge runs (host-only)"
   "Configuration|CLAUDE_VOLUME|claude-<project>-<hash>|Override the per-project session volume name"
   "Configuration|CLAUDE_CONTAINER_NAME|claude-<project>-<random>|Pin the container name instead of the random default"
   "Egress proxy|CLAUDE_EGRESS_NETWORK|claude-egress|Docker network shared by the proxy and containers"
@@ -408,10 +484,13 @@ Commands:
   domains [dir]           Effective egress allowlist (baseline + per-project) for a project
   domains add <host>...   Add host(s) to the per-project list (-g for the baseline)
   domains rm  <host>...   Remove host(s) from the per-project list (-g for the baseline)
+  containers [dir]        Containers the docker bridge may inspect (baseline + per-project)
+  containers add <name>...  Allow container(s) for this project (-g for the baseline)
+  containers rm  <name>...  Disallow container(s) (-g for the baseline)
   env [filter]            List the env vars you can set (current value / default)
   help                    This help
 
-domains add|rm flags:
+domains|containers add|rm flags:
   -g, --global            Target the shared baseline list (not the current project)
   -C, --dir <dir>         Select the project by directory (default: current dir)
 
@@ -420,8 +499,11 @@ Examples:
   cid domains add .githubusercontent.com   # wildcard: apex + all subdomains
   cid domains add -g registry.npmjs.org    # allow for EVERY project (baseline)
   cid domains rm  example.com              # remove from this project's list
+  cid containers add myapp-web             # let the bridge read this container
+  cid containers add 'myapp-*'             # trailing '*' = prefix glob (quote it)
 
-Edits apply within ~30s (Squid re-reads the lists live — no rebuild/restart).
+Domain edits apply within ~30s (Squid re-reads the lists live — no rebuild/restart);
+container edits apply to the next bridge call.
 Seed the config dir with 'make init'; migrate an old repo-root config with 'make migrate'.
 EOF
 }
@@ -432,7 +514,8 @@ main() {
     list|"")     cmd_list ;;
     show)        cmd_show "$@" ;;
     project)     cmd_project "$@" ;;
-    domains)     cmd_domains "$@" ;;
+    domains)     _cmd_allowlist domains "$@" ;;
+    containers)  _cmd_allowlist containers "$@" ;;
     env)         cmd_env "$@" ;;
     help|-h|--help) cmd_help ;;
     *) err "unknown command: ${cmd}"; err "run: cid help"; return 2 ;;

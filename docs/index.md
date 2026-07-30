@@ -1,6 +1,6 @@
 # Additional Information
 
-- [The `cid` config CLI](config-cli.md) — inspect the config and add/remove egress-allowlist domains (per-project or the shared baseline) without hand-editing files; ships zsh completion
+- [The `cid` config CLI](config-cli.md) — inspect the config and add/remove egress-allowlist domains and docker-bridge containers (per-project or the shared baseline) without hand-editing files; ships zsh completion
 - [Centralized Egress Proxy](egress-proxy.md) — the network boundary: every container egresses through one shared Squid proxy that filters by hostname per project, with a thin nftables rule locking egress to the proxy
 - [MCP Servers](mcp-servers.md) — configure user-level, project-level, and GitHub MCP servers
 - [Mounting Extra Folders](mounting-extra-folders.md) — mount additional host folders into the container via `CLAUDE_MOUNTS`
@@ -13,6 +13,7 @@
 - [Host Path in the Status Line](host-path-statusline.md) — show which host folder a session belongs to via `CLAUDE_HOST_PROJECT_DIR`
 - [Sound Effects](sound-effects.md) — play sounds on the host when Claude Code events fire
 - [Chrome DevTools MCP](chrome-devtools-mcp.md) — run the `chrome-devtools-mcp` server on the host and reach it from the container over HTTP, so Claude can drive a real browser
+- [Host Docker Bridge](docker-bridge.md) — read-only `docker ps` / `logs` / `stats` for an allowlisted set of host containers, without a Docker socket; off by default
 - [Devcontainers Alternative](devcontainers.md) — using Dev Containers / Codespaces with a squid proxy sidecar instead of `run.sh`
 - [How This Compares to Alternatives](comparison.md) — how this project compares to the devcontainer convention, lightweight recipes, and claudebox, and when to pick each
 - [Known Attack Vectors](attack-vectors.md) — threats not handled by this solution
