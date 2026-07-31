@@ -1,4 +1,5 @@
 [![Tests](https://github.com/MrOggy85/claude-in-docker/actions/workflows/test.yml/badge.svg)](https://github.com/MrOggy85/claude-in-docker/actions/workflows/test.yml)
+[![Image](https://github.com/MrOggy85/claude-in-docker/actions/workflows/image.yml/badge.svg)](https://github.com/MrOggy85/claude-in-docker/actions/workflows/image.yml)
 
 # Claude Code in Docker Container
 

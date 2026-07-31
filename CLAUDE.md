@@ -91,3 +91,9 @@ sourced file, not in `run.sh`.
   reaches it via `host.docker.internal` on a host-outbound port. See
   docs/chrome-devtools-mcp.md.
 - `docs/` — feature guides.
+- `.github/workflows/` — CI. `test.yml` runs bats (ubuntu + macOS) and
+  `make lint` on every non-doc change; both are gates, so run `make test` and
+  `make lint` before pushing. `image.yml` builds the image weekly and on
+  Dockerfile/lockfile changes — the image is the one thing here that rots with no
+  commit behind it. `update-claude.yml` opens the weekly claude-code bump PR
+  (Dependabot cannot: package.json pins `"latest"`).
