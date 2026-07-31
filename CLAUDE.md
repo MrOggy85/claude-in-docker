@@ -35,10 +35,11 @@ sourced file, not in `run.sh`.
   `path_hash()`, `safe_name()`, `project_key()`. Change config-location or
   key-derivation logic here, never inline.
 - `cid` — the config CLI. Read-only viewers (`list` / `show` / `project` /
-  `domains` / `containers` / `env`) plus in-place allowlist editing
-  (`domains add|rm <host>`, `containers add|rm <name>`, `-g` for the shared
-  baseline, `-C dir` to pick the project; both share `_resolve_target` +
-  `_entries_add`/`_entries_rm`, so add a kind there rather than duplicating).
+  `domains` / `containers` / `settings` / `env`) plus in-place allowlist editing
+  (`domains add|rm <host>`, `containers add|rm <name>`,
+  `settings trust|untrust <rule>`, `-g` for the shared baseline, `-C dir` to pick
+  the project; all three share `_resolve_target` + `_entries_add`/`_entries_rm`,
+  so add a kind there rather than duplicating).
   `env` lists the settable host env vars (terminal mirror of
   docs/environment-variables.md — keep the ENV_VARS list in sync). Meant to go on
   `$PATH`; ships a zsh completion in `completions/_cid`. See docs/config-cli.md.
@@ -55,11 +56,21 @@ sourced file, not in `run.sh`.
   into the image). The baseline copy lives at `<config-dir>/allowed-domains.txt`;
   `<config-dir>/projects/<key>/allowed-domains.txt` is the per-project list.
   `docker-containers.txt` follows the same baseline+per-project layout for the
-  docker bridge, read per call instead of on a TTL.
+  docker bridge, read per call instead of on a TTL, and so does
+  `trusted-settings-rules.txt` (permission rules the settings guard must not
+  flag), read per run.
 - `scripts/extra-mounts.sh` — turns `CLAUDE_MOUNTS` into `--volume` tokens.
+- `scripts/scan-project-settings.sh` — classifies a project's
+  `.claude/settings*.json` by capability (dependency-free: a literal key scan
+  plus an awk JSON walk, both fail-closed). Backs both
+  `guards/project-settings.sh` and `cid settings`; the risky-command and
+  dangerous-key lists live at the top of it, and `--render` holds the one copy of
+  the grouped output both callers print. See docs/attack-vectors.md.
 - `guards/` — pre-flight security gates, each `source`d by `run.sh` so it can
   `exit` the run before any build/container work (home-dir, project-settings,
   MCP token no-code-push check). Add new guards here, not inline in `run.sh`.
+  `project-settings.sh` prompts only about what the scanner flags and remembers
+  the approved risk digest per project, so an unchanged profile never re-asks.
 - `sync-volume.sh` / `usage.sh` — copy per-session usage records out of the
   volume for `ccusage`, keeping only cost fields (no conversation content).
 - `templates/` + `Makefile` (`make init`) — user-local config is copied from the

@@ -101,6 +101,12 @@ PROJECT_CONFIG_DIR="${PROJECTS_DIR}/${PROJECT_KEY}"
 if [[ ! -d "${PROJECT_CONFIG_DIR}" ]]; then
   mkdir -p "${PROJECT_CONFIG_DIR}"
   echo ">> created per-project config dir: ${PROJECT_CONFIG_DIR}"
+else
+  echo ">> per-project config dir: ${PROJECT_CONFIG_DIR}"
+fi
+# Seed per FILE, not per directory: a guard may already have written into this
+# dir (guards/project-settings.sh records its approval there) before we get here.
+if [[ ! -e "${PROJECT_CONFIG_DIR}/install_additional_packages.sh" ]]; then
   # Seed an install_additional_packages.sh stub. While comments/blank-only it
   # counts as empty (see 2d) and the base image is used as-is; add commands and
   # the next run bakes them into a per-project image.
@@ -116,11 +122,9 @@ if [[ ! -d "${PROJECT_CONFIG_DIR}" ]]; then
 #   set -euo pipefail
 #   curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh -s v2.3.1
 STUB
-  # Empty per-project allowlist; Squid already applies the baseline (see 3f).
-  touch "${PROJECT_CONFIG_DIR}/allowed-domains.txt"
-else
-  echo ">> per-project config dir: ${PROJECT_CONFIG_DIR}"
 fi
+# Empty per-project allowlist; Squid already applies the baseline (see 3f).
+[[ -e "${PROJECT_CONFIG_DIR}/allowed-domains.txt" ]] || touch "${PROJECT_CONFIG_DIR}/allowed-domains.txt"
 
 # Returns the per-project path if the file exists there, otherwise the root path.
 resolve_config_file() {  # <filename>

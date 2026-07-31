@@ -40,26 +40,107 @@ ones:
 (`env` is a softer, indirect risk: it injects variables into every subprocess
 and can subvert downstream commands without executing anything itself.)
 
-Because this set is broad and includes keys that appear in ordinary,
-legitimately-configured settings files (auth helpers, status lines, permission
-modes), a fine-grained guard that parses the file and prompts only on "dangerous"
-keys would add complexity while still prompting on nearly every real settings
-file. The guard therefore treats the **presence** of any project settings file as
-the trigger, not the specific keys inside it.
+A third class grants capability without executing anything itself:
+`permissions.allow` entries. Most are inert (`mcp__github__list_issues`), but a
+few are equivalent to handing over the shell — see [What makes an `allow` rule
+dangerous](#what-makes-an-allow-rule-dangerous) below.
 
 **Mitigation:** when the project contains `.claude/settings.json` or
 `.claude/settings.local.json`, `run.sh` stops before any build, volume, or
-container work happens (via `guards/project-settings.sh`) and prompts you: first
-to view the file(s), then to confirm whether to proceed. Declining either prompt
-aborts with a non-zero status. If stdin is not a terminal (`/dev/tty`
-unavailable), both prompts are treated as declined and the run aborts, so
-non-interactive invocations remain secure by default. The container's settings
-come from the config dir (`~/.config/claude-in-docker/settings.json`, mounted
-read-only at `~/.claude/settings.json`), never from the project.
+container work happens (via `guards/project-settings.sh`). What it does then
+depends on what the file actually grants:
 
-To run a project you trust that ships its own settings without the prompt, opt
-in with `CLAUDE_ALLOW_PROJECT_SETTINGS=1` (accepts `1`/`true`/`yes`/`on`), which
-skips the flow and honors the project settings as-is.
+1. `scripts/scan-project-settings.sh` classifies the file by **capability**. A
+   dangerous key from the lists above, **the value that key is set to** (the
+   hook's command, the `statusLine` command, an `env` entry), an `allow` rule
+   that grants arbitrary execution / unbounded network / access outside the repo,
+   or anything it cannot classify, each becomes a record. Everything else is
+   accepted silently.
+2. Nothing flagged → one summary line, no prompt.
+3. Something flagged → you see **only those items**, grouped under the settings
+   key they belong to (`permissions.allow` gets a block of its own), each with
+   the capability it grants, and one y/n prompt. Declining aborts with a non-zero
+   status.
+
+   ```
+     [key]  hooks
+            registers commands Claude Code runs on tool use / session events
+            → hooks.Stop.hooks.command = echo stopped   <-- new since your last approval
+
+     [key]  permissions.allow
+            tool calls auto-approved with no prompt
+            → Bash(python3 *)
+                'python3' with unbounded arguments runs any script
+   ```
+4. On approval, a sha256 of just those records — the "risk profile" — is stored
+   in the per-project config dir. An unchanged profile is not asked about again;
+   a changed one re-prompts and marks what is new.
+
+Point 1 covers the values, not just the key names, for a specific reason: if the
+digest only recorded "this file has hooks", approving a benign hook once would
+let the repo swap its `command` for anything and never be asked again. Editing a
+hook command, its matcher, a `statusLine` command or an `env` value therefore
+re-prompts, and the prompt shows the new value inline. (Adding or removing a hook
+re-prompts too — a removal is safe, but the digest only knows the profile
+changed.) A `[key]` record also prints a `cat` of the file, because a command
+that runs with no prompt is worth reading in its original context.
+
+Note the two layers are independent by design and the second does **not** stop at
+the first: a dangerous key does not make the `allow` list beneath it irrelevant,
+so both are always reported.
+
+If stdin is not a terminal (`/dev/tty` unavailable), the prompt is treated as
+declined and the run aborts, so non-interactive invocations remain secure by
+default. The container's settings come from the config dir
+(`~/.config/claude-in-docker/settings.json`, mounted read-only at
+`~/.claude/settings.json`), never from the project.
+
+Why the memo, and why it is not weaker than prompting every time: Claude Code
+**rewrites `settings.local.json` every session** as you approve permissions, so a
+presence-triggered guard dumped a 50-rule file at every start. A prompt that long
+and that frequent is answered reflexively, which is the same as no prompt. The
+digest covers exactly the security-relevant subset, so appending
+`mcp__slack__slack_read_thread` is silent while appending `Bash(bash -c *)` is
+not. The memo lives **outside the project** (`<config-dir>/projects/<key>/`), so
+a repo cannot approve itself; forging one means finding a sha256 preimage.
+
+Two escape hatches:
+
+- `CLAUDE_ALLOW_PROJECT_SETTINGS=1` (accepts `1`/`true`/`yes`/`on`) skips the
+  guard entirely and honors the project settings as-is.
+- `CLAUDE_PROJECT_SETTINGS_STRICT=1` restores the old behaviour: the whole file,
+  every run, with no approval recorded. Use it to audit.
+
+Inspect any of this without starting a session with `cid settings`; silence one
+rule you have decided is fine with `cid settings trust '<rule>'` (`-g` for every
+project); re-arm the prompt with `cid settings forget`. See
+[docs/config-cli.md](config-cli.md).
+
+### What makes an `allow` rule dangerous
+
+Not maliciousness — capability. An attacker does not write `Bash(rm -rf /)`; they
+write a rule that reads like tooling and happens to be Turing-complete. The
+scanner therefore asks what a rule *hands over unattended*, and Claude Code's
+prefix matching means the answer depends on how much of the command is pinned:
+`Bash(curl -s http://localhost:3000/*)` can only reach localhost, while
+`Bash(curl *)` can reach anything.
+
+| Rule | What it actually grants |
+| --- | --- |
+| `Bash(python3 *)`, `Bash(node -e …)` | Arbitrary code execution, spelled as ordinary dev tooling. No different in effect from `Bash(*)`. |
+| `Bash(*)`, bare `Bash` | Unbounded shell. |
+| `Bash(npm run …)`, `Bash(npx …)` | Runs whatever the untrusted repo put in `package.json`. |
+| `Read(//home/dev/.claude/**)` | Reads `~/.claude/.credentials.json` — your real Claude OAuth token, mounted there by `run.sh`. |
+| `Bash(cat *)` | The same read, one level of indirection away. |
+| `Bash(git config …)`, `Bash(git -c …)` | Sets `core.hooksPath` in the **bind-mounted** repo, so the payload runs on the **host** at your next commit. The one vector here that escapes the container. |
+| `Bash(curl *)`, `WebFetch(domain:*)` | An unpinned egress destination — the exfil half of a pair. |
+| `mcp__github-unext__*` | Auto-approves every tool that server exposes, including ones a later update adds. |
+
+Rules that pin their arguments (`Bash(pnpm --version)`, `Bash(go version *)`,
+`Bash(git -C /path branch -a)`, `Read(src/**)`) grant none of this and are never
+shown. The authoritative lists live at the top of
+`scripts/scan-project-settings.sh`; the dangerous-key list there mirrors this
+page, so update both together.
 
 ## Project-Level MCP Servers (mitigated by Claude Code)
 
@@ -75,8 +156,8 @@ unapproved servers are simply skipped.
 The one way to turn this into a silent launch is `enableAllProjectMcpServers` (or
 `enabledMcpjsonServers`) in a project settings file, which auto-approves without
 prompting — but that route is already caught by the [project settings
-guard](#project-level-claude-settings-mitigated-by-default) above, which trips on
-the presence of any `.claude/settings.json`. Note that
+guard](#project-level-claude-settings-mitigated-by-default) above: both keys are
+on its dangerous-key list, so either one triggers the prompt. Note that
 `guards/mcp-bearer-no-push.sh` only vets the GitHub MCP token; it does not
 inspect `.mcp.json` server commands — Claude Code's own approval prompt is what
 covers them.
