@@ -1,34 +1,42 @@
 name: Tests
-# Note: the two path lists are duplicated on purpose — GitHub Actions' workflow
-# parser rejects YAML anchors/aliases, so they cannot be shared.
+# Deny-list, not an allow-list: an allow-list silently skipped whole subsystems
+# (proxy/, Dockerfile, templates/) that test/ actually covers. Only pure-prose
+# paths are ignored. The two lists are duplicated on purpose — GitHub Actions'
+# workflow parser rejects YAML anchors/aliases, so they cannot be shared.
 on:
   push:
     branches: [master]
-    paths:
-      - 'run.sh'
-      - 'cid'
-      - 'guards/**'
-      - 'scripts/**'
-      - 'test/**'
-      - 'e2e/**'
-      - 'docker-bridge/**'
-      - 'chrome-devtools-mcp/**'
-      - '.github/workflows/test.yml'
+    paths-ignore:
+      - 'docs/**'
+      - 'README.md'
+      - 'CLAUDE.md'
   pull_request:
-    paths:
-      - 'run.sh'
-      - 'cid'
-      - 'guards/**'
-      - 'scripts/**'
-      - 'test/**'
-      - 'e2e/**'
-      - 'docker-bridge/**'
-      - 'chrome-devtools-mcp/**'
-      - '.github/workflows/test.yml'
+    paths-ignore:
+      - 'docs/**'
+      - 'README.md'
+      - 'CLAUDE.md'
 jobs:
+  # macOS is a first-class host for run.sh / cid, and BSD userland is where this
+  # repo breaks: stock macOS has shasum but not sha256sum, no setsid, no realpath,
+  # and `sed -i` takes a mandatory backup suffix. fail-fast off so one platform's
+  # failure does not hide the other's result.
   bats:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: bats-core/bats-action@3.0.0
       - run: bats test/
+
+  # An all-bash repo, so shellcheck is the type checker. See `make lint`.
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Preinstalled on the ubuntu runner image; the fallback keeps the job
+      # honest if that ever changes.
+      - run: command -v shellcheck >/dev/null || { sudo apt-get update && sudo apt-get install -y shellcheck; }
+      - run: make lint

@@ -122,11 +122,14 @@ _memo_file() {
 # Record an approval of whatever the scanner currently reports for the project,
 # exactly the way the guard does: digest on line 1, records below it.
 _approve_current() {
-  local scan flagged
+  local scan flagged digest
+  # sha256_ — stock macOS has shasum, not sha256sum. Same helper the guard uses.
+  . "${SCRIPT_DIR}/scripts/paths.sh"
   scan="$(cd "${SCRIPT_DIR}" && ./scripts/scan-project-settings.sh -p "${TEST_PROJECT_DIR}")"
   flagged="$(printf '%s\n' "${scan}" | grep -v $'^OK\t' || true)"
   # Digest of the records with no trailing newline — see _ps_sha in the guard.
-  { printf '%s\n' "$(printf '%s' "${flagged}" | sha256sum | cut -d' ' -f1)"
+  digest="$(printf '%s' "${flagged}" | sha256_ - | cut -d' ' -f1)"
+  { printf '%s\n' "${digest}"
     printf '%s\n' "${flagged}"; } > "$(_memo_file)"
 }
 

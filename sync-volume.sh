@@ -45,6 +45,7 @@ fi
 mkdir -p "${ARCHIVE}/projects"
 chmod 700 "${ARCHIVE}" "${ARCHIVE}/projects"
 
+# shellcheck disable=SC2016  # a script for the container's shell to expand, not this one
 STRIP_SCRIPT='DEST="/archive/projects/${PROJ}"
 export CWD_VAL="/home/dev/${PROJ}"
 mkdir -p "$DEST"

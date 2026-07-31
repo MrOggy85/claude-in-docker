@@ -28,6 +28,16 @@ invalidates the cached image and triggers a fresh build with the new version.
 
 Confirm the new version afterwards with `claude --version` inside a container.
 
+### Or wait for the weekly PR
+
+`.github/workflows/update-claude.yml` runs the same `make update-claude` every
+Monday, builds the image against the new lockfile and runs `claude --version` in
+it, then opens (or force-updates) a PR on `chore/update-claude-code`. Merging it
+is the whole update. Nothing happens if the pin is already current.
+
+Dependabot cannot cover this: `package.json` says `"latest"`, which every
+published version satisfies, so it never sees an update to propose.
+
 ### Why not plain `make lockfile`?
 
 `make lockfile` runs `npm install --package-lock-only`, which regenerates the

@@ -53,10 +53,9 @@ context_hash() {
   for f in "${files[@]}"; do [ -f "$f" ] && existing+=("$f"); done
   # Include caller identity: the image embeds host UID/GID/username via
   # --build-arg, so a different user must get a fresh image.
-  { if command -v sha256sum >/dev/null 2>&1; then sha256sum "${existing[@]}"
-    else shasum -a 256 "${existing[@]}"; fi
+  { sha256_ "${existing[@]}"
     printf 'uid=%s gid=%s user=%s\n' "$(id -u)" "$(id -g)" "$(id -un)"
-  } | sha256sum | cut -c1-16
+  } | sha256_ - | cut -c1-16
 }
 
 CURRENT_HASH="$(context_hash)"
@@ -150,9 +149,8 @@ if [[ -f "${_PROJECT_INSTALL}" ]] && grep -qvE '^[[:space:]]*(#.*)?$' "${_PROJEC
   # Rebuild when either the base context or the project script changes.
   DERIVED_HASH="$(
     { printf '%s\n' "${CURRENT_HASH}"
-      if command -v sha256sum >/dev/null 2>&1; then sha256sum "${_PROJECT_INSTALL}"
-      else shasum -a 256 "${_PROJECT_INSTALL}"; fi
-    } | sha256sum | cut -c1-16
+      sha256_ "${_PROJECT_INSTALL}"
+    } | sha256_ - | cut -c1-16
   )"
   DERIVED_IMAGE_HASH="$(docker image inspect "${DERIVED_IMAGE}" --format '{{index .Config.Labels "build.context-hash"}}' 2>/dev/null || true)"
   if [[ "${DERIVED_IMAGE_HASH}" != "${DERIVED_HASH}" ]]; then

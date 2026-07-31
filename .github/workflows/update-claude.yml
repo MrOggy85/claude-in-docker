@@ -1,0 +1,74 @@
+name: Update Claude Code
+
+# Dependabot cannot do this job: package.json pins "latest", and every published
+# version satisfies `latest`, so it never sees an update to propose. Only the
+# lockfile's pin moves — which is exactly what `make update-claude` does.
+on:
+  schedule:
+    - cron: '0 4 * * 1'   # Mondays 04:00 UTC, after the Image build
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Match the image's node (Dockerfile ARG NODE_VERSION) so the npm major
+      # that rewrites the lockfile is the same one that later reads it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: make update-claude
+
+      - name: Anything to bump?
+        id: bump
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo "already on the latest published version"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "version=$(node -p "require('./package-lock.json').packages['node_modules/@anthropic-ai/claude-code'].version")" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A PR opened with the default GITHUB_TOKEN does not trigger workflows, so
+      # Image would not run on it. Build here instead — the bump is verified
+      # before the PR exists, not after.
+      - name: Verify the image builds with the new lockfile
+        if: steps.bump.outputs.changed == 'true'
+        run: |
+          make install_additional_packages.sh
+          docker build \
+            --tag claude-in-docker:bump \
+            --build-arg "USER_ID=$(id -u)" \
+            --build-arg "GROUP_ID=$(id -g)" \
+            --build-arg "USERNAME=$(id -un)" \
+            .
+          docker run --rm --user "$(id -u):$(id -g)" --entrypoint claude claude-in-docker:bump --version
+
+      # One long-lived branch, force-pushed: a superseded bump is replaced rather
+      # than piling up a PR per week.
+      - name: Open or update the PR
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c chore/update-claude-code
+          git commit -am "chore: bump @anthropic-ai/claude-code to ${VERSION}"
+          git push --force origin chore/update-claude-code
+          if [ -z "$(gh pr list --head chore/update-claude-code --state open --json number --jq '.[].number')" ]; then
+            gh pr create \
+              --title "chore: bump @anthropic-ai/claude-code to ${VERSION}" \
+              --body "Automated \`make update-claude\`. The image was built and \`claude --version\` run against this lockfile in the workflow that opened this PR. Merging it makes the next \`run.sh\` rebuild the image (see docs/updating-claude-code.md)."
+          else
+            echo "existing PR updated to ${VERSION}"
+          fi

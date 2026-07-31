@@ -36,6 +36,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=paths.sh disable=SC1091
 source "${SCRIPT_DIR}/paths.sh"
 
 # --render turns records (on stdin) into the human-readable block both the guard
@@ -203,6 +204,7 @@ DANGEROUS_KEYS=(
 # Keys with no execution or permission effect — accepted without a word.
 # Anything absent from BOTH lists is reported OPAQUE so a newly-added Claude Code
 # key prompts once (and is then remembered) rather than passing unexamined.
+# shellcheck disable=SC2016  # '$schema' is a literal key name, not an expansion
 INERT_KEYS=(
   '$schema' permissions model theme verbose outputStyle editorMode vimMode
   cleanupPeriodDays includeCoAuthoredBy preferredNotifChannel
@@ -419,6 +421,7 @@ _classify_rule() {  # <rule>
       esac
       # A prefix rule spanning a shell operator or an expansion is not something
       # to reason about at a y/n prompt.
+      # shellcheck disable=SC2016  # matching the literal characters, not expanding
       case "${body}" in
         *';'*|*'&&'*|*'||'*|*'|'*|*'`'*|*'$('*|*'${'*|*'>('*|*'<('*)
           printf 'contains a shell operator — prefix matching is not bounded'; return 0 ;;
@@ -612,7 +615,7 @@ DANGEROUS_NAMES=" ${DANGEROUS_KEYS[*]%%|*} "
 # on the first one, so permissions.defaultMode is caught even though the path
 # starts with the inert "permissions".
 _under_dangerous_key() {  # <key path> — prints the key it matched
-  local path="$1" seg rest="$1"
+  local seg rest="$1"
   while [[ -n "${rest}" ]]; do
     seg="${rest%%.*}"
     if _in_list "${DANGEROUS_NAMES}" "${seg}"; then printf '%s' "${seg}"; return 0; fi
