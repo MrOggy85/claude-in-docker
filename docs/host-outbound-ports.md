@@ -21,19 +21,25 @@ Each comma-separated entry is `PORT` or `PORT/PROTO`, where `PROTO` is `tcp`
 (default) or `udp`. Invalid entries (non-numeric, out of range 1–65535, or an
 unknown protocol) are skipped with a warning.
 
-## Relationship to `SOUND_PORT`
+## Ports merged automatically
 
-`SOUND_PORT` (default `4767`) is a special case of this feature: `run.sh` merges
-it into the host-outbound list, so the sound server works out of the box with no
-extra config. Setting `CLAUDE_HOST_OUTBOUND_PORTS` adds ports **on top of**
-`SOUND_PORT`:
+Two ports do not need listing here:
+
+- **`SOUND_PORT`** (default `4767`) is always merged, so the
+  [sound server](sound-effects.md) works out of the box.
+- **`DOCKER_BRIDGE_PORT`** (default `9334`) is merged when
+  `CLAUDE_DOCKER_BRIDGE=1`, i.e. only when the
+  [docker bridge](docker-bridge.md) is enabled.
+
+Setting `CLAUDE_HOST_OUTBOUND_PORTS` adds ports **on top of** those:
 
 ```bash
 # firewall opens 4767 (sound) AND 8080
 CLAUDE_HOST_OUTBOUND_PORTS="8080" ./run.sh
 ```
 
-See [Sound Effects](sound-effects.md).
+The [chrome-devtools bridge](chrome-devtools-mcp.md) is the one that is *not*
+merged — open `9333` yourself.
 
 ## Direction: out vs in
 
@@ -42,7 +48,7 @@ This is the opposite direction from [`CLAUDE_PORTS`](publishing-ports.md):
 | Goal | Direction | Firewall chain | Variable |
 | --- | --- | --- | --- |
 | Host reaches a server in the container | host → container | `INPUT` | `CLAUDE_PORTS` |
-| Container reaches a server on the host | container → host | `OUTPUT` | `CLAUDE_HOST_OUTBOUND_PORTS` (+ `SOUND_PORT`) |
+| Container reaches a server on the host | container → host | `OUTPUT` | `CLAUDE_HOST_OUTBOUND_PORTS` (+ `SOUND_PORT`, `DOCKER_BRIDGE_PORT`) |
 
 ## Caveats
 
@@ -51,7 +57,10 @@ This is the opposite direction from [`CLAUDE_PORTS`](publishing-ports.md):
   `0.0.0.0` is reachable; one bound only to `127.0.0.1` generally is not.
 - **These connections are unfiltered.** Because host traffic bypasses Squid, the
   domain allowlist does not apply — the port rule is the only control. Each port
-  you open is unrestricted access to that host port.
+  you open is unrestricted access to that host port. Whatever listens there is
+  responsible for its own authorization: of the three bundled bridges only the
+  [docker bridge](docker-bridge.md) authenticates its callers. See
+  [Known Attack Vectors](attack-vectors.md#host-bridges-on-host-outbound-ports-accepted-trade-off-opt-in).
 - **Not general outbound.** This only affects traffic to the Docker host. All
   other outbound traffic still goes through Squid and its domain allowlist; see
   [Centralized Egress Proxy](egress-proxy.md).

@@ -21,6 +21,10 @@
 # base image at build time, so it must stay in the Docker build context.
 /install_additional_packages.sh
 
+# Docker-bridge tokens live in the config dir, never here — ignored defensively
+# so a relocated CLAUDE_PROJECTS_DIR can't leak one into a commit.
+docker-bridge.token
+
 # npm install artifact from `make lockfile`; only package-lock.json is committed.
 /node_modules/
 

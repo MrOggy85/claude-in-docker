@@ -166,6 +166,54 @@ It does **not** fully close the channel. `127.0.0.11` is a recursive forwarder �
 
 Neither is implemented. The residual one-hop channel is the practical gap; it is narrower than the prior unrestricted-port-53 channel but, like the [fast-fail disclosure](#egress-boundary-disclosure-via-fast-fail), it remains a way to move data out without reaching a blocked destination directly.
 
+## Host Bridges on Host-Outbound Ports (Accepted Trade-off, Opt-In)
+
+Three optional features let the container connect **directly to the host**, on an
+explicit port allowlist enforced by `init-firewall.sh`: the [sound
+server](sound-effects.md), the [chrome-devtools bridge](chrome-devtools-mcp.md),
+and the [read-only docker bridge](docker-bridge.md). Traffic to
+`host.docker.internal` is in `NO_PROXY`, so **none of it passes through Squid** —
+`allowed-domains.txt` does not apply, and the port rule plus whatever the host
+daemon itself enforces are the only controls. All three are off unless you open
+the port (the sound port is the one merged by default, and its endpoint only plays
+a local file).
+
+Two properties are worth stating plainly:
+
+- **The sound server and the chrome bridge have no authentication at all.** Both
+  bind `0.0.0.0` — required, because the container reaches the host over the
+  Docker gateway and a `127.0.0.1` bind is unreachable from it — so anything that
+  can reach your host on those ports can drive them. For the sound server that
+  means playing a file from a fixed directory. For the chrome bridge it means full
+  browser automation as the host user, which is why that page calls it a
+  deliberate hole.
+- **The docker bridge is the one that requires a token**, because a view of the
+  host's containers is not something to leave open. The token is minted per
+  project and also *selects* that project's container allowlist, so the container
+  cannot assert which allowlist applies to it — unlike the Squid proxy username
+  (see [Egress Proxy](egress-proxy.md)).
+
+For the docker bridge specifically, the residual risks after the token, the
+container allowlist, and the fixed argv are:
+
+- **Container logs are an unfiltered read channel.** Whatever your allowlisted
+  containers log — tokens, connection strings, user data — the agent can read over
+  a path Squid does not see. Keeping the allowlist to the project at hand is the
+  mitigation; there is no output filtering beyond stripping `Labels` and `Mounts`
+  from `docker ps` (they carry host filesystem paths).
+- **A too-broad allowlist would expose other sessions.** `docker logs` on another
+  `claude-*` container would surface its env — including that session's
+  `MCP_GH_BEARER` — and on `claude-egress-proxy` would surface every URL every
+  session has requested. `guards/docker-bridge.sh` refuses to launch with a bare
+  `*`, a `claude-…` entry, or a glob covering either, but the guard runs once
+  pre-flight: it validates the list, it does not gate individual calls.
+- **No mutating verb exists, by construction.** There is no `run`, `build`,
+  `exec`, `cp`, or `inspect` — the last because `docker inspect` dumps
+  `Config.Env` for any container. Mounting `/var/run/docker.sock` instead would
+  void essentially every invariant on this page at once; that is why it is not an
+  option here. See
+  [Not implemented: build and run](docker-bridge.md#not-implemented-build-and-run).
+
 ## GitHub MCP Token Write Access (Accepted Trade-off)
 
 The GitHub MCP token (`MCP_GH_BEARER`) may hold **Issues** and **Pull requests** write access, so Claude can open, comment on, and update issues and PRs on your behalf. `guards/mcp-bearer-no-push.sh` still rejects any token with **Contents: write** (code push), so repository *contents* cannot be mutated through it — see [docs/mcp-servers.md](mcp-servers.md). Two residual risks come with the write scope; both are the price of the convenience, not defects.

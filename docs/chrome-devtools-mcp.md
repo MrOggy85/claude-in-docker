@@ -9,7 +9,8 @@ network.
 
 The container has no browser and no display, and `chrome-devtools-mcp` is a
 **stdio** server that launches and drives a real Chrome. So — like the
-[sound server](sound-effects.md) — it runs on the **host**, and the container
+[sound server](sound-effects.md) and the
+[docker bridge](docker-bridge.md) — it runs on the **host**, and the container
 reaches it over HTTP via `host.docker.internal`.
 
 Because `chrome-devtools-mcp` speaks stdio only, a small **zero-dependency Node
@@ -117,6 +118,10 @@ carries browser automation:
   which sites Chrome can reach.
 - **Runs as the host user.** The Chrome process has the host user's privileges and
   can reach host-local and LAN services the container otherwise could not.
+- **No authentication.** The bridge accepts any `initialize` from anything that
+  can reach port `9333`, and it binds `0.0.0.0` by necessity. The firewall port
+  rule is the whole control; contrast the [docker bridge](docker-bridge.md), which
+  requires a per-project bearer token.
 - **Telemetry leaves the host, unfiltered.** `chrome-devtools-mcp` sends usage
   statistics to Google, and its performance tools send trace URLs to the CrUX API —
   host egress that bypasses Squid. The bridge passes `--no-usage-statistics` by

@@ -35,11 +35,13 @@ sourced file, not in `run.sh`.
   `path_hash()`, `safe_name()`, `project_key()`. Change config-location or
   key-derivation logic here, never inline.
 - `cid` — the config CLI. Read-only viewers (`list` / `show` / `project` /
-  `domains` / `env`) plus in-place allowlist editing (`domains add|rm <host>`,
-  `-g` for the shared baseline, `-C dir` to pick the project). `env` lists the
-  settable host env vars (terminal mirror of docs/environment-variables.md —
-  keep the ENV_VARS list in sync). Meant to go on `$PATH`; ships a zsh
-  completion in `completions/_cid`. See docs/config-cli.md.
+  `domains` / `containers` / `env`) plus in-place allowlist editing
+  (`domains add|rm <host>`, `containers add|rm <name>`, `-g` for the shared
+  baseline, `-C dir` to pick the project; both share `_resolve_target` +
+  `_entries_add`/`_entries_rm`, so add a kind there rather than duplicating).
+  `env` lists the settable host env vars (terminal mirror of
+  docs/environment-variables.md — keep the ENV_VARS list in sync). Meant to go on
+  `$PATH`; ships a zsh completion in `completions/_cid`. See docs/config-cli.md.
 - `scripts/migrate-config.sh` — `make migrate`: moves a pre-existing repo-root
   config (and per-project dirs) into the config dir, non-destructively.
 - `Dockerfile`, `entrypoint.sh`, `init-firewall.sh` — image build context; their
@@ -52,6 +54,8 @@ sourced file, not in `run.sh`.
 - `allowed-domains.txt` — the egress allowlist, read live by Squid (not baked
   into the image). The baseline copy lives at `<config-dir>/allowed-domains.txt`;
   `<config-dir>/projects/<key>/allowed-domains.txt` is the per-project list.
+  `docker-containers.txt` follows the same baseline+per-project layout for the
+  docker bridge, read per call instead of on a TTL.
 - `scripts/extra-mounts.sh` — turns `CLAUDE_MOUNTS` into `--volume` tokens.
 - `guards/` — pre-flight security gates, each `source`d by `run.sh` so it can
   `exit` the run before any build/container work (home-dir, project-settings,
@@ -61,6 +65,14 @@ sourced file, not in `run.sh`.
 - `templates/` + `Makefile` (`make init`) — user-local config is copied from the
   committed templates in `templates/` into the config dir. Edit the file in
   `templates/` when changing defaults.
+- `docker-bridge/` — host-side bridge (third of the family, same four-file shape
+  as `chrome-devtools-mcp/`): a zero-dep Node MCP server exposing read-only
+  `docker_ps` / `docker_logs` / `docker_stats` over Streamable HTTP. Not a stdio
+  proxy — it answers MCP itself and spawns one `docker` per call. Enforcement is
+  host-side and in this order: bearer token (which also selects the project's
+  allowlist), per-project `docker-containers.txt`, fixed argv. Opt-in via
+  `CLAUDE_DOCKER_BRIDGE=1`; sanity-checked by `guards/docker-bridge.sh`. No
+  mutating verb exists — see docs/docker-bridge.md.
 - `chrome-devtools-mcp/` — host-side bridge (mirrors `sound-effects/`): an
   nvm-sourcing launcher + a macOS launchd plist that run a small zero-dep Node
   bridge (`host-chrome-devtools-mcp.js`) which spawns the stdio `chrome-devtools-mcp`

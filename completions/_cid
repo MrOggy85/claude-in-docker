@@ -19,8 +19,8 @@ _cid_files() {
   local -a files
   files=(
     settings.json claude.json mcp-servers.json container-CLAUDE.md
-    .gitconfig .gitignore_global .credentials.json allowed-domains.txt .env
-    install_additional_packages.sh
+    .gitconfig .gitignore_global .credentials.json allowed-domains.txt
+    docker-containers.txt .env install_additional_packages.sh
   )
   _describe -t files 'config file' files
 }
@@ -33,7 +33,9 @@ _cid_envvars() {
     CLAUDE_DOCKER_CONFIG_DIR CLAUDE_PROJECTS_DIR CLAUDE_MOUNTS CLAUDE_PORTS
     CLAUDE_VOLUME_PATHS SKIP_CLAUDE_VOLUME_PATHS MCP_GH_BEARER
     CLAUDE_ALLOW_PROJECT_SETTINGS SOUND_PORT CLAUDE_HOST_OUTBOUND_PORTS
-    CHROME_DEVTOOLS_MCP_PORT CHROME_DEVTOOLS_MCP_EXTRA_ARGS CLAUDE_VOLUME
+    CHROME_DEVTOOLS_MCP_PORT CHROME_DEVTOOLS_MCP_EXTRA_ARGS
+    CLAUDE_DOCKER_BRIDGE DOCKER_BRIDGE_PORT DOCKER_BRIDGE_BIND
+    DOCKER_BRIDGE_DOCKER_CMD CLAUDE_VOLUME
     CLAUDE_CONTAINER_NAME CLAUDE_EGRESS_NETWORK CLAUDE_EGRESS_PROXY_NAME
     CLAUDE_EGRESS_IMAGE CLAUDE_AUTO_USAGE CLAUDE_USAGE_DIR CLAUDE_USAGE_ONLINE
     CCUSAGE_VERSION
@@ -41,16 +43,25 @@ _cid_envvars() {
   _describe -t envvars 'environment variable' vars
 }
 
-# Hosts already on any allowlist (baseline + every project) — completion hints
-# for `domains rm`. It's only a hint; rm still resolves the right file itself.
-_cid_hosts() {
+# Entries already on any allowlist of the given basename (baseline + every
+# project) — completion hints for `domains rm` / `containers rm`. Only a hint; rm
+# still resolves the right file itself.
+_cid_entries() {  # <basename> <tag> <description>
   local cfg; cfg=$(_cid_config_dir)
-  local -a hosts=() f
-  for f in "$cfg/allowed-domains.txt" "$cfg"/projects/*/allowed-domains.txt(N); do
+  local -a entries=() f
+  for f in "$cfg/$1" "$cfg"/projects/*/"$1"(N); do
     [[ -f $f ]] || continue
-    hosts+=(${(f)"$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' -e 's/[[:space:]]//g' "$f" 2>/dev/null)"})
+    entries+=(${(f)"$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' -e 's/[[:space:]]//g' "$f" 2>/dev/null)"})
   done
-  (( ${#hosts} )) && _describe -t hosts 'allowed host' hosts
+  (( ${#entries} )) && _describe -t "$2" "$3" entries
+}
+
+_cid_hosts() {
+  _cid_entries allowed-domains.txt hosts 'allowed host'
+}
+
+_cid_containers() {
+  _cid_entries docker-containers.txt containers 'allowed container'
 }
 
 _cid() {
@@ -61,6 +72,7 @@ _cid() {
     'show:print a global config file'
     'project:per-project key, config dir, and overrides'
     'domains:show or edit the egress allowlist'
+    'containers:show or edit the docker-bridge container allowlist'
     'env:list the environment variables you can set'
     'help:show usage'
   )
@@ -82,9 +94,13 @@ _cid() {
         env)
           _cid_envvars
           ;;
-        project|domains)
-          # Second word: for domains, the add/rm/ls verbs; then flags/hosts.
-          if [[ ${line[1]} == domains ]]; then
+        project|domains|containers)
+          # Second word: for domains/containers, the add/rm/ls verbs; then
+          # flags/entries. `project` just takes a directory.
+          if [[ ${line[1]} == project ]]; then
+            _files -/
+          else
+            local kind=${line[1]}
             _arguments \
               '(-g --global)'{-g,--global}'[target the shared baseline list]' \
               '(-C --dir --project)'{-C,--dir,--project}'[select project by directory]:dir:_files -/' \
@@ -93,20 +109,28 @@ _cid() {
             case $state in
               sub)
                 local -a subs
-                subs=(
-                  'add:add host(s) to the allowlist'
-                  'rm:remove host(s) from the allowlist'
-                  'ls:show the effective allowlist'
-                )
-                _describe -t subcommands 'domains action' subs
+                if [[ $kind == domains ]]; then
+                  subs=(
+                    'add:add host(s) to the allowlist'
+                    'rm:remove host(s) from the allowlist'
+                    'ls:show the effective allowlist'
+                  )
+                else
+                  subs=(
+                    'add:allow container(s) for the docker bridge'
+                    'rm:remove container(s) from the allowlist'
+                    'ls:show the effective container allowlist'
+                  )
+                fi
+                _describe -t subcommands "$kind action" subs
                 _files -/
                 ;;
               rest)
-                [[ ${line[1]} == rm ]] && _cid_hosts
+                if [[ ${line[1]} == rm ]]; then
+                  if [[ $kind == domains ]]; then _cid_hosts; else _cid_containers; fi
+                fi
                 ;;
             esac
-          else
-            _files -/
           fi
           ;;
       esac
