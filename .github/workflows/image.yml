@@ -1,0 +1,54 @@
+name: Image
+
+# The image is the one thing here that rots without a commit: Dockerfile:3 is an
+# unpinned `FROM debian:trixie-slim`, the apt layer floats, and `npm ci` pulls
+# tarballs from the registry. So build it on a schedule as well as on change — a
+# red Monday means "upstream moved", usually answered with `make pin-digest`.
+on:
+  schedule:
+    - cron: '0 3 * * 1'   # Mondays 03:00 UTC
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'Dockerfile'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'entrypoint.sh'
+      - 'init-firewall.sh'
+      - 'templates/install_additional_packages.sh'
+      - '.github/workflows/image.yml'
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'entrypoint.sh'
+      - 'init-firewall.sh'
+      - 'templates/install_additional_packages.sh'
+      - '.github/workflows/image.yml'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Dockerfile:135 COPYs it, but it is gitignored (it is the user's own file).
+      # The make target is the one copy of "seed it from templates/".
+      - run: make install_additional_packages.sh
+
+      # Same build args run.sh passes, so the /etc/passwd injection layer is
+      # exercised with a real non-default UID/GID rather than the ARG defaults.
+      - name: Build
+        run: |
+          docker build \
+            --tag claude-in-docker:ci \
+            --build-arg "USER_ID=$(id -u)" \
+            --build-arg "GROUP_ID=$(id -g)" \
+            --build-arg "USERNAME=$(id -un)" \
+            .
+
+      # Building proves the layers resolve; this proves the thing we installed
+      # actually runs as the host user. Nothing is pushed anywhere.
+      - name: Smoke-test the installed claude
+        run: docker run --rm --user "$(id -u):$(id -g)" --entrypoint claude claude-in-docker:ci --version
