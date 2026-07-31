@@ -24,11 +24,17 @@ projects_dir() {
   printf '%s' "${CLAUDE_PROJECTS_DIR:-$(config_dir)/projects}"
 }
 
-# First 10 hex chars of the SHA-256 of the argument. Portable across coreutils
-# `sha256sum` and macOS `shasum`.
+# SHA-256 of the named files, one `<hash>  <name>` line each; `-` means stdin.
+# The one place that picks between coreutils `sha256sum` and macOS `shasum` —
+# stock macOS has only the latter, so every hash site must go through here.
+sha256_() {  # <file>... ('-' for stdin)
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"
+  else shasum -a 256 "$@"; fi
+}
+
+# First 10 hex chars of the SHA-256 of the argument.
 path_hash() {  # <string>
-  if command -v sha256sum >/dev/null 2>&1; then printf '%s' "$1" | sha256sum | cut -c1-10
-  else printf '%s' "$1" | shasum -a 256 | cut -c1-10; fi
+  printf '%s' "$1" | sha256_ - | cut -c1-10
 }
 
 # Sanitized, lowercase basename of a directory: characters outside [a-z0-9]

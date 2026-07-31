@@ -52,10 +52,10 @@ _ask_yn() {
 
 # Full sha256 of a string. Not path_hash() from scripts/paths.sh: that truncates
 # to 10 hex chars, and this digest is what an untrusted repo would have to
-# collide with to get its own settings silently re-approved.
+# collide with to get its own settings silently re-approved. sha256_ (same file)
+# is what handles sha256sum-vs-shasum.
 _ps_sha() {  # <string>
-  if command -v sha256sum >/dev/null 2>&1; then printf '%s' "$1" | sha256sum | cut -d' ' -f1
-  else printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1; fi
+  printf '%s' "$1" | sha256_ - | cut -d' ' -f1
 }
 
 _ps_abort() {

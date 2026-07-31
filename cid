@@ -461,11 +461,7 @@ cmd_settings_show() {  # [dir]
     # Must match _ps_sha in guards/project-settings.sh byte for byte (no
     # trailing newline), or every profile would read as stale here.
     local digest prev
-    if command -v sha256sum >/dev/null 2>&1; then
-      digest="$(printf '%s' "${flagged}" | sha256sum | cut -d' ' -f1)"
-    else
-      digest="$(printf '%s' "${flagged}" | shasum -a 256 | cut -d' ' -f1)"
-    fi
+    digest="$(printf '%s' "${flagged}" | sha256_ - | cut -d' ' -f1)"
     prev="$(sed -n '1p' "${memo}")"
     if [[ "${digest}" == "${prev}" ]]; then
       printf '  Approved and current — no prompt on the next run.\n'
