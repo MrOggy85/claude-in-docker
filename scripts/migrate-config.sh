@@ -17,6 +17,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=paths.sh disable=SC1091
 source "${SCRIPT_DIR}/paths.sh"
 
 CONFIG_DIR="$(config_dir)"

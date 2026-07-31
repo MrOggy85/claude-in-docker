@@ -8,7 +8,18 @@ CONFIG_DIR := $(CLAUDE_DOCKER_CONFIG_DIR)
 
 GLOBAL_CONFIG := settings.json claude.json mcp-servers.json container-CLAUDE.md allowed-domains.txt .gitconfig .gitignore_global .env
 
-.PHONY: init migrate bats test test-extra-mounts test-extra-ports test-run test-e2e test-ext-allowlist test-chrome-devtools-mcp test-docker-bridge test-guards test-scan-settings test-cid lockfile update-claude pin-digest proxy-up proxy-down
+# Everything `make lint` shellchecks. Globbed per directory so a new script is
+# picked up automatically; extend the list when a new script *directory* appears.
+# Two deliberate omissions: e2e/scenarios/ (fixtures that are malformed on
+# purpose) and the gitignored root install_additional_packages.sh (a user's own
+# file — linting it would make local results diverge from CI).
+SHELL_SOURCES := cid \
+  $(filter-out install_additional_packages.sh,$(wildcard *.sh)) \
+  $(wildcard guards/*.sh) $(wildcard scripts/*.sh) $(wildcard proxy/*.sh) \
+  $(wildcard docker-bridge/*.sh) $(wildcard chrome-devtools-mcp/*.sh) \
+  $(wildcard sound-effects/*.sh) $(wildcard templates/*.sh)
+
+.PHONY: init migrate bats test test-extra-mounts test-extra-ports test-run test-e2e test-ext-allowlist test-chrome-devtools-mcp test-docker-bridge test-guards test-scan-settings test-cid lint lockfile update-claude pin-digest proxy-up proxy-down
 # install_additional_packages.sh stays in the repo: it is COPY'd into the base
 # image at build time (build context = repo dir), so it can't be mounted.
 init: $(addprefix $(CONFIG_DIR)/,$(GLOBAL_CONFIG)) $(CONFIG_DIR)/.credentials.json install_additional_packages.sh
@@ -76,6 +87,17 @@ test-scan-settings:
 
 test-cid:
 	bats test/cid.bats
+
+# Shellcheck every script in SHELL_SOURCES. -x follows `source`d files so
+# paths.sh's helpers are known. Zero exclusions: a finding is either fixed or
+# silenced at the site with an inline `# shellcheck disable=` and a reason.
+# CI: .github/workflows/test.yml
+lint:
+	@command -v shellcheck >/dev/null 2>&1 || { \
+	  echo "shellcheck not found. Install with 'sudo apt install shellcheck' or 'brew install shellcheck'"; \
+	  exit 1; \
+	}
+	shellcheck -x $(SHELL_SOURCES)
 
 # Regenerate package-lock.json from package.json (run after adding/removing a
 # package, then commit). Does NOT bump an already-pinned version — npm treats the

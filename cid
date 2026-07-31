@@ -482,7 +482,7 @@ cmd_settings_show() {  # [dir]
 
 cmd_settings_forget() {  # <global-ignored> <dir>
   local dir; dir="$(cd "${2:-$PWD}" 2>/dev/null && pwd)" || { err "no such dir: ${2:-$PWD}"; return 1; }
-  local memo="${PROJECTS_DIR}/$(project_key "${dir}")/approved-project-settings"
+  local memo; memo="${PROJECTS_DIR}/$(project_key "${dir}")/approved-project-settings"
   if [[ -f "${memo}" ]]; then
     rm -f "${memo}"
     note "forgot the approved risk profile: ${memo}"
