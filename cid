@@ -25,6 +25,12 @@
 #                              may inspect for a project (baseline + per-project).
 #   cid containers add <name>… Allow container(s) for this project (-g: baseline).
 #   cid containers rm  <name>… Disallow container(s) (-g: baseline).
+#   cid settings [dir]         Show what a project's .claude/settings*.json actually
+#                              grants (same scan guards/project-settings.sh runs) and
+#                              whether the guard will prompt about it.
+#   cid settings trust <rule>… Stop flagging a permissions.allow rule (-g: baseline).
+#   cid settings untrust <rule>… Flag it again.
+#   cid settings forget        Drop the approved risk profile for a project.
 #   cid env [filter]           List the environment variables you can set on the
 #                              host, with current value / default (optional name
 #                              filter). A terminal mirror of docs/environment-variables.md.
@@ -70,6 +76,7 @@ GLOBAL_FILES=(
   ".credentials.json|Claude auth token (secret; not printed by 'show')"
   "allowed-domains.txt|Baseline egress allowlist enforced by the Squid proxy"
   "docker-containers.txt|Baseline container allowlist for the docker bridge (optional)"
+  "trusted-settings-rules.txt|permissions.allow rules the settings guard should not flag (optional)"
   ".env|Arbitrary KEY=VALUE env vars injected via --env-file"
 )
 
@@ -200,23 +207,45 @@ _valid_container() {  # <name>
   [[ "${n}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\*?$ ]]
 }
 
-# Is <entry> already a line in <file>?
+# A permission rule as it appears in permissions.allow ("Bash(python3 *)"). Any
+# character is legal inside one, so this only rejects what the FILE format
+# cannot carry: nothing, a leading '#', or an embedded newline/tab.
+_valid_rule() {  # <rule>
+  local r="$1"
+  [[ -n "${r}" ]] || return 1
+  case "${r}" in '#'*|*$'\n'*|*$'\t'*) return 1 ;; esac
+  return 0
+}
+
+# The bare entry on a trusted-settings-rules.txt line. A permission rule contains
+# spaces, quotes and globs, so unlike _entry_of nothing internal is stripped:
+# only a line whose first non-blank character is '#' counts as a comment.
+_rule_of() {  # <line>
+  local l="$1"
+  l="${l#"${l%%[![:space:]]*}"}"
+  l="${l%"${l##*[![:space:]]}"}"
+  case "${l}" in '#'*) printf '' ;; *) printf '%s' "${l}" ;; esac
+}
+
+# Is <entry> already a line in <file>? Uses the kind's line parser, which
+# _resolve_target set (dynamically scoped from _entries_add / _entries_rm).
 _entry_in_file() {  # <entry> <file>
-  local entry="$1" file="$2" line
+  local entry="$1" file="$2" line parser="${TARGET_PARSER:-_entry_of}"
   [[ -f "${file}" ]] || return 1
   while IFS= read -r line || [[ -n "${line}" ]]; do
-    [[ "$(_entry_of "${line}")" == "${entry}" ]] && return 0
+    [[ "$("${parser}" "${line}")" == "${entry}" ]] && return 0
   done < "${file}"
   return 1
 }
 
 # Resolve the target allowlist for add/rm. Sets TARGET_FILE, TARGET_LABEL and the
-# per-kind TARGET_VALIDATOR / TARGET_HINT / TARGET_APPLIES / TARGET_LOWER. The
-# baseline allowed-domains.txt must already exist (the proxy mounts exactly that
-# path, so a typo'd new file would silently do nothing); every other file is
-# created on demand.
-_resolve_target() {  # <global?0|1> <dir> <kind: domains|containers>
+# per-kind TARGET_VALIDATOR / TARGET_PARSER / TARGET_HINT / TARGET_APPLIES /
+# TARGET_LOWER. The baseline allowed-domains.txt must already exist (the proxy
+# mounts exactly that path, so a typo'd new file would silently do nothing);
+# every other file is created on demand.
+_resolve_target() {  # <global?0|1> <dir> <kind: domains|containers|rules>
   local is_global="$1" dir="$2" kind="$3" name
+  TARGET_PARSER='_entry_of'
   case "${kind}" in
     domains)
       name='allowed-domains.txt'
@@ -230,6 +259,15 @@ _resolve_target() {  # <global?0|1> <dir> <kind: domains|containers>
       TARGET_VALIDATOR='_valid_container'
       TARGET_HINT="not a valid container name (letters, digits, '_', '.', '-'; trailing '*' = prefix glob)"
       TARGET_APPLIES='applies to the next bridge call — no session restart'
+      TARGET_LOWER=0
+      ;;
+    rules)
+      # permissions.allow rules the settings scanner should stop flagging.
+      name='trusted-settings-rules.txt'
+      TARGET_VALIDATOR='_valid_rule'
+      TARGET_PARSER='_rule_of'
+      TARGET_HINT="not a usable rule (empty, or contains a leading '#', a tab or a newline)"
+      TARGET_APPLIES='applies to the next run in that project'
       TARGET_LOWER=0
       ;;
     *) err "internal: unknown allowlist kind '${kind}'"; return 1 ;;
@@ -253,7 +291,7 @@ _resolve_target() {  # <global?0|1> <dir> <kind: domains|containers>
 
 _entries_add() {  # <kind> <global> <dir> <entry>...
   local kind="$1" is_global="$2" dir="$3"; shift 3
-  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_HINT TARGET_APPLIES TARGET_LOWER
+  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_PARSER TARGET_HINT TARGET_APPLIES TARGET_LOWER
   _resolve_target "${is_global}" "${dir}" "${kind}" || return 1
 
   local entry added=0
@@ -278,7 +316,7 @@ _entries_add() {  # <kind> <global> <dir> <entry>...
 
 _entries_rm() {  # <kind> <global> <dir> <entry>...
   local kind="$1" is_global="$2" dir="$3"; shift 3
-  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_HINT TARGET_APPLIES TARGET_LOWER
+  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_PARSER TARGET_HINT TARGET_APPLIES TARGET_LOWER
   _resolve_target "${is_global}" "${dir}" "${kind}" || return 1
 
   if [[ ! -f "${TARGET_FILE}" ]]; then
@@ -368,6 +406,131 @@ cmd_containers_show() {  # [dir]
   _dump_list "Per-project additions" "${pdir}/docker-containers.txt"
 }
 
+# ---- project Claude settings -----------------------------------------------
+#
+# The read-only side of guards/project-settings.sh: same scanner, same trusted
+# rules, so what is shown here is exactly what the guard will (or will not)
+# prompt about. See docs/attack-vectors.md.
+
+_settings_files() {  # <project dir> — prints one path per line, may print none
+  local dir="$1" f
+  for f in settings.json settings.local.json; do
+    [[ -f "${dir}/.claude/${f}" ]] && printf '%s\n' "${dir}/.claude/${f}"
+  done
+  return 0
+}
+
+cmd_settings_show() {  # [dir]
+  local dir; dir="$(cd "${1:-$PWD}" 2>/dev/null && pwd)" || { err "no such dir: ${1:-$PWD}"; return 1; }
+  local key pdir
+  key="$(project_key "${dir}")"
+  pdir="${PROJECTS_DIR}/${key}"
+
+  head_ "Project Claude settings for ${key}"
+  local -a files=()
+  while IFS= read -r f; do [[ -n "${f}" ]] && files+=("${f}"); done < <(_settings_files "${dir}")
+  if (( ${#files[@]} == 0 )); then
+    printf '  none — no .claude/settings.json or .claude/settings.local.json in %s\n' "${dir}"
+    printf '  Nothing for the guard to ask about.\n\n'
+    return 0
+  fi
+  local f
+  for f in "${files[@]}"; do printf '  file: %s\n' "${f}"; done
+
+  local scan flagged accepted
+  scan="$("${SCRIPT_DIR}/scripts/scan-project-settings.sh" -p "${dir}" "${files[@]}")"
+  flagged="$(printf '%s\n' "${scan}" | grep -v $'^OK\t' || true)"
+  accepted="$(printf '%s\n' "${scan}" | awk -F'\t' '$1=="OK" {n+=$2} END {print n+0}')"
+
+  printf '\n'
+  if [[ -z "${flagged}" ]]; then
+    printf '  Nothing flagged. %s allow rule(s) grant no capability worth a prompt.\n' "${accepted}"
+  else
+    # Same renderer the guard uses, so this shows exactly what a prompt would.
+    "${SCRIPT_DIR}/scripts/scan-project-settings.sh" --render <<< "${flagged}"
+    printf '\n  %s further allow rule(s) grant nothing and are not listed.\n' "${accepted}"
+  fi
+
+  head_ "Approval"
+  local memo="${pdir}/approved-project-settings"
+  if [[ -z "${flagged}" ]]; then
+    printf '  Not needed — the guard does not prompt when nothing is flagged.\n'
+  elif [[ ! -f "${memo}" ]]; then
+    printf '  Not approved yet — the next run in this project will prompt once.\n'
+  else
+    # Must match _ps_sha in guards/project-settings.sh byte for byte (no
+    # trailing newline), or every profile would read as stale here.
+    local digest prev
+    if command -v sha256sum >/dev/null 2>&1; then
+      digest="$(printf '%s' "${flagged}" | sha256sum | cut -d' ' -f1)"
+    else
+      digest="$(printf '%s' "${flagged}" | shasum -a 256 | cut -d' ' -f1)"
+    fi
+    prev="$(sed -n '1p' "${memo}")"
+    if [[ "${digest}" == "${prev}" ]]; then
+      printf '  Approved and current — no prompt on the next run.\n'
+    else
+      printf '  Approved profile is STALE — the next run will prompt and mark what changed.\n'
+    fi
+    printf '  memo: %s   (clear it with: cid settings forget)\n' "${memo}"
+  fi
+
+  head_ "Trusted rules (never flagged)"
+  _dump_list "Baseline" "${CONFIG_DIR}/trusted-settings-rules.txt"
+  _dump_list "Per-project additions" "${pdir}/trusted-settings-rules.txt"
+}
+
+cmd_settings_forget() {  # <global-ignored> <dir>
+  local dir; dir="$(cd "${2:-$PWD}" 2>/dev/null && pwd)" || { err "no such dir: ${2:-$PWD}"; return 1; }
+  local memo="${PROJECTS_DIR}/$(project_key "${dir}")/approved-project-settings"
+  if [[ -f "${memo}" ]]; then
+    rm -f "${memo}"
+    note "forgot the approved risk profile: ${memo}"
+    note "the next run in ${dir} will prompt again"
+  else
+    note "nothing to forget (${memo} does not exist)"
+  fi
+}
+
+cmd_settings_trust() {  # <global> <dir> <rule>...
+  [[ $# -ge 3 ]] || { err "usage: cid settings trust [-g] [-C dir] '<rule>'..."; return 2; }
+  _entries_add rules "$@"
+}
+
+cmd_settings_untrust() {  # <global> <dir> <rule>...
+  [[ $# -ge 3 ]] || { err "usage: cid settings untrust [-g] [-C dir] '<rule>'..."; return 2; }
+  _entries_rm rules "$@"
+}
+
+# Dispatcher for `cid settings`, shaped like _cmd_allowlist but with its own
+# verbs. Rules start with a letter, so they never collide with the verb names.
+cmd_settings() {
+  local sub="" is_global=0 dir="${PWD}"
+  local -a items=()
+  local a
+  while [[ $# -gt 0 ]]; do
+    a="$1"; shift
+    case "${a}" in
+      -g|--global)        is_global=1 ;;
+      -C|--dir|--project) dir="${1:?-C needs a directory}"; shift ;;
+      trust)           if [[ -z "${sub}" ]]; then sub='trust';   else items+=("${a}"); fi ;;
+      untrust)         if [[ -z "${sub}" ]]; then sub='untrust'; else items+=("${a}"); fi ;;
+      forget)          if [[ -z "${sub}" ]]; then sub='forget';  else items+=("${a}"); fi ;;
+      ls|show|list)    if [[ -z "${sub}" ]]; then sub='show';    else items+=("${a}"); fi ;;
+      -h|--help)       cmd_help; return 0 ;;
+      -*)              err "unknown flag: ${a}"; return 2 ;;
+      *)               items+=("${a}") ;;
+    esac
+  done
+
+  case "${sub}" in
+    trust)   cmd_settings_trust   "${is_global}" "${dir}" "${items[@]+"${items[@]}"}" ;;
+    untrust) cmd_settings_untrust "${is_global}" "${dir}" "${items[@]+"${items[@]}"}" ;;
+    forget)  cmd_settings_forget  "${is_global}" "${dir}" ;;
+    show|"") cmd_settings_show "${items[0]:-${dir}}" ;;
+  esac
+}
+
 # Shared dispatcher for `cid domains` / `cid containers`: parse the optional
 # sub-verb (add/rm/ls) and its -g / -C flags, then hand off. With no sub-verb it
 # shows the effective list.
@@ -412,6 +575,7 @@ ENV_VARS=(
   "Configuration|SKIP_CLAUDE_VOLUME_PATHS|(unset)|Disable all volume-backing, including node_modules"
   "Configuration|MCP_GH_BEARER|(unset)|Read-only GitHub token for the GitHub MCP server"
   "Configuration|CLAUDE_ALLOW_PROJECT_SETTINGS|(unset)|Auto-accept a project-level .claude/settings.json"
+  "Configuration|CLAUDE_PROJECT_SETTINGS_STRICT|(unset)|Set 1 to review the whole settings file every run, ignoring approvals"
   "Configuration|SOUND_PORT|4767|Host port the container reaches to play sound effects"
   "Configuration|CLAUDE_HOST_OUTBOUND_PORTS|(unset)|Extra host ports the container may connect out to"
   "Configuration|CHROME_DEVTOOLS_MCP_PORT|9333|Host port for the chrome-devtools-mcp bridge (host-only)"
@@ -487,10 +651,15 @@ Commands:
   containers [dir]        Containers the docker bridge may inspect (baseline + per-project)
   containers add <name>...  Allow container(s) for this project (-g for the baseline)
   containers rm  <name>...  Disallow container(s) (-g for the baseline)
+  settings [dir]          What the project's .claude/settings*.json grants, and whether
+                          the guard will prompt about it
+  settings trust '<rule>'...   Stop flagging a permissions.allow rule (-g: everywhere)
+  settings untrust '<rule>'... Flag it again
+  settings forget         Drop the approved risk profile, so the next run re-prompts
   env [filter]            List the env vars you can set (current value / default)
   help                    This help
 
-domains|containers add|rm flags:
+domains|containers|settings sub-verb flags:
   -g, --global            Target the shared baseline list (not the current project)
   -C, --dir <dir>         Select the project by directory (default: current dir)
 
@@ -501,6 +670,9 @@ Examples:
   cid domains rm  example.com              # remove from this project's list
   cid containers add myapp-web             # let the bridge read this container
   cid containers add 'myapp-*'             # trailing '*' = prefix glob (quote it)
+  cid settings                             # what this project's settings grant
+  cid settings trust 'Bash(python3 *)'     # accept that rule here without a prompt
+  cid settings trust -g 'Bash(npx *)'      # ...in every project
 
 Domain edits apply within ~30s (Squid re-reads the lists live — no rebuild/restart);
 container edits apply to the next bridge call.
@@ -516,6 +688,7 @@ main() {
     project)     cmd_project "$@" ;;
     domains)     _cmd_allowlist domains "$@" ;;
     containers)  _cmd_allowlist containers "$@" ;;
+    settings)    cmd_settings "$@" ;;
     env)         cmd_env "$@" ;;
     help|-h|--help) cmd_help ;;
     *) err "unknown command: ${cmd}"; err "run: cid help"; return 2 ;;

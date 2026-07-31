@@ -20,7 +20,8 @@ _cid_files() {
   files=(
     settings.json claude.json mcp-servers.json container-CLAUDE.md
     .gitconfig .gitignore_global .credentials.json allowed-domains.txt
-    docker-containers.txt .env install_additional_packages.sh
+    docker-containers.txt trusted-settings-rules.txt .env
+    install_additional_packages.sh
   )
   _describe -t files 'config file' files
 }
@@ -32,7 +33,8 @@ _cid_envvars() {
   vars=(
     CLAUDE_DOCKER_CONFIG_DIR CLAUDE_PROJECTS_DIR CLAUDE_MOUNTS CLAUDE_PORTS
     CLAUDE_VOLUME_PATHS SKIP_CLAUDE_VOLUME_PATHS MCP_GH_BEARER
-    CLAUDE_ALLOW_PROJECT_SETTINGS SOUND_PORT CLAUDE_HOST_OUTBOUND_PORTS
+    CLAUDE_ALLOW_PROJECT_SETTINGS CLAUDE_PROJECT_SETTINGS_STRICT
+    SOUND_PORT CLAUDE_HOST_OUTBOUND_PORTS
     CHROME_DEVTOOLS_MCP_PORT CHROME_DEVTOOLS_MCP_EXTRA_ARGS
     CLAUDE_DOCKER_BRIDGE DOCKER_BRIDGE_PORT DOCKER_BRIDGE_BIND
     DOCKER_BRIDGE_DOCKER_CMD CLAUDE_VOLUME
@@ -64,6 +66,19 @@ _cid_containers() {
   _cid_entries docker-containers.txt containers 'allowed container'
 }
 
+# Trusted permission rules — hints for `settings untrust`. Not _cid_entries:
+# a rule contains spaces and '#' may appear inside it, so only whole-line
+# comments are dropped and nothing internal is stripped.
+_cid_rules() {
+  local cfg; cfg=$(_cid_config_dir)
+  local -a entries=() f
+  for f in "$cfg/trusted-settings-rules.txt" "$cfg"/projects/*/trusted-settings-rules.txt(N); do
+    [[ -f $f ]] || continue
+    entries+=(${(f)"$(sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "$f" 2>/dev/null)"})
+  done
+  (( ${#entries} )) && _describe -t rules 'trusted rule' entries
+}
+
 _cid() {
   local curcontext="$curcontext" state line
   local -a cmds
@@ -73,6 +88,7 @@ _cid() {
     'project:per-project key, config dir, and overrides'
     'domains:show or edit the egress allowlist'
     'containers:show or edit the docker-bridge container allowlist'
+    'settings:what the project .claude/settings*.json grants'
     'env:list the environment variables you can set'
     'help:show usage'
   )
@@ -93,6 +109,29 @@ _cid() {
           ;;
         env)
           _cid_envvars
+          ;;
+        settings)
+          _arguments \
+            '(-g --global)'{-g,--global}'[target the shared baseline rule list]' \
+            '(-C --dir --project)'{-C,--dir,--project}'[select project by directory]:dir:_files -/' \
+            '1: :->sub' \
+            '*:: :->rest'
+          case $state in
+            sub)
+              local -a subs
+              subs=(
+                'trust:stop flagging a permissions.allow rule'
+                'untrust:flag a rule again'
+                'forget:drop the approved risk profile for this project'
+                'ls:show what the project settings grant'
+              )
+              _describe -t subcommands 'settings action' subs
+              _files -/
+              ;;
+            rest)
+              [[ ${line[1]} == untrust ]] && _cid_rules
+              ;;
+          esac
           ;;
         project|domains|containers)
           # Second word: for domains/containers, the add/rm/ls verbs; then

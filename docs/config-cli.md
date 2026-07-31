@@ -18,6 +18,10 @@ for you, prints them, and edits the allowlists in place so you don't have to ope
 ./cid containers [dir]           # containers the docker bridge may inspect (baseline + project)
 ./cid containers add <name>...   # allow container(s) for the docker bridge
 ./cid containers rm  <name>...   # remove container(s) from that allowlist
+./cid settings [dir]             # what a project's .claude/settings*.json actually grants
+./cid settings trust '<rule>'    # stop flagging a permissions.allow rule
+./cid settings untrust '<rule>'  # flag it again
+./cid settings forget            # drop the approved risk profile, so the next run re-prompts
 ./cid env [filter]               # list the env vars you can set (current value / default)
 ./cid help
 ```
@@ -80,6 +84,62 @@ Edits apply on the **next bridge call** — the bridge re-reads the file every t
 so no session restart. With an empty list nothing is visible and `run.sh` refuses
 to launch with `CLAUDE_DOCKER_BRIDGE=1`; `guards/docker-bridge.sh` also rejects a
 bare `*` or anything matching the other Claude sessions / the egress proxy.
+
+### `settings`
+
+The read-only view of what `guards/project-settings.sh` will do before it does
+it. `cid settings` runs the same scanner the guard runs
+(`scripts/scan-project-settings.sh`) against the project's
+`.claude/settings.json` and `.claude/settings.local.json`, and prints:
+
+- every **flagged** item, grouped under the settings key it belongs to — a key
+  that runs a command, the values that key carries (the hook's `command`, the
+  matcher, an `env` entry), and, under its own `permissions.allow` block, each
+  rule that grants arbitrary execution / unbounded network / access outside the
+  repo, with the capability it grants;
+- how many further `allow` rules grant nothing (these are never shown, and are
+  the reason the guard's prompt is short);
+- whether the risk profile is already **approved** for this project, stale, or
+  not yet seen;
+- the trusted rules in force.
+
+```bash
+cid settings                     # this project
+cid settings -C ~/code/other     # another one
+```
+
+The block is colour-coded when it goes to a terminal — key names in yellow, the
+values and rules you actually have to read in cyan, the surrounding explanation
+dimmed, and anything new since your last approval in red. Piped or redirected
+output is plain; `NO_COLOR=1` or `TERM=dumb` turns colour off, `CLICOLOR_FORCE=1`
+turns it on for a pipe.
+
+### `settings trust` / `settings untrust`
+
+Same machinery as `domains` and `containers`, against
+`trusted-settings-rules.txt`: rules listed there are dropped before
+classification, so the guard stops flagging them. Use it for a rule you have
+looked at and decided you are fine with — `Bash(python3 *)` in a Python repo,
+say. `-g` and `-C` mean what they do elsewhere; the file is created on demand.
+
+Unlike the other two lists, a rule contains spaces, quotes and globs, so **quote
+it** and give it exactly as it appears in `permissions.allow`. Only a line whose
+first non-blank character is `#` counts as a comment; nothing internal is
+stripped.
+
+```bash
+cid settings trust 'Bash(python3 *)'      # accept that rule in THIS project
+cid settings trust -g 'Bash(npx *)'       # ...in every project
+cid settings untrust 'Bash(python3 *)'    # flag it again
+```
+
+### `settings forget`
+
+Deletes the approval memo (`<config-dir>/projects/<key>/approved-project-settings`),
+so the next run in that project prompts again. The memo holds a sha256 of the
+flagged records plus the records themselves; it lives outside the project so a
+repo cannot approve itself. See [Known Attack
+Vectors](attack-vectors.md#project-level-claude-settings-mitigated-by-default).
 
 ## Listing environment variables
 
