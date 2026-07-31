@@ -16,8 +16,16 @@ on:
       - 'README.md'
       - 'CLAUDE.md'
 jobs:
+  # macOS is a first-class host for run.sh / cid, and BSD userland is where this
+  # repo breaks: stock macOS has shasum but not sha256sum, no setsid, no realpath,
+  # and `sed -i` takes a mandatory backup suffix. fail-fast off so one platform's
+  # failure does not hide the other's result.
   bats:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: bats-core/bats-action@3.0.0
