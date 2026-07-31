@@ -50,6 +50,13 @@ _not_flagged() { [[ "$output" != *"RULE"$'\t'"$1"$'\t'* ]]; }
 # Nothing to report
 # ---------------------------------------------------------------------------
 
+@test "scan: the script is executable" {
+  # run.sh and cid both invoke it by path, so a lost +x breaks the guard (and
+  # every test below) with an opaque 126. Asserted here so the mode is checked in
+  # CI as well as in whatever the working copy happens to be.
+  [ -x "${SCAN}" ]
+}
+
 @test "scan: no settings files at all produces no output" {
   _scan
   [ "$status" -eq 0 ]
@@ -411,21 +418,37 @@ JSON
   [[ "$output" != *"new since"* ]]
 }
 
+# Every case below pins NO_COLOR / CLICOLOR_FORCE / TERM explicitly: the whole
+# point is which input decides, so inheriting any of them from the surrounding
+# environment would make the result depend on where the suite runs. (CI runners
+# export TERM=dumb, which is exactly the case being pinned.)
+_render_env() { env -u NO_COLOR -u CLICOLOR_FORCE -u TERM "$@"; }
+
 @test "render: no colour when the output is not a terminal" {
   local recs="KEY"$'\t'"hooks"$'\t'"why"$'\t'"f"
-  run bash -c "'${SCAN}' --render <<< \"${recs}\""
+  run _render_env TERM=xterm bash -c "'${SCAN}' --render <<< \"${recs}\""
   [[ "$output" != *$'\033['* ]]
 }
 
-@test "render: CLICOLOR_FORCE colours the key, and NO_COLOR overrides it" {
+@test "render: CLICOLOR_FORCE colours the key, even where TERM claims dumb" {
   local recs="KEY"$'\t'"hooks"$'\t'"why"$'\t'"f"
-  run env CLICOLOR_FORCE=1 bash -c "'${SCAN}' --render <<< \"${recs}\""
+  run _render_env CLICOLOR_FORCE=1 TERM=xterm bash -c "'${SCAN}' --render <<< \"${recs}\""
   [[ "$output" == *$'\033[1;33mhooks\033[0m'* ]]
 
-  run env CLICOLOR_FORCE=1 NO_COLOR=1 bash -c "'${SCAN}' --render <<< \"${recs}\""
-  [[ "$output" != *$'\033['* ]]
+  # TERM=dumb is an inferred limitation, so an explicit force beats it.
+  run _render_env CLICOLOR_FORCE=1 TERM=dumb bash -c "'${SCAN}' --render <<< \"${recs}\""
+  [[ "$output" == *$'\033[1;33mhooks\033[0m'* ]]
+}
 
-  run env CLICOLOR_FORCE=1 TERM=dumb bash -c "'${SCAN}' --render <<< \"${recs}\""
+@test "render: NO_COLOR beats an explicit CLICOLOR_FORCE" {
+  local recs="KEY"$'\t'"hooks"$'\t'"why"$'\t'"f"
+  run _render_env NO_COLOR=1 CLICOLOR_FORCE=1 TERM=xterm bash -c "'${SCAN}' --render <<< \"${recs}\""
+  [[ "$output" != *$'\033['* ]]
+}
+
+@test "render: TERM=dumb suppresses colour when nothing is forced" {
+  local recs="KEY"$'\t'"hooks"$'\t'"why"$'\t'"f"
+  run _render_env TERM=dumb bash -c "'${SCAN}' --render <<< \"${recs}\""
   [[ "$output" != *$'\033['* ]]
 }
 

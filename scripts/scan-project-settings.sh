@@ -76,12 +76,18 @@ if (( RENDER_ONLY )); then
 
   # Colour only when the output is a terminal — same test usage.sh:76 uses, so a
   # piped or captured run (the guard's memo, the test suite) stays plain text.
-  # NO_COLOR (no-color.org) and TERM=dumb switch it off; CLICOLOR_FORCE forces it
-  # on. The guard redirects this to its own stderr, which is still the terminal.
-  if   [[ -n "${NO_COLOR:-}" || "${TERM:-}" == "dumb" ]]; then _use_color=0
-  elif [[ -n "${CLICOLOR_FORCE:-}" ]];                   then _use_color=1
-  elif [[ -t 1 ]];                                       then _use_color=1
-  else                                                        _use_color=0
+  # The guard redirects this to its own stderr, which is still the terminal.
+  #
+  # Precedence, most explicit first: NO_COLOR (no-color.org) is the user saying
+  # never, so it wins outright. CLICOLOR_FORCE is the user saying always, which
+  # beats a merely INFERRED inability to render — TERM=dumb is an ambient default
+  # on CI runners, not a considered choice, so it must not override an explicit
+  # request. Absent both, fall back to what the terminal says it can do.
+  if   [[ -n "${NO_COLOR:-}" ]];       then _use_color=0
+  elif [[ -n "${CLICOLOR_FORCE:-}" ]]; then _use_color=1
+  elif [[ "${TERM:-}" == "dumb" ]];    then _use_color=0
+  elif [[ -t 1 ]];                     then _use_color=1
+  else                                      _use_color=0
   fi
   if (( _use_color )); then
     _C_LABEL=$'\033[2m'      # [key] / the → bullets — structure, not content

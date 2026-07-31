@@ -111,8 +111,9 @@ cid settings -C ~/code/other     # another one
 The block is colour-coded when it goes to a terminal — key names in yellow, the
 values and rules you actually have to read in cyan, the surrounding explanation
 dimmed, and anything new since your last approval in red. Piped or redirected
-output is plain; `NO_COLOR=1` or `TERM=dumb` turns colour off, `CLICOLOR_FORCE=1`
-turns it on for a pipe.
+output is plain. Most explicit wins: `NO_COLOR=1` disables colour outright,
+`CLICOLOR_FORCE=1` enables it even through a pipe or under `TERM=dumb`, and with
+neither set `TERM=dumb` or a non-terminal target means plain text.
 
 ### `settings trust` / `settings untrust`
 
