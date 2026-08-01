@@ -50,7 +50,8 @@ bats:
 	fi
 
 # Run all bats unit tests. Install bats first with `make bats`.
-# CI: .github/workflows/test.yml (bats-core/bats-action)
+# CI: .github/workflows/test.yml, which pins bats 1.14.0 — apt/brew may hand you
+# an older one, so a green `make test` is not quite proof of a green CI.
 test:
 	@command -v bats >/dev/null 2>&1 || { \
 	  echo "bats not found. Install from https://bats-core.readthedocs.io/en/stable/installation.html"; \
