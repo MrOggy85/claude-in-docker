@@ -27,20 +27,25 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      # Pinned to a commit (3.0.0) rather than a mutable tag — same reasoning as
+      - uses: actions/checkout@v7
+      # Pinned to a commit (4.0.0) rather than a mutable tag — same reasoning as
       # the base image digest and the npm lockfile.
       #
-      # bats-version is set on purpose: left empty, the action resolves "latest"
-      # through an unauthenticated api.github.com call, which is rate-limited per
-      # runner IP and returns 403. That is what broke the master run.
+      # Everything this action touches goes through api.github.com, which is
+      # rate-limited to 60/hr per runner IP when unauthenticated — shared IPs, so
+      # a 403 there is what broke the master run. Two defences:
+      #   bats-version   pinned, so no "resolve latest" call happens at all
+      #   github-token   4.0.0 stopped passing the CI token itself, and it also
+      #                  moved the tarball download onto api.github.com, so the
+      #                  download needs the token to get the 1000/hr repo limit
       #
       # The four bats-* helper libraries are off: no test loads them (run.bats
       # defines its own assert_run_arg/refute_run_arg), and each one is another
-      # tarball fetch that can fail the same way.
-      - uses: bats-core/bats-action@2104b40bb7b6c2d5110b23a26b0bf265ab8027db
+      # api.github.com fetch that can fail the same way.
+      - uses: bats-core/bats-action@77d6fb60505b4d0d1d73e48bd035b55074bbfb43
         with:
           bats-version: '1.14.0'
+          github-token: ${{ github.token }}
           support-install: 'false'
           assert-install: 'false'
           detik-install: 'false'
@@ -51,7 +56,7 @@ jobs:
   shellcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Preinstalled on the ubuntu runner image; the fallback keeps the job
       # honest if that ever changes.
       - run: command -v shellcheck >/dev/null || { sudo apt-get update && sudo apt-get install -y shellcheck; }

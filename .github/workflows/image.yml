@@ -31,7 +31,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Dockerfile:135 COPYs it, but it is gitignored (it is the user's own file).
       # The make target is the one copy of "seed it from templates/".
