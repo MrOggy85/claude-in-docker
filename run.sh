@@ -271,62 +271,27 @@ case "${CLAUDE_DOCKER_BRIDGE:-}" in
     ;;
 esac
 
-# 3d. In-repo paths backed by named volumes — SECURE BY DEFAULT. Each path gets
-#     its own per-project volume mounted at that path INSIDE the repo bind mount,
-#     so it lives only in the container/volume and NOT on the host — keeping
-#     installed (untrusted) packages off the host disk while persisting them
-#     across runs. Nesting a volume over the bind mount is standard Docker (the
-#     deeper mount wins). A fresh volume is root-owned, so we chown it to the
-#     runtime UID once on creation (the entrypoint can't — no NET_ADMIN here).
+# 3d. In-repo paths backed by named volumes — SECURE BY DEFAULT: node_modules and
+#     pnpm's store live in per-project volumes, so installed (untrusted) packages
+#     stay off the host disk yet persist across runs. Everything — the automatic
+#     coverage, CLAUDE_VOLUME_PATHS, SKIP_CLAUDE_VOLUME_PATHS, volume creation, the
+#     per-run ownership pass, pnpm's store — lives in the script; it prints one
+#     `docker run` token per line. See it and docs/volume-backed-paths.md.
 #
-#     By default every package.json dir is covered (find-node-modules-paths.sh);
-#     non-JS projects just pay one cheap find. Add paths via CLAUDE_VOLUME_PATHS
-#     (comma-separated, repo-relative; "auto" re-triggers the scan). Opt out with
-#     SKIP_CLAUDE_VOLUME_PATHS set to any non-empty value.
-VOLUME_PATH_MOUNTS=()
-_seen_vol_paths=" "
-prepare_path_volume() {  # <repo-relative path>
-  local rel="$1" name target
-  case "$rel" in
-    /*|*..*|"~"*) echo ">> skipping volume path (must be repo-relative, no '..' or '~'): $rel" >&2; return ;;
-  esac
-  case "$_seen_vol_paths" in *" ${rel} "*) return ;; esac   # dedup (auto + explicit may overlap)
-  _seen_vol_paths+="${rel} "
-  # If the host already holds files here, the volume masks them in the container
-  # but the host copy persists — warn so the host can be kept clean.
-  if [ -n "$(ls -A "${PROJECT_DIR}/${rel}" 2>/dev/null)" ]; then
-    echo ">> WARNING: ${rel} already has contents on the host; the volume hides them in the container but the host copy remains — delete it to keep the host clean." >&2
-  fi
-  name="claude-vol-${SAFE_NAME:-repo}-$(path_hash "${PROJECT_DIR}/${rel}")"
-  target="${REPO_IN_CONTAINER}/${rel}"
-  if ! docker volume inspect "$name" >/dev/null 2>&1; then
-    docker volume create "$name" >/dev/null
-    docker run --rm --user 0:0 --entrypoint chown \
-      --volume "${name}:/v" "${IMAGE}" "$(id -u):$(id -g)" /v
-    echo ">> created path volume: ${name} -> ${target}" >&2
-  fi
-  VOLUME_PATH_MOUNTS+=(--volume "${name}:${target}")
-}
-expand_auto() {  # back ./node_modules for every package.json dir in the project
-  while IFS= read -r _p; do
-    [[ -n "$_p" ]] && prepare_path_volume "$_p"
-  done < <("${SCRIPT_DIR}/scripts/find-node-modules-paths.sh" "${PROJECT_DIR}")
-}
-if [[ -n "${SKIP_CLAUDE_VOLUME_PATHS:-}" ]]; then
-  echo ">> SKIP_CLAUDE_VOLUME_PATHS set — not isolating in-repo paths; node_modules etc. will land on the host" >&2
-else
-  expand_auto  # secure by default
-  # plus any user-specified extra paths
-  if [[ -n "${CLAUDE_VOLUME_PATHS:-}" ]]; then
-    IFS=',' read -r -a _vol_paths <<< "${CLAUDE_VOLUME_PATHS}"
-    for rel in ${_vol_paths[@]+"${_vol_paths[@]}"}; do
-      rel="${rel#"${rel%%[![:space:]]*}"}"; rel="${rel%"${rel##*[![:space:]]}"}"  # trim
-      rel="${rel#./}"; rel="${rel%/}"                                              # tidy ./ and trailing /
-      [[ -z "$rel" ]] && continue
-      if [[ "$rel" == "auto" ]]; then expand_auto; else prepare_path_volume "$rel"; fi
-    done
-  fi
-fi
+#     Command substitution, not process substitution: a failure in there must abort
+#     the run, not silently start a container with an unwritable volume.
+PATH_VOLUME_ARGS=()
+_path_volume_out="$(
+  PROJECT_DIR="${PROJECT_DIR}" \
+  REPO_IN_CONTAINER="${REPO_IN_CONTAINER}" \
+  IMAGE="${IMAGE}" \
+  CLAUDE_VOLUME_PATHS="${CLAUDE_VOLUME_PATHS:-}" \
+  SKIP_CLAUDE_VOLUME_PATHS="${SKIP_CLAUDE_VOLUME_PATHS:-}" \
+    "${SCRIPT_DIR}/scripts/path-volumes.sh"
+)"
+while IFS= read -r _tok; do
+  [[ -n "${_tok}" ]] && PATH_VOLUME_ARGS+=("${_tok}")
+done <<< "${_path_volume_out}"
 
 # 3e. Env vars from the config-dir `.env` via `docker --env-file`. A per-project
 #     projects/<key>/.env takes precedence; the config-initialized guard
@@ -388,7 +353,7 @@ docker run \
   --env CONTAINER_HOST_OUTBOUND_PORTS="${CONTAINER_HOST_OUTBOUND_PORTS}" \
   ${PUBLISH_ARGS[@]+"${PUBLISH_ARGS[@]}"} \
   --volume "${PROJECT_DIR}:${REPO_IN_CONTAINER}" \
-  ${VOLUME_PATH_MOUNTS[@]+"${VOLUME_PATH_MOUNTS[@]}"} \
+  ${PATH_VOLUME_ARGS[@]+"${PATH_VOLUME_ARGS[@]}"} \
   --volume "${VOLUME}:${HOME_IN_CONTAINER}/.claude" \
   ${RO_MOUNTS[@]+"${RO_MOUNTS[@]}"} \
   --workdir "${REPO_IN_CONTAINER}" \

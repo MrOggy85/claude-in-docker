@@ -64,14 +64,18 @@ case "\$1" in
     ;;
   volume)
     case "\$2" in
-      inspect) exit 1 ;;   # volume not found -> run.sh will create + chown it
+      # exit 1 = "not found", so run.sh creates the volume. Tests that need the
+      # already-exists path set STUB_VOLUME_EXISTS=1.
+      inspect) [[ -n "\${STUB_VOLUME_EXISTS:-}" ]] && exit 0 || exit 1 ;;
       create)  exit 0 ;;
     esac
     ;;
   run)
-    # The chown setup call (--entrypoint chown) fires when a new volume is
-    # created; just let it succeed silently.
-    if [[ "\$*" == *"--entrypoint chown"* ]]; then
+    # The ownership pass over the path volumes (--entrypoint sh) runs before the
+    # main container on every run; let it succeed silently. STUB_CHOWN_FAIL=1
+    # fails it instead, to assert run.sh aborts rather than starting a container.
+    if [[ "\$*" == *"--entrypoint sh"* ]]; then
+      [[ -n "\${STUB_CHOWN_FAIL:-}" ]] && exit 1
       exit 0
     fi
     # Main `docker run ... IMAGE claude [args]`: write one arg per line so
@@ -409,6 +413,60 @@ refute_run_arg() {
   # ...and no docker run arg contains a literal '~' (which would have become a
   # stray directory on the host via the bidirectional project bind mount).
   ! grep -qF '~' "${DOCKER_RUN_ARGS}"
+}
+
+# ---------------------------------------------------------------------------
+# Path volumes: the wiring to scripts/path-volumes.sh (that script's own
+# behaviour — coverage, dedup, rejects, the pnpm store — is in path-volumes.bats)
+# ---------------------------------------------------------------------------
+
+@test "path volumes: the script's tokens reach docker run" {
+  cd "${TEST_PROJECT_DIR}"
+  printf '{"name":"t"}\n' > package.json
+  : > pnpm-lock.yaml
+  run env \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  grep -q '^--volume=claude-vol-.*:/home/dev/repo/node_modules$' "${DOCKER_RUN_ARGS}"
+  assert_run_arg "--env=npm_config_store_dir=/home/dev/repo/node_modules/.pnpm-store"
+}
+
+@test "path volumes: ownership pass runs before the container, even if nothing was created" {
+  cd "${TEST_PROJECT_DIR}"
+  printf '{"name":"t"}\n' > package.json
+  run env \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    STUB_VOLUME_EXISTS=1 \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  ! grep -q '^volume create' "${DOCKER_ALL_CALLS}"
+  grep -q -- '--entrypoint sh' "${DOCKER_ALL_CALLS}"
+}
+
+@test "path volumes: a failure in the script aborts before the container starts" {
+  cd "${TEST_PROJECT_DIR}"
+  printf '{"name":"t"}\n' > package.json
+  run env \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    STUB_CHOWN_FAIL=1 \
+    bash "${RUN_SH}"
+  [ "$status" -ne 0 ]
+  # Command substitution, not process substitution: the failure must propagate.
+  [ ! -f "${DOCKER_RUN_ARGS}" ]
+}
+
+@test "SKIP_CLAUDE_VOLUME_PATHS: no path volumes and no store dir env" {
+  cd "${TEST_PROJECT_DIR}"
+  printf '{"name":"t"}\n' > package.json
+  : > pnpm-lock.yaml
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  ! grep -q 'npm_config_store_dir' "${DOCKER_RUN_ARGS}"
+  ! grep -q '^--volume=claude-vol-' "${DOCKER_RUN_ARGS}"
 }
 
 # ---------------------------------------------------------------------------
