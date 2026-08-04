@@ -64,14 +64,16 @@ case "\$1" in
     ;;
   volume)
     case "\$2" in
-      inspect) exit 1 ;;   # volume not found -> run.sh will create + chown it
+      # exit 1 = "not found", so run.sh creates the volume. Tests that need the
+      # already-exists path set STUB_VOLUME_EXISTS=1.
+      inspect) [[ -n "\${STUB_VOLUME_EXISTS:-}" ]] && exit 0 || exit 1 ;;
       create)  exit 0 ;;
     esac
     ;;
   run)
-    # The chown setup call (--entrypoint chown) fires when a new volume is
-    # created; just let it succeed silently.
-    if [[ "\$*" == *"--entrypoint chown"* ]]; then
+    # The ownership pass over the path volumes (--entrypoint sh) runs before the
+    # main container on every run; let it succeed silently.
+    if [[ "\$*" == *"--entrypoint sh"* ]]; then
       exit 0
     fi
     # Main `docker run ... IMAGE claude [args]`: write one arg per line so
@@ -409,6 +411,88 @@ refute_run_arg() {
   # ...and no docker run arg contains a literal '~' (which would have become a
   # stray directory on the host via the bidirectional project bind mount).
   ! grep -qF '~' "${DOCKER_RUN_ARGS}"
+}
+
+# ---------------------------------------------------------------------------
+# Path volumes: ownership is asserted on every run, not only at creation
+# ---------------------------------------------------------------------------
+
+@test "path volumes: ownership pass runs for a volume that already exists" {
+  cd "${TEST_PROJECT_DIR}"
+  printf '{"name":"t"}\n' > package.json
+  run env \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    STUB_VOLUME_EXISTS=1 \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  # Nothing was created (the volume was reported as existing)...
+  ! grep -q '^volume create' "${DOCKER_ALL_CALLS}"
+  # ...yet the chown container still ran: this is the interrupted-first-run fix.
+  grep -q -- '--entrypoint sh' "${DOCKER_ALL_CALLS}"
+}
+
+@test "path volumes: ownership pass is skipped when there are no path volumes" {
+  cd "${TEST_PROJECT_DIR}"   # no package.json, so nothing is backed
+  run env \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  ! grep -q -- '--entrypoint sh' "${DOCKER_ALL_CALLS}"
+}
+
+# ---------------------------------------------------------------------------
+# pnpm store: kept inside the root node_modules volume
+# ---------------------------------------------------------------------------
+
+@test "pnpm: store dir env points inside the root node_modules volume" {
+  cd "${TEST_PROJECT_DIR}"
+  printf '{"name":"t"}\n' > package.json
+  : > pnpm-lock.yaml
+  run env \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "npm_config_store_dir=/home/dev/repo/node_modules/.pnpm-store"
+}
+
+@test "pnpm workspace root without a package.json: root node_modules is still backed" {
+  cd "${TEST_PROJECT_DIR}"
+  : > pnpm-workspace.yaml
+  mkdir -p packages/a
+  printf '{"name":"a"}\n' > packages/a/package.json
+  run env \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  # The auto scan only finds packages/a; the pnpm files add the root.
+  grep -q ':/home/dev/repo/node_modules$' "${DOCKER_RUN_ARGS}"
+  grep -q ':/home/dev/repo/packages/a/node_modules$' "${DOCKER_RUN_ARGS}"
+  assert_run_arg "npm_config_store_dir=/home/dev/repo/node_modules/.pnpm-store"
+}
+
+@test "no root node_modules volume: no store dir env (it would land on the host)" {
+  cd "${TEST_PROJECT_DIR}"
+  mkdir -p packages/a
+  printf '{"name":"a"}\n' > packages/a/package.json   # nothing at the root
+  run env \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  ! grep -q 'npm_config_store_dir' "${DOCKER_RUN_ARGS}"
+}
+
+@test "SKIP_CLAUDE_VOLUME_PATHS: no store dir env, pnpm's own default applies" {
+  cd "${TEST_PROJECT_DIR}"
+  printf '{"name":"t"}\n' > package.json
+  : > pnpm-lock.yaml
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  ! grep -q 'npm_config_store_dir' "${DOCKER_RUN_ARGS}"
 }
 
 # ---------------------------------------------------------------------------

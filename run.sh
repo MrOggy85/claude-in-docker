@@ -276,14 +276,17 @@ esac
 #     so it lives only in the container/volume and NOT on the host — keeping
 #     installed (untrusted) packages off the host disk while persisting them
 #     across runs. Nesting a volume over the bind mount is standard Docker (the
-#     deeper mount wins). A fresh volume is root-owned, so we chown it to the
-#     runtime UID once on creation (the entrypoint can't — no NET_ADMIN here).
+#     deeper mount wins). Ownership is re-asserted every run (see the chown pass
+#     below the loop) and pnpm's store is pulled into the root volume.
 #
 #     By default every package.json dir is covered (find-node-modules-paths.sh);
 #     non-JS projects just pay one cheap find. Add paths via CLAUDE_VOLUME_PATHS
 #     (comma-separated, repo-relative; "auto" re-triggers the scan). Opt out with
 #     SKIP_CLAUDE_VOLUME_PATHS set to any non-empty value.
 VOLUME_PATH_MOUNTS=()
+CHOWN_MOUNTS=()
+PNPM_ENV_ARGS=()
+_vol_count=0
 _seen_vol_paths=" "
 prepare_path_volume() {  # <repo-relative path>
   local rel="$1" name target
@@ -301,11 +304,13 @@ prepare_path_volume() {  # <repo-relative path>
   target="${REPO_IN_CONTAINER}/${rel}"
   if ! docker volume inspect "$name" >/dev/null 2>&1; then
     docker volume create "$name" >/dev/null
-    docker run --rm --user 0:0 --entrypoint chown \
-      --volume "${name}:/v" "${IMAGE}" "$(id -u):$(id -g)" /v
     echo ">> created path volume: ${name} -> ${target}" >&2
   fi
   VOLUME_PATH_MOUNTS+=(--volume "${name}:${target}")
+  # Every volume also gets a slot in the ownership pass below — not just the ones
+  # created on this run.
+  CHOWN_MOUNTS+=(--volume "${name}:/v/${_vol_count}")
+  _vol_count=$((_vol_count + 1))
 }
 expand_auto() {  # back ./node_modules for every package.json dir in the project
   while IFS= read -r _p; do
@@ -316,6 +321,14 @@ if [[ -n "${SKIP_CLAUDE_VOLUME_PATHS:-}" ]]; then
   echo ">> SKIP_CLAUDE_VOLUME_PATHS set — not isolating in-repo paths; node_modules etc. will land on the host" >&2
 else
   expand_auto  # secure by default
+  # pnpm keeps its content-addressable store on the same filesystem as the project
+  # — with $HOME on another device it defaults to <repo>/.pnpm-store, i.e. ON THE
+  # HOST. Back the root node_modules (a pnpm workspace root need not carry a
+  # package.json, so the auto scan can miss it) so the store can live inside that
+  # volume; see the store_dir env below.
+  if [[ -f "${PROJECT_DIR}/pnpm-lock.yaml" || -f "${PROJECT_DIR}/pnpm-workspace.yaml" ]]; then
+    prepare_path_volume node_modules
+  fi
   # plus any user-specified extra paths
   if [[ -n "${CLAUDE_VOLUME_PATHS:-}" ]]; then
     IFS=',' read -r -a _vol_paths <<< "${CLAUDE_VOLUME_PATHS}"
@@ -326,6 +339,31 @@ else
       if [[ "$rel" == "auto" ]]; then expand_auto; else prepare_path_volume "$rel"; fi
     done
   fi
+  # pnpm store INSIDE the root node_modules volume: off the host, persisted across
+  # runs, and on the same filesystem as node_modules/.pnpm so pnpm hardlinks
+  # instead of copying (a hardlink can't cross two volumes). Only set when that
+  # volume exists, else the store would land on the host bind mount. npm-style env
+  # config, so npm and yarn accept and ignore the key. See docs/volume-backed-paths.md.
+  case "$_seen_vol_paths" in
+    *" node_modules "*)
+      PNPM_ENV_ARGS=(--env "npm_config_store_dir=${REPO_IN_CONTAINER}/node_modules/.pnpm-store") ;;
+  esac
+fi
+
+# A fresh volume is root-owned, so it is chowned to the runtime UID (the
+# entrypoint can't — no NET_ADMIN here). Asserted on EVERY run, not just at
+# creation: a run interrupted between `volume create` and the chown used to leave
+# a root-owned volume that the creation-time gate never revisited, so in-container
+# installs kept failing with EACCES. One batch container covers all paths and
+# chowns only what is not already ours. Single-user by design — the volume is
+# owned by whoever ran last; see docs/volume-backed-paths.md.
+if [[ "${_vol_count}" -gt 0 ]]; then
+  docker run --rm --user 0:0 --entrypoint sh \
+    --env "VOL_UID=$(id -u)" --env "VOL_GID=$(id -g)" \
+    ${CHOWN_MOUNTS[@]+"${CHOWN_MOUNTS[@]}"} \
+    "${IMAGE}" -c 'for d in /v/*; do
+      [ "$(stat -c %u "$d")" = "$VOL_UID" ] || chown -R "$VOL_UID:$VOL_GID" "$d"
+    done'
 fi
 
 # 3e. Env vars from the config-dir `.env` via `docker --env-file`. A per-project
@@ -382,6 +420,7 @@ docker run \
   --env HOME="${HOME_IN_CONTAINER}" \
   --env COLORTERM=truecolor \
   --env CLAUDE_HOST_PROJECT_DIR="${PROJECT_DIR}" \
+  ${PNPM_ENV_ARGS[@]+"${PNPM_ENV_ARGS[@]}"} \
   --env MCP_GH_BEARER \
   ${DOCKER_BRIDGE_ARGS[@]+"${DOCKER_BRIDGE_ARGS[@]}"} \
   --env CONTAINER_OPEN_PORTS="${CONTAINER_OPEN_PORTS}" \

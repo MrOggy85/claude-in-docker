@@ -14,10 +14,23 @@ exist only in the Docker volume, never in your project tree.
 
 - The volume name is derived per project and per path (`claude-vol-<dir>-<hash>`)
   and is **stable**, so packages persist across runs — no reinstall each session.
-- A fresh volume is root-owned; `run.sh` chowns it to your UID once on creation,
-  so the non-root container user can write to it.
+- A fresh volume is root-owned, so `run.sh` chowns it to your UID — on **every**
+  run, not only at creation, in one batch container that skips the volumes
+  already owned by you. Asserting it every time is what keeps a run interrupted
+  between `docker volume create` and the chown from leaving a permanently
+  root-owned volume, where in-container installs fail with `EACCES`. It costs one
+  short-lived container per run — the volume's mountpoint is not reachable from
+  the host on Docker Desktop, so ownership can only be checked from inside.
 - Nesting a volume over the repo bind mount is a standard Docker pattern. There
   is no mount conflict: the deeper, more-specific mount wins for that subtree.
+
+**Single-user assumption.** These volumes are designed for one host user. The
+volume name has no UID component, so a shared machine where two users run against
+the same project path would hand the volume back and forth — each run chowns it to
+whoever started it, and the other user's next run chowns it back. Ownership is
+never merged and never per-user. Same for the session volume and the per-project
+config dir. If you need multiple users on one host, give each their own
+`CLAUDE_DOCKER_CONFIG_DIR` and project checkout.
 
 ## Secure by default: every `node_modules` is covered
 
@@ -41,6 +54,48 @@ Notes:
 
 The detection lives in
 [`scripts/find-node-modules-paths.sh`](../scripts/find-node-modules-paths.sh).
+
+## pnpm
+
+pnpm needs one extra step, because it keeps two directories, not one:
+`node_modules/.pnpm` (the virtual store, inside the covered path) and a
+content-addressable store it **hardlinks** from. That store is placed on the same
+drive as the project, and in the container `$HOME` (image layer) and the repo
+(bind mount) are different devices — so pnpm's default lands at
+`<repo>/.pnpm-store`, on the host disk, which is precisely what this feature
+exists to prevent.
+
+So `run.sh` points the store inside the root `node_modules` volume:
+
+```
+npm_config_store_dir=/home/dev/repo/node_modules/.pnpm-store
+```
+
+That location is deliberate. It keeps the store off the host and persistent, and
+it puts the store on the same filesystem as `node_modules/.pnpm`, so pnpm can
+hardlink into place. A separate volume would not: two volumes are separate mounts,
+so `link()` between them fails with `EXDEV` and pnpm silently falls back to
+copying every package.
+
+Notes:
+- Set only when the root `node_modules` is volume-backed — otherwise the store
+  would be redirected onto the host bind mount, which is worse than the default.
+- Workspace packages need nothing special: each has a `package.json`, so the scan
+  already covers its `node_modules` (which pnpm fills with symlinks). A workspace
+  root, though, need not have a `package.json` at all, so the presence of
+  `pnpm-lock.yaml` or `pnpm-workspace.yaml` also forces the root `node_modules` to
+  be backed.
+- `npm_config_store_dir` is npm-style env config: npm and yarn accept the key and
+  ignore it, so it is inert for non-pnpm projects. Their own caches (`~/.npm`,
+  `~/.cache/yarn`) live in the container layer and are still discarded each run.
+- Deleting `node_modules` deletes the store with it; pnpm refetches. The store is
+  per project, not shared across projects — matching the isolation everything else
+  here assumes.
+- pnpm is not in the image. Install it per project via
+  `install_additional_packages.sh` (`npm i -g pnpm@<version>`) or corepack.
+
+With `SKIP_CLAUDE_VOLUME_PATHS` set none of this applies and pnpm's own default
+takes over, so `.pnpm-store` appears in your project tree on the host.
 
 ## Adding more paths — `CLAUDE_VOLUME_PATHS`
 
