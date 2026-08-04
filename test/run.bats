@@ -72,8 +72,10 @@ case "\$1" in
     ;;
   run)
     # The ownership pass over the path volumes (--entrypoint sh) runs before the
-    # main container on every run; let it succeed silently.
+    # main container on every run; let it succeed silently. STUB_CHOWN_FAIL=1
+    # fails it instead, to assert run.sh aborts rather than starting a container.
     if [[ "\$*" == *"--entrypoint sh"* ]]; then
+      [[ -n "\${STUB_CHOWN_FAIL:-}" ]] && exit 1
       exit 0
     fi
     # Main `docker run ... IMAGE claude [args]`: write one arg per line so
@@ -414,10 +416,24 @@ refute_run_arg() {
 }
 
 # ---------------------------------------------------------------------------
-# Path volumes: ownership is asserted on every run, not only at creation
+# Path volumes: the wiring to scripts/path-volumes.sh (that script's own
+# behaviour — coverage, dedup, rejects, the pnpm store — is in path-volumes.bats)
 # ---------------------------------------------------------------------------
 
-@test "path volumes: ownership pass runs for a volume that already exists" {
+@test "path volumes: the script's tokens reach docker run" {
+  cd "${TEST_PROJECT_DIR}"
+  printf '{"name":"t"}\n' > package.json
+  : > pnpm-lock.yaml
+  run env \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  grep -q '^--volume=claude-vol-.*:/home/dev/repo/node_modules$' "${DOCKER_RUN_ARGS}"
+  assert_run_arg "--env=npm_config_store_dir=/home/dev/repo/node_modules/.pnpm-store"
+}
+
+@test "path volumes: ownership pass runs before the container, even if nothing was created" {
   cd "${TEST_PROJECT_DIR}"
   printf '{"name":"t"}\n' > package.json
   run env \
@@ -426,73 +442,31 @@ refute_run_arg() {
     STUB_VOLUME_EXISTS=1 \
     bash "${RUN_SH}"
   [ "$status" -eq 0 ]
-  # Nothing was created (the volume was reported as existing)...
   ! grep -q '^volume create' "${DOCKER_ALL_CALLS}"
-  # ...yet the chown container still ran: this is the interrupted-first-run fix.
   grep -q -- '--entrypoint sh' "${DOCKER_ALL_CALLS}"
 }
 
-@test "path volumes: ownership pass is skipped when there are no path volumes" {
-  cd "${TEST_PROJECT_DIR}"   # no package.json, so nothing is backed
-  run env \
-    CLAUDE_AUTO_USAGE=0 \
-    MCP_GH_BEARER="" \
-    bash "${RUN_SH}"
-  [ "$status" -eq 0 ]
-  ! grep -q -- '--entrypoint sh' "${DOCKER_ALL_CALLS}"
-}
-
-# ---------------------------------------------------------------------------
-# pnpm store: kept inside the root node_modules volume
-# ---------------------------------------------------------------------------
-
-@test "pnpm: store dir env points inside the root node_modules volume" {
+@test "path volumes: a failure in the script aborts before the container starts" {
   cd "${TEST_PROJECT_DIR}"
   printf '{"name":"t"}\n' > package.json
-  : > pnpm-lock.yaml
   run env \
     CLAUDE_AUTO_USAGE=0 \
     MCP_GH_BEARER="" \
+    STUB_CHOWN_FAIL=1 \
     bash "${RUN_SH}"
-  [ "$status" -eq 0 ]
-  assert_run_arg "npm_config_store_dir=/home/dev/repo/node_modules/.pnpm-store"
+  [ "$status" -ne 0 ]
+  # Command substitution, not process substitution: the failure must propagate.
+  [ ! -f "${DOCKER_RUN_ARGS}" ]
 }
 
-@test "pnpm workspace root without a package.json: root node_modules is still backed" {
-  cd "${TEST_PROJECT_DIR}"
-  : > pnpm-workspace.yaml
-  mkdir -p packages/a
-  printf '{"name":"a"}\n' > packages/a/package.json
-  run env \
-    CLAUDE_AUTO_USAGE=0 \
-    MCP_GH_BEARER="" \
-    bash "${RUN_SH}"
-  [ "$status" -eq 0 ]
-  # The auto scan only finds packages/a; the pnpm files add the root.
-  grep -q ':/home/dev/repo/node_modules$' "${DOCKER_RUN_ARGS}"
-  grep -q ':/home/dev/repo/packages/a/node_modules$' "${DOCKER_RUN_ARGS}"
-  assert_run_arg "npm_config_store_dir=/home/dev/repo/node_modules/.pnpm-store"
-}
-
-@test "no root node_modules volume: no store dir env (it would land on the host)" {
-  cd "${TEST_PROJECT_DIR}"
-  mkdir -p packages/a
-  printf '{"name":"a"}\n' > packages/a/package.json   # nothing at the root
-  run env \
-    CLAUDE_AUTO_USAGE=0 \
-    MCP_GH_BEARER="" \
-    bash "${RUN_SH}"
-  [ "$status" -eq 0 ]
-  ! grep -q 'npm_config_store_dir' "${DOCKER_RUN_ARGS}"
-}
-
-@test "SKIP_CLAUDE_VOLUME_PATHS: no store dir env, pnpm's own default applies" {
+@test "SKIP_CLAUDE_VOLUME_PATHS: no path volumes and no store dir env" {
   cd "${TEST_PROJECT_DIR}"
   printf '{"name":"t"}\n' > package.json
   : > pnpm-lock.yaml
   run "${RUN_CMD[@]}"
   [ "$status" -eq 0 ]
   ! grep -q 'npm_config_store_dir' "${DOCKER_RUN_ARGS}"
+  ! grep -q '^--volume=claude-vol-' "${DOCKER_RUN_ARGS}"
 }
 
 # ---------------------------------------------------------------------------

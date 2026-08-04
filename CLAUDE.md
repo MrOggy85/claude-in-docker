@@ -60,6 +60,12 @@ sourced file, not in `run.sh`.
   `trusted-settings-rules.txt` (permission rules the settings guard must not
   flag), read per run.
 - `scripts/extra-mounts.sh` — turns `CLAUDE_MOUNTS` into `--volume` tokens.
+- `scripts/path-volumes.sh` — owns the volume-backed in-repo paths: the automatic
+  `node_modules` coverage (via `find-node-modules-paths.sh`), `CLAUDE_VOLUME_PATHS`,
+  volume creation, the per-run ownership pass, and pnpm's store. Prints one
+  `docker run` token per line (`--volume=`, plus one `--env=` for pnpm) and is
+  called by `run.sh` (step 3d) via command substitution, so a failure there aborts
+  the run. See docs/volume-backed-paths.md.
 - `scripts/scan-project-settings.sh` — classifies a project's
   `.claude/settings*.json` by capability (dependency-free: a literal key scan
   plus an awk JSON walk, both fail-closed). Backs both

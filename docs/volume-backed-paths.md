@@ -53,7 +53,9 @@ Notes:
   them inside the container, but the host copy remains until you delete it.
 
 The detection lives in
-[`scripts/find-node-modules-paths.sh`](../scripts/find-node-modules-paths.sh).
+[`scripts/find-node-modules-paths.sh`](../scripts/find-node-modules-paths.sh); it is
+driven by [`scripts/path-volumes.sh`](../scripts/path-volumes.sh), which owns
+everything on this page.
 
 ## pnpm
 
@@ -130,4 +132,8 @@ where the volume is mounted and sees `node_modules` normally. If you edit with a
 host GUI editor that relies on host-side LSP, you need `node_modules` on the host
 for type info — opt out with `SKIP_CLAUDE_VOLUME_PATHS=1`.
 
-The parsing and volume preparation live in `run.sh` (step 3d).
+The parsing and volume preparation live in
+[`scripts/path-volumes.sh`](../scripts/path-volumes.sh), called by `run.sh` at
+step 3d. It prints one `docker run` token per line — the `--volume=` mounts plus
+pnpm's `--env=` — and `run.sh` does nothing with them but pass them on. Run it
+standalone from a project dir to see exactly what a session will get.
