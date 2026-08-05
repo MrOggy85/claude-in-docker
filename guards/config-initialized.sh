@@ -13,9 +13,9 @@
 # `exit`s the whole run before any build, volume, or container work.
 
 if [[ ! -f "${CONFIG_DIR}/.env" ]]; then
-  echo "ERROR: no baseline config found in ${CONFIG_DIR}" >&2
-  echo "  (missing ${CONFIG_DIR}/.env)" >&2
-  echo "  This looks like a first-time setup. Run \`make init\` to create the" >&2
-  echo "  default config, then re-run." >&2
+  fail "no baseline config found in ${CONFIG_DIR}" \
+       "(missing ${CONFIG_DIR}/.env)" \
+       "This looks like a first-time setup. Run \`make init\` to create the" \
+       "default config, then re-run."
   exit 1
 fi

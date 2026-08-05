@@ -38,6 +38,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=paths.sh disable=SC1091
 source "${SCRIPT_DIR}/paths.sh"
+# The palette --render prints in; see the colour file for what each var means.
+# fd 1 because the block goes to stdout — the guard redirects it to its own
+# stderr, which is still the terminal, so it stays coloured there.
+# shellcheck source=colors.sh disable=SC1091
+source "${SCRIPT_DIR}/colors.sh"
+color_init 1
 
 # --render turns records (on stdin) into the human-readable block both the guard
 # and `cid settings` print. Kept here, next to the record format, so the two
@@ -75,36 +81,10 @@ if (( RENDER_ONLY )); then
   _NEW_MARK='   <-- new since your last approval'
   _since="${SCAN_SINCE_RECORDS:-}"
 
-  # Colour only when the output is a terminal — same test usage.sh:76 uses, so a
-  # piped or captured run (the guard's memo, the test suite) stays plain text.
-  # The guard redirects this to its own stderr, which is still the terminal.
-  #
-  # Precedence, most explicit first: NO_COLOR (no-color.org) is the user saying
-  # never, so it wins outright. CLICOLOR_FORCE is the user saying always, which
-  # beats a merely INFERRED inability to render — TERM=dumb is an ambient default
-  # on CI runners, not a considered choice, so it must not override an explicit
-  # request. Absent both, fall back to what the terminal says it can do.
-  if   [[ -n "${NO_COLOR:-}" ]];       then _use_color=0
-  elif [[ -n "${CLICOLOR_FORCE:-}" ]]; then _use_color=1
-  elif [[ "${TERM:-}" == "dumb" ]];    then _use_color=0
-  elif [[ -t 1 ]];                     then _use_color=1
-  else                                      _use_color=0
-  fi
-  if (( _use_color )); then
-    _C_LABEL=$'\033[2m'      # [key] / the → bullets — structure, not content
-    _C_KEY=$'\033[1;33m'     # the key name: this is the thing granting something
-    _C_WHY=$'\033[2m'        # why it matters — read once, then skip
-    _C_ITEM=$'\033[36m'      # the value / rule itself: what you actually vet
-    _C_NEW=$'\033[1;31m'     # changed since you approved — look here first
-    _C_OFF=$'\033[0m'
-  else
-    _C_LABEL='' _C_KEY='' _C_WHY='' _C_ITEM='' _C_NEW='' _C_OFF=''
-  fi
-
   _mark() {  # <type> <subject>
     [[ -n "${_since}" ]] || return 0
     case "${_since}" in *"$1"$'\t'"$2"$'\t'*) return 0 ;; esac
-    printf '%s%s%s' "${_C_NEW}" "${_NEW_MARK}" "${_C_OFF}"
+    printf '%s%s%s' "${C_ALERT}" "${_NEW_MARK}" "${C_OFF}"
   }
 
   _records=()
@@ -117,15 +97,15 @@ if (( RENDER_ONLY )); then
   _block() {  # <heading> <subheading>
     _blocks_printed=$(( ${_blocks_printed:-0} + 1 ))
     (( _blocks_printed > 1 )) && printf '\n'
-    printf '  %s[key]%s  %s%s%s\n' "${_C_LABEL}" "${_C_OFF}" "${_C_KEY}" "$1" "${_C_OFF}"
-    printf '         %s%s%s\n' "${_C_WHY}" "$2" "${_C_OFF}"
+    printf '  %s[key]%s  %s%s%s\n' "${C_DIM}" "${C_OFF}" "${C_KEY}" "$1" "${C_OFF}"
+    printf '         %s%s%s\n' "${C_DIM}" "$2" "${C_OFF}"
   }
 
   # One flagged item under the current block, plus its reason when it has one.
   _item() {  # <subject> <mark> [reason]
     printf '         %s→%s %s%s%s%s\n' \
-      "${_C_LABEL}" "${_C_OFF}" "${_C_ITEM}" "$1" "${_C_OFF}" "$2"
-    [[ -n "${3:-}" ]] && printf '             %s%s%s\n' "${_C_WHY}" "$3" "${_C_OFF}"
+      "${C_DIM}" "${C_OFF}" "${C_VALUE}" "$1" "${C_OFF}" "$2"
+    [[ -n "${3:-}" ]] && printf '             %s%s%s\n' "${C_DIM}" "$3" "${C_OFF}"
     return 0
   }
 

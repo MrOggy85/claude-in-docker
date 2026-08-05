@@ -29,6 +29,10 @@ set -euo pipefail
 IMAGE="claude-code:local"
 ARCHIVE="${CLAUDE_USAGE_DIR:-${HOME}/.claude-docker-usage}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# say/kv/ok/fail and the palette; see scripts/colors.sh.
+# shellcheck source=scripts/colors.sh disable=SC1091
+source "${SCRIPT_DIR}/scripts/colors.sh"
+color_init 1
 
 # run.sh names session volumes claude-*. Docker's name filter matches substrings
 # anywhere, so anchor the prefix with grep to exclude unrelated volumes (e.g.
@@ -38,11 +42,11 @@ while IFS= read -r v; do
   [ -n "$v" ] && VOLUMES+=("$v")
 done < <(docker volume ls --quiet | grep '^claude-' || true)
 if [ "${#VOLUMES[@]}" -eq 0 ]; then
-  echo "No claude-* session volumes found — run a session via ./run.sh first." >&2
+  fail "no claude-* session volumes found" "Run a session via ./run.sh first."
   exit 1
 fi
 
-echo ">> Collecting transcripts from ${#VOLUMES[@]} session volume(s) into ${ARCHIVE}"
+kv "collecting transcripts from ${#VOLUMES[@]} session volume(s)" "${ARCHIVE}"
 for v in "${VOLUMES[@]}"; do
   # Recover the project name from claude-<name>-<hash> (trim the prefix and the
   # trailing -<hash>). Fall back to the full name for volumes not matching (e.g.
@@ -55,7 +59,7 @@ for v in "${VOLUMES[@]}"; do
   IMAGE="${IMAGE}" "${SCRIPT_DIR}/sync-volume.sh" "${v}" "${PROJ}" "${ARCHIVE}"
 done
 
-echo ">> Running ccusage over ${ARCHIVE}"
+kv "running ccusage" "${ARCHIVE}"
 # ccusage's only network use is fetching the LiteLLM pricing table (it never
 # uploads your data). --offline serves it from the bundled snapshot, so by
 # default we run fully offline with --network none. Set CLAUDE_USAGE_ONLINE=1 to

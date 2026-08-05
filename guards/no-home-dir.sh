@@ -7,9 +7,9 @@
 # caller and `exit`s the whole run on violation.
 
 if [[ "${PROJECT_DIR}" == "${HOME}" ]]; then
-  echo "ERROR: Running claude-in-docker from your home directory is not allowed." >&2
-  echo "  This would mount your entire home directory into the container," >&2
-  echo "  defeating the purpose of the sandboxed environment." >&2
-  echo "  Please cd into a project subdirectory first." >&2
+  fail "Running claude-in-docker from your home directory is not allowed." \
+       "This would mount your entire home directory into the container," \
+       "defeating the purpose of the sandboxed environment." \
+       "Please cd into a project subdirectory first."
   exit 1
 fi

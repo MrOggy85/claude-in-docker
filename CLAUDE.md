@@ -34,6 +34,12 @@ sourced file, not in `run.sh`.
 - `scripts/paths.sh` — sourced helper: `config_dir()`, `projects_dir()`,
   `path_hash()`, `safe_name()`, `project_key()`. Change config-location or
   key-derivation logic here, never inline.
+- `scripts/colors.sh` — sourced helper owning terminal colour: the
+  NO_COLOR/CLICOLOR_FORCE/TERM/tty precedence (`color_init <info-fd>`, decided
+  per stream) and the emitters every run-time message goes through
+  (`say`/`kv`/`ok` on the info fd, `warn`/`fail`/`cont` on stderr). Change how a
+  message looks here, never at the call site. `init-firewall.sh` carries the one
+  deliberate copy — it runs inside the image, where this file does not exist.
 - `cid` — the config CLI. Read-only viewers (`list` / `show` / `project` /
   `domains` / `containers` / `settings` / `env`) plus in-place allowlist editing
   (`domains add|rm <host>`, `containers add|rm <name>`,

@@ -24,6 +24,12 @@ PROJECT_DIR="$(pwd)"
 source "${SCRIPT_DIR}/scripts/paths.sh"
 CONFIG_DIR="$(config_dir)"
 
+# Every message below — and in the guards, which are sourced into this scope —
+# goes through the emitters in scripts/colors.sh: say/kv/ok on stdout,
+# warn/fail on stderr. See that file for the grammar and the palette.
+source "${SCRIPT_DIR}/scripts/colors.sh"
+color_init 1
+
 # Refuse to run against an un-initialized config dir (points first-timers at
 # `make init`). Sourced so it can `exit`. See the guard file.
 source "${SCRIPT_DIR}/guards/config-initialized.sh"
@@ -62,8 +68,9 @@ CURRENT_HASH="$(context_hash)"
 BASE_IMAGE_HASH="$(docker image inspect "${BASE_IMAGE}" --format '{{index .Config.Labels "build.context-hash"}}' 2>/dev/null || true)"
 
 if [[ "$BASE_IMAGE_HASH" != "$CURRENT_HASH" ]]; then
-  [[ -n "$BASE_IMAGE_HASH" ]] && echo ">> Build context changed — rebuilding ${BASE_IMAGE}..." \
-                              || echo ">> Building ${BASE_IMAGE}..."
+  if [[ -n "$BASE_IMAGE_HASH" ]]; then kv "rebuilding — build context changed" "${BASE_IMAGE}"
+  else                                 kv "building" "${BASE_IMAGE}"
+  fi
   docker build \
     --tag "${BASE_IMAGE}" \
     --label "build.context-hash=${CURRENT_HASH}" \
@@ -79,14 +86,14 @@ fi
 #    path_hash()/safe_name() come from scripts/paths.sh.
 SAFE_NAME="$(safe_name "${PROJECT_DIR}")"
 VOLUME="${CLAUDE_VOLUME:-claude-${SAFE_NAME:-repo}-$(path_hash "${PROJECT_DIR}")}"
-echo ">> session volume: ${VOLUME}  (docker volume inspect ${VOLUME})"
+kv "session volume" "${VOLUME}" "docker volume inspect ${VOLUME}"
 
 # 2b. Container name: readable base + random suffix, so several sessions can run
 #     in the same folder against the SAME shared volume without colliding on
 #     --name (decoupled from VOLUME). Throwaway since --rm. Two $RANDOM give 30
 #     bits, ample for concurrent containers. Override with CLAUDE_CONTAINER_NAME.
 CONTAINER_NAME="${CLAUDE_CONTAINER_NAME:-claude-${SAFE_NAME:-repo}-$(printf '%04x%04x' "${RANDOM}" "${RANDOM}")}"
-echo ">> container name: ${CONTAINER_NAME}"
+kv "container name" "${CONTAINER_NAME}"
 
 # 2c. Per-project config dir: <config-dir>/projects/<safe-name>-<path-hash>/.
 #     Files here override root-level defaults file-by-file (more specific wins);
@@ -99,9 +106,9 @@ PROJECTS_DIR="$(projects_dir)"
 PROJECT_CONFIG_DIR="${PROJECTS_DIR}/${PROJECT_KEY}"
 if [[ ! -d "${PROJECT_CONFIG_DIR}" ]]; then
   mkdir -p "${PROJECT_CONFIG_DIR}"
-  echo ">> created per-project config dir: ${PROJECT_CONFIG_DIR}"
+  kv "created per-project config dir" "${PROJECT_CONFIG_DIR}"
 else
-  echo ">> per-project config dir: ${PROJECT_CONFIG_DIR}"
+  kv "per-project config dir" "${PROJECT_CONFIG_DIR}"
 fi
 # Seed per FILE, not per directory: a guard may already have written into this
 # dir (guards/project-settings.sh records its approval there) before we get here.
@@ -154,8 +161,9 @@ if [[ -f "${_PROJECT_INSTALL}" ]] && grep -qvE '^[[:space:]]*(#.*)?$' "${_PROJEC
   )"
   DERIVED_IMAGE_HASH="$(docker image inspect "${DERIVED_IMAGE}" --format '{{index .Config.Labels "build.context-hash"}}' 2>/dev/null || true)"
   if [[ "${DERIVED_IMAGE_HASH}" != "${DERIVED_HASH}" ]]; then
-    [[ -n "${DERIVED_IMAGE_HASH}" ]] && echo ">> project install script changed — rebuilding ${DERIVED_IMAGE}..." \
-                                      || echo ">> building per-project image ${DERIVED_IMAGE}..."
+    if [[ -n "${DERIVED_IMAGE_HASH}" ]]; then kv "rebuilding — project install script changed" "${DERIVED_IMAGE}"
+    else                                      kv "building per-project image" "${DERIVED_IMAGE}"
+    fi
     docker build \
       --tag "${DERIVED_IMAGE}" \
       --label "build.context-hash=${DERIVED_HASH}" \
@@ -169,18 +177,18 @@ RUN chmod +x /usr/local/bin/project-install.sh \\
 DOCKERFILE
   fi
   IMAGE="${DERIVED_IMAGE}"
-  echo ">> per-project image: ${IMAGE}"
+  kv "per-project image" "${IMAGE}"
 fi
 
 # 3. Config mounts, added only if the host path exists.
 RO_MOUNTS=()
 add_ro_mount() {  # <host_path> <container_path>
   if [ -e "$1" ]; then RO_MOUNTS+=(--volume "$1:$2:ro")
-  else echo ">> skipping (not found on host): $1" >&2; fi
+  else kv "skipping (not found on host)" "$1"; fi
 }
 add_rw_mount() {  # <host_path> <container_path>
   if [ -e "$1" ]; then RO_MOUNTS+=(--volume "$1:$2")
-  else echo ">> skipping (not found on host): $1" >&2; fi
+  else kv "skipping (not found on host)" "$1"; fi
 }
 # --- harmless config to share (edit as needed) ---
 # Each file lives in the config dir, seeded by `make init`, mounted only if
@@ -202,12 +210,12 @@ add_ro_mount "${CONFIG_DIR}/.gitignore_global" "${HOME_IN_CONTAINER}/.config/git
 #     container env. See docs/mcp-servers.md.
 MCP_FILE="$(resolve_config_file mcp-servers.json)"
 if [[ ! -f "${MCP_FILE}" ]]; then
-  echo "ERROR: no mcp-servers.json found in ${PROJECT_CONFIG_DIR} or ${CONFIG_DIR}" >&2
-  echo "  Run \`make init\` to seed the baseline one, then re-run." >&2
+  fail "no mcp-servers.json found in ${PROJECT_CONFIG_DIR} or ${CONFIG_DIR}" \
+       "Run \`make init\` to seed the baseline one, then re-run."
   exit 1
 fi
 add_ro_mount "${MCP_FILE}" "${HOME_IN_CONTAINER}/.mcp-servers.json"
-echo ">> mcp config: ${MCP_FILE}"
+kv "mcp config" "${MCP_FILE}"
 
 # 3b. Extra project mounts. scripts/extra-mounts.sh turns CLAUDE_MOUNTS (comma-
 #     separated host folders) into `--volume=...` tokens; see it for the syntax
@@ -261,13 +269,13 @@ case "${CLAUDE_DOCKER_BRIDGE:-}" in
       # 32 random bytes, hex. od+/dev/urandom rather than openssl: no extra dep.
       od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > "${_DB_TOKEN_FILE}"
       chmod 600 "${_DB_TOKEN_FILE}"
-      echo ">> minted docker bridge token: ${_DB_TOKEN_FILE}"
+      kv "minted docker bridge token" "${_DB_TOKEN_FILE}"
     fi
     DOCKER_BRIDGE_TOKEN="$(cat "${_DB_TOKEN_FILE}")"
     export DOCKER_BRIDGE_TOKEN
     DOCKER_BRIDGE_ARGS=(--env DOCKER_BRIDGE_TOKEN)
     CONTAINER_HOST_OUTBOUND_PORTS+=",${_DB_PORT}"
-    echo ">> docker bridge: read-only docker via host.docker.internal:${_DB_PORT}"
+    kv "docker bridge" "read-only docker via host.docker.internal:${_DB_PORT}"
     ;;
 esac
 
@@ -299,7 +307,7 @@ done <<< "${_path_volume_out}"
 #     may be empty). Emitted before the explicit `--env` flags so it can't
 #     clobber them (last duplicate wins). See docs/passing-env-vars.md.
 ENV_FILE="$(resolve_config_file .env)"
-echo ">> env file: ${ENV_FILE}"
+kv "env file" "${ENV_FILE}"
 
 # 3f. Centralized egress proxy — the sole egress path. The container joins the
 #     shared Squid network (proxy/up.sh); its HTTP(S)_PROXY points at Squid with
@@ -311,7 +319,7 @@ EGRESS_PROXY_NAME="${CLAUDE_EGRESS_PROXY_NAME:-claude-egress-proxy}"
 PROXY_URL="http://${PROJECT_KEY}:x@squid:3128"
 # Bring the shared proxy up if it isn't already running (up.sh is idempotent).
 if [[ "$(docker container inspect -f '{{.State.Running}}' "${EGRESS_PROXY_NAME}" 2>/dev/null || true)" != "true" ]]; then
-  echo ">> egress proxy '${EGRESS_PROXY_NAME}' not running — starting it"
+  kv "starting egress proxy (not running)" "${EGRESS_PROXY_NAME}"
   # Forward config/projects locations so the proxy reads the SAME baseline
   # allowlist and per-project dirs that run.sh mounts from.
   CLAUDE_EGRESS_NETWORK="${EGRESS_NETWORK}" \
@@ -328,7 +336,7 @@ PROXY_ENV_ARGS=(
   --env "no_proxy=localhost,127.0.0.1,::1,host.docker.internal"
   --env "EGRESS_PROXY_HOST=squid"
 )
-echo ">> egress via central proxy: network ${EGRESS_NETWORK}, project key ${PROJECT_KEY}"
+kv "egress via central proxy" "network ${EGRESS_NETWORK}, project key ${PROJECT_KEY}"
 
 # 4. Run as your host UID:GID; HOME forced so "~" resolves for the passwd-less
 #    UID. NET_ADMIN is needed for the nftables egress-lock, only exercisable via
@@ -369,7 +377,7 @@ case "${CLAUDE_AUTO_USAGE:-1}" in 0|false|no|off|FALSE|NO|OFF) AUTO_USAGE=0 ;; *
 if [[ "${AUTO_USAGE}" == "1" ]]; then
   ARCHIVE="${CLAUDE_USAGE_DIR:-${HOME}/.claude-docker-usage}"
   if ! IMAGE="${IMAGE}" "${SCRIPT_DIR}/sync-volume.sh" "${VOLUME}" "${SAFE_NAME:-repo}" "${ARCHIVE}"; then
-    echo ">> WARNING: usage sync failed — run ${SCRIPT_DIR}/usage.sh to retry" >&2
+    warn "usage sync failed" "Run ${SCRIPT_DIR}/usage.sh to retry."
   fi
 fi
 

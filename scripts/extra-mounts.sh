@@ -19,6 +19,13 @@
 # skipped with a warning, as are entries that don't exist on the host.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Messages go to stderr (stdout is the token stream), so colour is decided from
+# fd 2 — see the colour file for the emitters and the palette.
+# shellcheck source=colors.sh disable=SC1091
+source "${SCRIPT_DIR}/colors.sh"
+color_init 2
+
 [[ -z "${CLAUDE_MOUNTS:-}" ]] && exit 0
 
 PROJECT_DIR="${PROJECT_DIR:-$PWD}"
@@ -48,7 +55,7 @@ for entry in ${ENTRIES[@]+"${ENTRIES[@]}"}; do
     *)     entry="${PROJECT_DIR}/${entry}" ;;
   esac
   if [[ ! -e "$entry" ]]; then
-    echo ">> skipping extra mount (not found on host): $entry" >&2; continue
+    kv "skipping extra mount (not found on host)" "$entry"; continue
   fi
   # canonicalise without relying on realpath (absent on stock macOS)
   if [[ -d "$entry" ]]; then host="$(cd "$entry" && pwd)"
@@ -56,9 +63,9 @@ for entry in ${ENTRIES[@]+"${ENTRIES[@]}"}; do
   base="$(basename "$host")"
   target="${HOME_IN_CONTAINER}/${base}"
   if [[ "$USED_TARGETS" == *" ${target} "* ]]; then
-    echo ">> skipping extra mount (target ${target} already in use): $host" >&2; continue
+    kv "skipping extra mount (target ${target} already in use)" "$host"; continue
   fi
   USED_TARGETS+="${target} "
-  echo ">> extra mount (${mode}): ${host} -> ${target}" >&2
+  kv "extra mount (${mode})" "${host} -> ${target}"
   printf -- '--volume=%s:%s:%s\n' "$host" "$target" "$mode"
 done

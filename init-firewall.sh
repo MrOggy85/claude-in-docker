@@ -15,7 +15,18 @@
 # upstream names). See docs/egress-proxy.md.
 set -euo pipefail
 
-log() { echo "[firewall] $*" >&2; }
+# Palette, deliberately inlined rather than sourced from scripts/colors.sh (the
+# authoritative one): this runs as root inside the image, which COPYs only its
+# own files, and sudo strips the NO_COLOR/CLICOLOR_FORCE/TERM environment that
+# file's precedence reads — only the tty test survives here. Keep the two in sync.
+if [[ -t 2 ]]; then _CD=$'\033[2m' _CV=$'\033[36m' _CW=$'\033[33m' _CE=$'\033[1;31m' _CO=$'\033[0m'
+else                _CD='' _CV='' _CW='' _CE='' _CO=''
+fi
+log()   { printf '%s %s\n'    "${_CD}[firewall]${_CO}" "$*" >&2; }
+# "<label>: <value>", value in cyan — the port/host the rule was written for.
+logkv() { printf '%s %s: %s\n' "${_CD}[firewall]${_CO}" "$1" "${_CV}$2${_CO}" >&2; }
+warn()  { printf '%s %s %s\n' "${_CD}[firewall]${_CO}" "${_CW}WARNING:${_CO}" "$*" >&2; }
+fail()  { printf '%s %s %s\n' "${_CD}[firewall]${_CO}" "${_CE}ERROR:${_CO}" "$*" >&2; }
 
 # Comma-separated "<port>/<proto>" list of inbound ports to accept, from
 # CLAUDE_PORTS via run.sh / entrypoint.sh. Optional; empty when unset.
@@ -46,7 +57,7 @@ PROXY_IP6="$(getent ahostsv6 "$PROXY_HOST" 2>/dev/null | awk '{print $1; exit}' 
 if [[ -z "$PROXY_IP" && -z "$PROXY_IP6" ]]; then
   # Fail closed: with no proxy reachable and a drop policy, the container simply
   # has no egress — better than silently widening access.
-  log "FATAL: egress proxy '$PROXY_HOST' did not resolve — no outbound access"
+  fail "egress proxy '$PROXY_HOST' did not resolve — no outbound access"
   exit 1
 fi
 
@@ -64,7 +75,7 @@ HOST_RULES=""
 if [[ -n "$HOST_OUTBOUND_PORTS" ]]; then
   HOST_IP="$(getent ahostsv4 host.docker.internal 2>/dev/null | awk '{print $1; exit}' || true)"
   if [[ -z "$HOST_IP" ]]; then
-    log "warn: host.docker.internal did not resolve — host services unreachable from container"
+    warn "host.docker.internal did not resolve — host services unreachable from container"
   else
     IFS=',' read -r -a _hports <<< "$HOST_OUTBOUND_PORTS"
     for pp in ${_hports[@]+"${_hports[@]}"}; do
@@ -72,11 +83,11 @@ if [[ -n "$HOST_OUTBOUND_PORTS" ]]; then
       [[ -z "$pp" ]] && continue
       port="${pp%%/*}"; proto="tcp"; [[ "$pp" == */* ]] && proto="${pp##*/}"
       if [[ ! "$port" =~ ^[0-9]+$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
-        log "warn: ignoring invalid host-outbound port spec '$pp'"; continue
+        warn "ignoring invalid host-outbound port spec '$pp'"; continue
       fi
-      case "$proto" in tcp|udp) ;; *) log "warn: ignoring invalid proto in '$pp'"; continue ;; esac
+      case "$proto" in tcp|udp) ;; *) warn "ignoring invalid proto in '$pp'"; continue ;; esac
       HOST_RULES+="        ip daddr ${HOST_IP} ${proto} dport ${port} accept"$'\n'
-      log "allow host egress: ${HOST_IP}:${port}/${proto}"
+      logkv "allow host egress" "${HOST_IP}:${port}/${proto}"
     done
   fi
 fi
@@ -90,11 +101,11 @@ if [[ -n "$OPEN_PORTS" ]]; then
   for pp in ${_ports[@]+"${_ports[@]}"}; do
     port="${pp%%/*}"; proto="${pp##*/}"
     if [[ ! "$port" =~ ^[0-9]+$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
-      log "warn: ignoring invalid port spec '$pp'"; continue
+      warn "ignoring invalid port spec '$pp'"; continue
     fi
-    case "$proto" in tcp|udp) ;; *) log "warn: ignoring invalid proto in '$pp'"; continue ;; esac
+    case "$proto" in tcp|udp) ;; *) warn "ignoring invalid proto in '$pp'"; continue ;; esac
     INPUT_RULES+="        ${proto} dport ${port} accept"$'\n'
-    log "open inbound: ${port}/${proto}"
+    logkv "open inbound" "${port}/${proto}"
   done
 fi
 
@@ -139,5 +150,5 @@ ${PROXY_RULES}${HOST_RULES}
 }
 NFT_EOF
 
-log "proxy egress: ${PROXY_HOST} (${PROXY_IP:-–}${PROXY_IP6:+, [${PROXY_IP6}]}):${PROXY_PORT} — all other egress denied"
+logkv "proxy egress" "${PROXY_HOST} (${PROXY_IP:-–}${PROXY_IP6:+, [${PROXY_IP6}]}):${PROXY_PORT} — all other egress denied"
 log "ready"
