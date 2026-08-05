@@ -12,7 +12,7 @@
 
 if [[ -n "${MCP_GH_BEARER:-}" ]]; then
   if ! command -v curl >/dev/null 2>&1; then
-    echo ">> WARNING: curl not found; skipping GitHub token write-access check." >&2
+    warn "curl not found; skipping GitHub token write-access check."
   else
     _gh_headers=$(curl -sI \
       -H "Authorization: Bearer ${MCP_GH_BEARER}" \
@@ -21,8 +21,8 @@ if [[ -n "${MCP_GH_BEARER:-}" ]]; then
     _gh_status=$(printf '%s' "$_gh_headers" | grep -m1 -i '^HTTP/' | awk '{print $2}' | tr -d '\r') || true
     case "${_gh_status}" in
       401)
-        echo "ERROR: GitHub token (MCP_GH_BEARER) is invalid (401 Unauthorized)." >&2
-        echo "  Check your token and try again." >&2
+        fail "GitHub token (MCP_GH_BEARER) is invalid (401 Unauthorized)." \
+             "Check your token and try again."
         exit 1
         ;;
       2*)
@@ -43,11 +43,11 @@ if [[ -n "${MCP_GH_BEARER:-}" ]]; then
             fi
           done
           if [[ -n "$_bad_scope" ]]; then
-            echo "ERROR: GitHub token (MCP_GH_BEARER) has write scope '${_bad_scope}'." >&2
-            echo "  The container forbids code-push access. Replace it with a" >&2
-            echo "  fine-grained PAT whose Contents permission is Read-only" >&2
-            echo "  (Issues / Pull requests write is fine)." >&2
-            echo "  See docs/mcp-servers.md for details." >&2
+            fail "GitHub token (MCP_GH_BEARER) has write scope '${_bad_scope}'." \
+                 "The container forbids code-push access. Replace it with a" \
+                 "fine-grained PAT whose Contents permission is Read-only" \
+                 "(Issues / Pull requests write is fine)." \
+                 "See docs/mcp-servers.md for details."
             exit 1
           fi
         else
@@ -60,21 +60,21 @@ if [[ -n "${MCP_GH_BEARER:-}" ]]; then
             "https://api.github.com/user/repos?type=all&per_page=100&affiliation=owner,collaborator,organization_member" \
             2>/dev/null) || true
           if printf '%s' "$_gh_repos" | grep -q '"push": true'; then
-            echo "ERROR: GitHub token (MCP_GH_BEARER) has code-push (Contents:write) access to one or more repositories." >&2
-            echo "  The container forbids code-push access. Set the token's" >&2
-            echo "  Contents permission to Read-only (Issues / Pull requests" >&2
-            echo "  write is fine)." >&2
-            echo "  See docs/mcp-servers.md for details." >&2
+            fail "GitHub token (MCP_GH_BEARER) has code-push (Contents:write) access to one or more repositories." \
+                 "The container forbids code-push access. Set the token's" \
+                 "Contents permission to Read-only (Issues / Pull requests" \
+                 "write is fine)." \
+                 "See docs/mcp-servers.md for details."
             exit 1
           fi
         fi
-        echo ">> GitHub token (MCP_GH_BEARER) verified: no code-push (Contents:write) access."
+        ok "GitHub token (MCP_GH_BEARER) verified: no code-push (Contents:write) access."
         ;;
       "")
-        echo ">> WARNING: Could not reach GitHub API — skipping token read-only check." >&2
+        warn "Could not reach GitHub API — skipping token read-only check."
         ;;
       *)
-        echo ">> WARNING: GitHub API returned HTTP ${_gh_status} — skipping token read-only check." >&2
+        warn "GitHub API returned HTTP ${_gh_status} — skipping token read-only check."
         ;;
     esac
   fi

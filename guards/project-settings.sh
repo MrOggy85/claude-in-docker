@@ -59,9 +59,10 @@ _ps_sha() {  # <string>
 }
 
 _ps_abort() {
-  echo "Aborted; remove/vet the file(s), trust individual rules with" >&2
-  echo "  cid settings trust '<rule>'" >&2
-  echo "or set CLAUDE_ALLOW_PROJECT_SETTINGS=1 to override." >&2
+  fail "aborted — project settings not approved." \
+       "Remove/vet the file(s), or trust individual rules with:" \
+       "  cid settings trust '<rule>'" \
+       "Or set CLAUDE_ALLOW_PROJECT_SETTINGS=1 to override."
   exit 1
 }
 
@@ -83,8 +84,8 @@ case "${CLAUDE_ALLOW_PROJECT_SETTINGS:-}" in
 
       if (( _ps_strict )); then
         # Audit path: the whole file, every time, no memo.
-        echo "WARNING: project-level Claude settings detected (STRICT mode):" >&2
-        for _f in "${_found_settings[@]}"; do echo "  - ${_f}" >&2; done
+        warn "project-level Claude settings detected (STRICT mode):"
+        for _f in "${_found_settings[@]}"; do cont "- ${_f}"; done
         if _ask_yn 'View the file(s)? [y/n] '; then
           for _f in "${_found_settings[@]}"; do
             echo "===== ${_f} =====" >&2
@@ -104,7 +105,7 @@ case "${CLAUDE_ALLOW_PROJECT_SETTINGS:-}" in
         _ps_summary="$(printf '%s\n' "${_ps_scan}" | awk -F'\t' '$1=="OK" {n+=$2} END {print n+0}')"
 
         if [[ -z "${_ps_flagged}" ]]; then
-          echo ">> project settings: ${#_found_settings[@]} file(s), ${_ps_summary} allow rule(s), nothing flagged (cid settings)"
+          ok "project settings: ${#_found_settings[@]} file(s), ${_ps_summary} allow rule(s), nothing flagged" "cid settings"
         else
           _ps_memo="$(projects_dir)/$(project_key "${PROJECT_DIR}")/approved-project-settings"
           # Memo layout: the digest on line 1, the records it covers below it —
@@ -117,30 +118,30 @@ case "${CLAUDE_ALLOW_PROJECT_SETTINGS:-}" in
           fi
 
           if [[ "${_ps_digest}" == "${_ps_prev}" ]]; then
-            echo ">> project settings: risk profile unchanged since you approved it — accepted"
+            ok "project settings: risk profile unchanged since you approved it — accepted"
           else
-            echo "WARNING: project-level Claude settings grant the following:" >&2
-            for _f in "${_found_settings[@]}"; do echo "  file: ${_f}" >&2; done
-            echo >&2
+            warn "project-level Claude settings grant the following:"
+            for _f in "${_found_settings[@]}"; do cont "file: ${_f}"; done
+            cont
             # Grouped by settings key; SCAN_SINCE_RECORDS makes the renderer mark
             # what is new relative to the approval being superseded.
             SCAN_SINCE_RECORDS="${_ps_prev_records}" \
               "${SCRIPT_DIR}/scripts/scan-project-settings.sh" --render >&2 <<< "${_ps_flagged}"
-            echo >&2
-            echo "  ${_ps_summary} further allow rule(s) grant nothing and are not shown." >&2
+            cont
+            cont "${_ps_summary} further allow rule(s) grant nothing and are not shown."
             # A [key] means a command runs with no prompt at all, so the value
             # shown above is worth reading in its original context before saying yes.
             if printf '%s\n' "${_ps_flagged}" | grep -q $'^KEY\t'; then
               for _f in "${_found_settings[@]}"; do
-                echo "  Read it in full:  cat '${_f}'" >&2
+                cont "Read it in full:  cat '${_f}'"
               done
             fi
-            echo "  Full picture: cid settings   |   silence one rule: cid settings trust '<rule>'" >&2
-            echo "  See docs/attack-vectors.md." >&2
+            cont "Full picture: cid settings   |   silence one rule: cid settings trust '<rule>'" \
+                 "See docs/attack-vectors.md."
             _ask_yn 'Proceed and run with these project settings? [y/n] ' || _ps_abort
             mkdir -p "$(dirname "${_ps_memo}")"
             { printf '%s\n' "${_ps_digest}"; printf '%s\n' "${_ps_flagged}"; } > "${_ps_memo}"
-            echo ">> approval recorded: ${_ps_memo} (you will not be asked again until this changes)"
+            ok "approval recorded: ${_ps_memo}" "you will not be asked again until this changes"
           fi
         fi
       fi

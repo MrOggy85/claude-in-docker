@@ -35,14 +35,14 @@ case "${CLAUDE_DOCKER_BRIDGE:-}" in
     done
 
     if (( ${#_dbg_entries[@]} == 0 )); then
-      echo "ERROR: CLAUDE_DOCKER_BRIDGE is on but no containers are allowlisted." >&2
-      echo "  The allowlist is the only limit on what the agent can inspect, so it" >&2
-      echo "  must be declared explicitly. Add this project's containers with:" >&2
-      echo "    cid containers add <name>            # or a 'prefix-*' glob" >&2
-      echo "  Files consulted:" >&2
-      echo "    ${_dbg_project}" >&2
-      echo "    ${_dbg_baseline}  (shared baseline)" >&2
-      echo "  See docs/docker-bridge.md." >&2
+      fail "CLAUDE_DOCKER_BRIDGE is on but no containers are allowlisted." \
+           "The allowlist is the only limit on what the agent can inspect, so it" \
+           "must be declared explicitly. Add this project's containers with:" \
+           "  cid containers add <name>            # or a 'prefix-*' glob" \
+           "Files consulted:" \
+           "  ${_dbg_project}" \
+           "  ${_dbg_baseline}  (shared baseline)" \
+           "See docs/docker-bridge.md."
       exit 1
     fi
 
@@ -65,12 +65,12 @@ case "${CLAUDE_DOCKER_BRIDGE:-}" in
     done
 
     if (( ${#_dbg_bad[@]} > 0 )); then
-      echo "ERROR: unsafe entries in the docker container allowlist:" >&2
-      for _dbg_e in "${_dbg_bad[@]}"; do echo "  - ${_dbg_e}" >&2; done
-      echo "  These would let the agent read other Claude sessions' logs (which carry" >&2
-      echo "  their env, including MCP_GH_BEARER) or the proxy's access log." >&2
-      echo "  Remove them with: cid containers rm <entry>" >&2
-      echo "  See docs/docker-bridge.md." >&2
+      fail "unsafe entries in the docker container allowlist:"
+      for _dbg_e in "${_dbg_bad[@]}"; do cont "- ${_dbg_e}"; done
+      cont "These would let the agent read other Claude sessions' logs (which carry" \
+           "their env, including MCP_GH_BEARER) or the proxy's access log." \
+           "Remove them with: cid containers rm <entry>" \
+           "See docs/docker-bridge.md."
       exit 1
     fi
 
@@ -78,9 +78,9 @@ case "${CLAUDE_DOCKER_BRIDGE:-}" in
     _dbg_port="${DOCKER_BRIDGE_PORT:-9334}"
     if command -v curl >/dev/null 2>&1 \
        && ! curl -s -o /dev/null --max-time 2 "http://localhost:${_dbg_port}/mcp"; then
-      echo "WARNING: nothing is listening on localhost:${_dbg_port} — the docker bridge" >&2
-      echo "  looks down, so its MCP tools will fail in-session. Start it with" >&2
-      echo "  ./docker-bridge/host-docker-bridge.sh (or load the launchd agent)." >&2
+      warn "nothing is listening on localhost:${_dbg_port} — the docker bridge" \
+           "looks down, so its MCP tools will fail in-session. Start it with" \
+           "./docker-bridge/host-docker-bridge.sh (or load the launchd agent)."
     fi
 
     unset _dbg_baseline _dbg_project _dbg_entries _dbg_f _dbg_line \

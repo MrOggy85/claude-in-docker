@@ -31,13 +31,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # derives the session volume, so both stay stable per project path.
 # shellcheck source=paths.sh disable=SC1091
 source "${SCRIPT_DIR}/paths.sh"
+# Messages go to stderr (stdout is the token stream), so colour is decided from
+# fd 2 — see the colour file for the emitters and the palette.
+# shellcheck source=colors.sh disable=SC1091
+source "${SCRIPT_DIR}/colors.sh"
+color_init 2
 
 PROJECT_DIR="${PROJECT_DIR:-$PWD}"
 REPO_IN_CONTAINER="${REPO_IN_CONTAINER:-/home/dev/repo}"
 IMAGE="${IMAGE:-claude-code:local}"
 
 if [[ -n "${SKIP_CLAUDE_VOLUME_PATHS:-}" ]]; then
-  echo ">> SKIP_CLAUDE_VOLUME_PATHS set — not isolating in-repo paths; node_modules etc. will land on the host" >&2
+  say "SKIP_CLAUDE_VOLUME_PATHS set — not isolating in-repo paths; node_modules etc. will land on the host"
   exit 0
 fi
 
@@ -52,20 +57,20 @@ _seen=" "
 prepare() {  # <repo-relative path>
   local rel="$1" name target
   case "$rel" in
-    /*|*..*|"~"*) echo ">> skipping volume path (must be repo-relative, no '..' or '~'): $rel" >&2; return ;;
+    /*|*..*|"~"*) kv "skipping volume path (must be repo-relative, no '..' or '~')" "$rel"; return ;;
   esac
   case "$_seen" in *" ${rel} "*) return ;; esac   # dedup (auto + explicit may overlap)
   _seen+="${rel} "
   # If the host already holds files here, the volume masks them in the container
   # but the host copy persists — warn so the host can be kept clean.
   if [ -n "$(ls -A "${PROJECT_DIR}/${rel}" 2>/dev/null)" ]; then
-    echo ">> WARNING: ${rel} already has contents on the host; the volume hides them in the container but the host copy remains — delete it to keep the host clean." >&2
+    warn "${rel} already has contents on the host; the volume hides them in the container but the host copy remains — delete it to keep the host clean."
   fi
   name="claude-vol-${SAFE_NAME:-repo}-$(path_hash "${PROJECT_DIR}/${rel}")"
   target="${REPO_IN_CONTAINER}/${rel}"
   if ! docker volume inspect "$name" >/dev/null 2>&1; then
     docker volume create "$name" >/dev/null
-    echo ">> created path volume: ${name} -> ${target}" >&2
+    kv "created path volume" "${name} -> ${target}"
   fi
   MOUNT_ARGS+=("--volume=${name}:${target}")
   # Every volume gets a slot in the ownership pass — not just the ones created here.

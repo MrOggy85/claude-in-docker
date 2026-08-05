@@ -27,6 +27,12 @@
 # unparseable line is skipped wholesale.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# say/kv/ok/fail and the palette; see scripts/colors.sh.
+# shellcheck source=scripts/colors.sh disable=SC1091
+source "${SCRIPT_DIR}/scripts/colors.sh"
+color_init 1
+
 USAGE="usage: sync-volume.sh <volume> <project-name> <archive-dir>"
 VOLUME="${1:?${USAGE}}"
 PROJ="${2:?${USAGE}}"
@@ -37,7 +43,7 @@ IMAGE="${IMAGE:-claude-code:local}"
 # throwaway container. The image is built locally and can't be pulled, so fail
 # with a hint when missing (e.g. before the first session, or after a prune).
 if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
-  echo "Image ${IMAGE} not found — run ./run.sh once to build it." >&2
+  fail "image ${IMAGE} not found" "Run ./run.sh once to build it."
   exit 1
 fi
 
@@ -45,6 +51,8 @@ fi
 mkdir -p "${ARCHIVE}/projects"
 chmod 700 "${ARCHIVE}" "${ARCHIVE}/projects"
 
+# Its one message stays a raw echo: this runs under the container's sh, where the
+# emitters in scripts/colors.sh do not exist.
 # shellcheck disable=SC2016  # a script for the container's shell to expand, not this one
 STRIP_SCRIPT='DEST="/archive/projects/${PROJ}"
 export CWD_VAL="/home/dev/${PROJ}"

@@ -60,6 +60,21 @@ shared network and container.
 | `CLAUDE_USAGE_ONLINE` | _(unset)_ | When set, fetches live LiteLLM pricing instead of the image's bundled offline pricing. | [Tracking Usage](tracking-usage.md) |
 | `CCUSAGE_VERSION` | `latest` | npm version used for the `npx ccusage` fallback; pin it to a specific version if needed. | [Usage Log Synchronization](usage-sync.md) |
 
+### Output
+
+Every message the host-side scripts print — `run.sh`, the guards, the egress
+proxy, `usage.sh` — is colour-coded when it goes to a terminal: cyan for the
+value being named, green for a confirmation, yellow for `WARNING:`, bold red for
+`ERROR:`. Piped or redirected output is plain, decided per stream.
+
+| Variable | Default | Description | Reference |
+| --- | --- | --- | --- |
+| `NO_COLOR` | _(unset)_ | Set to any value to disable colour outright. Wins over everything else ([no-color.org](https://no-color.org)). | — |
+| `CLICOLOR_FORCE` | _(unset)_ | Set to colour even through a pipe or under `TERM=dumb`. Loses only to `NO_COLOR`. | — |
+
+Neither reaches the `[firewall]` lines: those come from inside the container,
+where `sudo` strips the environment, so they follow the terminal test alone.
+
 ## The `.env` file
 
 Beyond the variables above, any `KEY=VALUE` lines in a `.env` in the config dir
