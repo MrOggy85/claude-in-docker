@@ -12,6 +12,10 @@ It is **not** an air-gapped, 100% secure setup. It is a solution to mitigate the
 
 > You don't have to run faster than the bear to get away. You just have to run faster than the guy next to you.
 
+See [docs/threat-model.md](docs/threat-model.md) for what this protects
+against and what it doesn't, and [SECURITY.md](SECURITY.md) to report a
+vulnerability.
+
 ## Prerequisites
 - docker
 
@@ -128,7 +132,9 @@ function claude {
 
 ## Additional Information
 
-See [docs/index.md](docs/index.md) for guides on optional features.
+See [docs/index.md](docs/index.md) for guides on optional features, and
+[docs/threat-model.md](docs/threat-model.md) / [docs/attack-vectors.md](docs/attack-vectors.md)
+for what this solution does and does not protect against.
 
 ## Contributors 
 

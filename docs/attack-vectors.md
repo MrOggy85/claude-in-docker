@@ -2,6 +2,8 @@
 
 These are known attack vectors. Some are mitigated by this solution (noted as
 such); the rest are not handled and are documented so you can assess the risk.
+See [docs/threat-model.md](threat-model.md) for the summary table (protects /
+does not protect) this page's vectors slot into.
 
 ## Project-Level Claude Settings (mitigated by default)
 
