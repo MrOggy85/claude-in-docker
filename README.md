@@ -4,17 +4,17 @@
 # Claude Code in Docker Container
 
 One Claude Code login, shared across every project. `cd` into any repo and run
-`run.sh` — no `.devcontainer/` to add, no per-repo setup. Outbound network is
-locked to a hostname allowlist by default, so a compromised dependency can't
-phone home. It assumes you are on macOS.
+`run.sh`. Outbound network is locked to a hostname allowlist by default, so a 
+compromised dependency can't phone home. It assumes you are on macOS.
 
 <img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/b55b3975-9adf-4c28-9778-fdb799f64d6c" />
 
 It is **not** an air-gapped, 100% secure setup — see [Known Attack Vectors](docs/attack-vectors.md)
-for what is and isn't mitigated. It is a solution to reduce the obvious risks —
+for what is and isn't mitigated. This is a solution to reduce the obvious risks —
 both from within the container and from outside it. Inside, we run a
 non-deterministic AI agent we cannot fully trust; this adds guard rails around
-it. From outside, if your host gets pwned, your conversations and credentials
+it. Also running third-party code from npm etc, will be executed in this sandbox, behind a firewall, instead of your host. 
+From outside, if your host gets pwned, your conversations and credentials
 here won't be trivially reachable to a non-determined attacker.
 
 > You don't have to run faster than the bear to get away. You just have to run faster than the guy next to you.
@@ -54,6 +54,8 @@ See [Setup](#setup) below for what `make init` creates and how to customize it.
 
 ## Setup
 
+**tl;dr** Run `make init`
+
 This copies every template in `templates/` into your **config directory** —
 `~/.config/claude-in-docker/` by default (override with `CLAUDE_DOCKER_CONFIG_DIR`,
 or point `XDG_CONFIG_HOME` elsewhere) — in one step; existing files are left
@@ -61,10 +63,6 @@ untouched, and the repo itself stays clean. Then edit the copies. List and inspe
 them any time with `./cid list` / `./cid show <file>`. `cid` also **edits** the
 egress allowlists in place — `cid domains add <host>` / `cid domains rm <host>`
 — so you rarely need to open the files by hand. See [The `cid` config CLI](docs/config-cli.md).
-
-> **Upgrading?** Older versions kept these files gitignored in the repo root. Run
-> `make migrate` once to move your config — and your per-project dirs — into the
-> config directory. It is non-destructive (never overwrites anything already there).
 
 All of the following files live in the config directory and are your personal files:
 
