@@ -3,22 +3,56 @@
 
 # Claude Code in Docker Container
 
-This is a solution for running Claude Code in a Docker container. It assumes you are on macOS.
+One Claude Code login, shared across every project. `cd` into any repo and run
+`run.sh` — no `.devcontainer/` to add, no per-repo setup. Outbound network is
+locked to a hostname allowlist by default, so a compromised dependency can't
+phone home. It assumes you are on macOS.
 
 <img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/b55b3975-9adf-4c28-9778-fdb799f64d6c" />
 
-
-It is **not** an air-gapped, 100% secure setup. It is a solution to mitigate the obvious risks — both from within the container and from outside it. Inside, we run a non-deterministic AI agent we cannot fully trust; this adds guard rails around it. From outside, if your host gets pwned, your conversations and credentials here won't be trivially reachable to a non-determined attacker.
+It is **not** an air-gapped, 100% secure setup — see [Known Attack Vectors](docs/attack-vectors.md)
+for what is and isn't mitigated. It is a solution to reduce the obvious risks —
+both from within the container and from outside it. Inside, we run a
+non-deterministic AI agent we cannot fully trust; this adds guard rails around
+it. From outside, if your host gets pwned, your conversations and credentials
+here won't be trivially reachable to a non-determined attacker.
 
 > You don't have to run faster than the bear to get away. You just have to run faster than the guy next to you.
+
+## Why this instead of...
+
+| | claude-in-docker | Official Anthropic devcontainer | Bare host |
+|---|---|---|---|
+| Login | One login, shared across every project | Per devcontainer / Codespace | One login |
+| Per-project setup | None — `cd` and run | Add `.devcontainer/` to every repo | None |
+| Works from | Any terminal | IDE / Codespaces-first | Any terminal |
+| Outbound egress | Hostname allowlist, on by default | Firewall reference exists, but opt-in and VS Code/Codespaces-bound | Unrestricted |
+| `node_modules` on host disk | No — volume-backed by default | Yes | Yes |
+| Credential / hook guards | Yes (settings, MCP token) | No | No |
+
+Full breakdown, including claudebox and lightweight Dockerfile recipes: [How This
+Compares to Alternatives](docs/comparison.md) and [Devcontainers
+Alternative](docs/devcontainers.md).
 
 ## Prerequisites
 - docker
 
-## Setup
+## Quickstart
 
-**tl;dr**
-Run `make init`
+```bash
+make init                        # seed your config in ~/.config/claude-in-docker/
+cd your-project                  # any directory — no .devcontainer/ needed
+~/code/claude-in-docker/run.sh   # builds the image on first run, then drops you into claude
+```
+
+Run `/login` once inside `claude` — the credential is saved to your config
+directory and shared across every project from then on. See [Shell profile
+alias](#shell-profile-alias) below to invoke `claude` from any directory
+without the full path.
+
+See [Setup](#setup) below for what `make init` creates and how to customize it.
+
+## Setup
 
 This copies every template in `templates/` into your **config directory** —
 `~/.config/claude-in-docker/` by default (override with `CLAUDE_DOCKER_CONFIG_DIR`,
@@ -113,6 +147,8 @@ function claude {
 ## Additional Features
 
 - [The `cid` config CLI](docs/config-cli.md) — inspect config and edit the allowlists (`cid domains add|rm`, `cid containers add|rm`, per-project or `-g` baseline) without hand-editing files; put it on `$PATH` and ships zsh completion
+- [Centralized Egress Proxy](docs/egress-proxy.md) — the network boundary: every container egresses through one shared Squid proxy that filters by hostname per project
+- [Known Attack Vectors](docs/attack-vectors.md) — the threat model: what's mitigated (project-settings/permissions guard, MCP token, egress) and what isn't
 - [MCP Servers](docs/mcp-servers.md) — configure user-level, project-level, and GitHub MCP servers
 - [Mounting extra folders](docs/mounting-extra-folders.md) — make additional host folders visible inside the container via `CLAUDE_MOUNTS`
 - [Publishing ports](docs/publishing-ports.md) — expose a server running inside the container to the host via `CLAUDE_PORTS`
