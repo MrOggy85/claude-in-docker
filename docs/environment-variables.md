@@ -38,6 +38,7 @@ All are optional — with none set, the container runs with its defaults.
 | `DOCKER_BRIDGE_DOCKER_CMD` | `docker` | Path to the `docker` CLI the bridge invokes (launchd's `PATH` is minimal). Host-only. | [Host Docker Bridge](docker-bridge.md) |
 | `CLAUDE_VOLUME` | `claude-<project>-<hash>` | Override the per-project session volume name (e.g. a throwaway one). | — |
 | `CLAUDE_CONTAINER_NAME` | `claude-<project>-<random>` | Pin a specific container name instead of the randomized default. | — |
+| `CLAUDE_DOCKER_BASE_IMAGE` | _(unset)_ | A published base image ref (ideally pinned by digest) to build `FROM` instead of the `base` stage from source. Takes precedence over a `base-image` file in the config dir. | [Publishing to ghcr.io](publishing-ghcr.md) |
 
 ### Egress proxy
 

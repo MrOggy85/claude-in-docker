@@ -43,6 +43,15 @@ source "${SCRIPT_DIR}/guards/project-settings.sh"
 source "${SCRIPT_DIR}/guards/mcp-bearer-no-push.sh"
 source "${SCRIPT_DIR}/guards/docker-bridge.sh"
 
+# Published base image (ghcr.io/mroggy85/claude-in-docker:<tag>@sha256:...),
+# opted into via CLAUDE_DOCKER_BASE_IMAGE or a `base-image` file in the config
+# dir. Passed as --build-arg BASE_IMAGE below; unset builds the `base` stage
+# from source instead (the Dockerfile default). See docs/publishing-ghcr.md.
+PUBLISHED_BASE_IMAGE="${CLAUDE_DOCKER_BASE_IMAGE:-}"
+if [[ -z "${PUBLISHED_BASE_IMAGE}" && -f "${CONFIG_DIR}/base-image" ]]; then
+  PUBLISHED_BASE_IMAGE="$(cat "${CONFIG_DIR}/base-image")"
+fi
+
 # 1. Build the image when missing or when the build context changed. A SHA-256
 #    of the key files is stored as an image label at build time; each run
 #    recomputes it and rebuilds on mismatch.
@@ -58,9 +67,11 @@ context_hash() {
   local existing=()
   for f in "${files[@]}"; do [ -f "$f" ] && existing+=("$f"); done
   # Include caller identity: the image embeds host UID/GID/username via
-  # --build-arg, so a different user must get a fresh image.
+  # --build-arg, so a different user must get a fresh image. Also include the
+  # published-base choice, so switching it (or its digest) forces a rebuild.
   { sha256_ "${existing[@]}"
     printf 'uid=%s gid=%s user=%s\n' "$(id -u)" "$(id -g)" "$(id -un)"
+    printf 'base-image=%s\n' "${PUBLISHED_BASE_IMAGE}"
   } | sha256_ - | cut -c1-16
 }
 
@@ -69,11 +80,13 @@ BASE_IMAGE_HASH="$(docker image inspect "${BASE_IMAGE}" --format '{{index .Confi
 
 if [[ "$BASE_IMAGE_HASH" != "$CURRENT_HASH" ]]; then
   if [[ -n "$BASE_IMAGE_HASH" ]]; then kv "rebuilding — build context changed" "${BASE_IMAGE}"
+  elif [[ -n "${PUBLISHED_BASE_IMAGE}" ]]; then kv "building from published base" "${PUBLISHED_BASE_IMAGE}"
   else                                 kv "building" "${BASE_IMAGE}"
   fi
   docker build \
     --tag "${BASE_IMAGE}" \
     --label "build.context-hash=${CURRENT_HASH}" \
+    --build-arg "BASE_IMAGE=${PUBLISHED_BASE_IMAGE:-base}" \
     --build-arg "USER_ID=$(id -u)" \
     --build-arg "GROUP_ID=$(id -g)" \
     --build-arg "USERNAME=$(id -un)" \

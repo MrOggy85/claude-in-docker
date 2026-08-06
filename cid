@@ -78,6 +78,7 @@ GLOBAL_FILES=(
   "docker-containers.txt|Baseline container allowlist for the docker bridge (optional)"
   "trusted-settings-rules.txt|permissions.allow rules the settings guard should not flag (optional)"
   ".env|Arbitrary KEY=VALUE env vars injected via --env-file"
+  "base-image|Published base image ref to build FROM instead of from source (optional)"
 )
 
 err()  { printf '%s\n' "$*" >&2; }
@@ -582,6 +583,7 @@ ENV_VARS=(
   "Configuration|DOCKER_BRIDGE_DOCKER_CMD|docker|Path to the docker CLI the bridge runs (host-only)"
   "Configuration|CLAUDE_VOLUME|claude-<project>-<hash>|Override the per-project session volume name"
   "Configuration|CLAUDE_CONTAINER_NAME|claude-<project>-<random>|Pin the container name instead of the random default"
+  "Configuration|CLAUDE_DOCKER_BASE_IMAGE|(unset)|Published base image ref to build FROM instead of from source"
   "Egress proxy|CLAUDE_EGRESS_NETWORK|claude-egress|Docker network shared by the proxy and containers"
   "Egress proxy|CLAUDE_EGRESS_PROXY_NAME|claude-egress-proxy|Name of the long-running Squid container"
   "Egress proxy|CLAUDE_EGRESS_IMAGE|ubuntu/squid:latest|Squid image proxy/up.sh runs (pin a digest)"

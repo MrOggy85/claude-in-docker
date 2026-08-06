@@ -1,6 +1,16 @@
+# Two stages: `base` (apt/node/claude/firewall — identical for every user) and
+# `final` (host UID/GID + install_additional_packages.sh — per-machine/user).
+# `final`'s FROM defaults to the local `base` stage below, so a plain
+# `docker build .` (what run.sh and CI both do) builds everything from source in
+# one command, unchanged. Pass --build-arg BASE_IMAGE=ghcr.io/... to reuse a
+# published base instead — BuildKit then skips building `base` entirely, since
+# nothing in that build's dependency graph references it. See
+# docs/publishing-ghcr.md.
+ARG BASE_IMAGE=base
+
 # Pin the base image digest for supply-chain security (blank = dev only).
 # Run `make pin-digest` after an upstream patch to append @sha256:... here.
-FROM debian:trixie-slim
+FROM debian:trixie-slim AS base
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -107,10 +117,30 @@ JSON
 
 RUN chmod -R 777 /home/dev
 
+# Egress lock: the entrypoint applies these rules via a sudo rule scoped to only
+# this script (no other root escalation). Allowlist policy lives in Squid.
+COPY init-firewall.sh /usr/local/bin/init-firewall.sh
+RUN chmod +x /usr/local/bin/init-firewall.sh \
+ && printf 'Defaults!/usr/local/bin/init-firewall.sh !pam_acct_mgmt\nALL ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh\n' \
+      > /etc/sudoers.d/firewall \
+ && chmod 0440 /etc/sudoers.d/firewall
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+WORKDIR /home/dev/repo
+
+CMD ["claude"]
+
+# --- final stage: per-machine/user layer on top of `base` (see the ARG comment
+# up top for how BASE_IMAGE selects between building `base` here and reusing a
+# published one) ---
+FROM ${BASE_IMAGE} AS final
+
 # The runtime host UID has no /etc/passwd entry, breaking whoami, os.userInfo(),
 # getpwuid(). Inject it from the --build-arg UID/GID/name (keeps /etc/passwd at
-# 644). ARGs declared late so they only affect this layer onward — the expensive
-# apt/nvm/npm layers above stay cached across builders.
+# 644).
 ARG USER_ID=1000
 ARG GROUP_ID=1000
 ARG USERNAME=dev
@@ -121,26 +151,9 @@ RUN if ! getent passwd "${USER_ID}" >/dev/null 2>&1; then \
       echo "${USERNAME}:x:${GROUP_ID}:" >> /etc/group; \
     fi
 
-# Egress lock: the entrypoint applies these rules via a sudo rule scoped to only
-# this script (no other root escalation). Allowlist policy lives in Squid.
-COPY init-firewall.sh /usr/local/bin/init-firewall.sh
-RUN chmod +x /usr/local/bin/init-firewall.sh \
- && printf 'Defaults!/usr/local/bin/init-firewall.sh !pam_acct_mgmt\nALL ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh\n' \
-      > /etc/sudoers.d/firewall \
- && chmod 0440 /etc/sudoers.d/firewall
-
-# User extra packages: gitignored, created from templates/ by `make init`; baked
-# here near the end so edits only rebuild this layer onward. Runs as root, so
-# re-apply 777 to /home/dev afterward to keep $HOME user-writable.
+# User extra packages: gitignored, created from templates/ by `make init`. Runs
+# as root, so re-apply 777 to /home/dev afterward to keep $HOME user-writable.
 COPY install_additional_packages.sh /usr/local/bin/install_additional_packages.sh
 RUN chmod +x /usr/local/bin/install_additional_packages.sh \
  && /usr/local/bin/install_additional_packages.sh \
  && chmod -R 777 /home/dev
-
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-
-WORKDIR /home/dev/repo
-
-CMD ["claude"]

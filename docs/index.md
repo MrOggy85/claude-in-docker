@@ -9,6 +9,7 @@
 - [Per-Project Launch Config](per-project-env.md) — keep per-repo mounts, ports, and secrets in a gitignored `.claude-env` sourced at launch
 - [Volume-Backed Paths](volume-backed-paths.md) — `node_modules` and the pnpm store are kept off the host disk by default; add paths via `CLAUDE_VOLUME_PATHS`, opt out via `SKIP_CLAUDE_VOLUME_PATHS`
 - [Installing Additional Packages](installing-packages.md) — install extra tools a workflow needs (e.g. Deno) at image build time
+- [Publishing to ghcr.io](publishing-ghcr.md) — the `base`/`final` Dockerfile split, and how to build from a published base image instead of from source
 - [Updating Claude Code](updating-claude-code.md) — bump the pinned `@anthropic-ai/claude-code` version in the lockfile and rebuild
 - [Host Path in the Status Line](host-path-statusline.md) — show which host folder a session belongs to via `CLAUDE_HOST_PROJECT_DIR`
 - [Sound Effects](sound-effects.md) — play sounds on the host when Claude Code events fire

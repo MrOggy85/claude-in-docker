@@ -470,6 +470,51 @@ refute_run_arg() {
 }
 
 # ---------------------------------------------------------------------------
+# Published base image (BASE_IMAGE build-arg) — see docs/publishing-ghcr.md
+# ---------------------------------------------------------------------------
+
+@test "default: base image build uses --build-arg BASE_IMAGE=base (build from source)" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  grep -qF -- "--build-arg BASE_IMAGE=base" "${DOCKER_ALL_CALLS}"
+}
+
+@test "CLAUDE_DOCKER_BASE_IMAGE: build passes it as --build-arg BASE_IMAGE" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_DOCKER_BASE_IMAGE="ghcr.io/mroggy85/claude-in-docker:v1.0.0@sha256:deadbeef" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  grep -qF -- "--build-arg BASE_IMAGE=ghcr.io/mroggy85/claude-in-docker:v1.0.0@sha256:deadbeef" "${DOCKER_ALL_CALLS}"
+}
+
+@test "config-dir base-image file: used when CLAUDE_DOCKER_BASE_IMAGE is unset" {
+  printf 'ghcr.io/mroggy85/claude-in-docker:v2.0.0@sha256:cafef00d\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/base-image"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  grep -qF -- "--build-arg BASE_IMAGE=ghcr.io/mroggy85/claude-in-docker:v2.0.0@sha256:cafef00d" "${DOCKER_ALL_CALLS}"
+}
+
+@test "CLAUDE_DOCKER_BASE_IMAGE takes precedence over the config-dir base-image file" {
+  printf 'ghcr.io/mroggy85/claude-in-docker:v2.0.0@sha256:cafef00d\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/base-image"
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_DOCKER_BASE_IMAGE="ghcr.io/mroggy85/claude-in-docker:v1.0.0@sha256:deadbeef" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  grep -qF -- "--build-arg BASE_IMAGE=ghcr.io/mroggy85/claude-in-docker:v1.0.0@sha256:deadbeef" "${DOCKER_ALL_CALLS}"
+  ! grep -qF -- "--build-arg BASE_IMAGE=ghcr.io/mroggy85/claude-in-docker:v2.0.0@sha256:cafef00d" "${DOCKER_ALL_CALLS}"
+}
+
+# ---------------------------------------------------------------------------
 # Standard flags always present
 # ---------------------------------------------------------------------------
 

@@ -119,14 +119,15 @@ update-claude:
 	npm update @anthropic-ai/claude-code --package-lock-only
 
 # Fetch the current amd64 digest of debian:trixie-slim into the Dockerfile FROM
-# line. Run after upstream security patches, then rebuild. Requires docker (or
-# swap in `skopeo inspect --no-creds docker://debian:trixie-slim | jq -r '.Digest'`).
+# line (the `base` stage). Run after upstream security patches, then rebuild.
+# Requires docker (or swap in `skopeo inspect --no-creds
+# docker://debian:trixie-slim | jq -r '.Digest'`).
 # sed to a temp file then mv: `sed -i` alone is GNU-only (BSD/macOS sed reads the
 # next argument as a mandatory backup suffix and would eat "s|FROM ...").
 pin-digest:
 	@DIGEST=$$(docker manifest inspect debian:trixie-slim \
 	  | jq -r '.manifests[] | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest') && \
-	  sed "s|FROM debian:trixie-slim.*|FROM debian:trixie-slim@$$DIGEST|" Dockerfile > Dockerfile.tmp && \
+	  sed "s|FROM debian:trixie-slim.* AS base|FROM debian:trixie-slim@$$DIGEST AS base|" Dockerfile > Dockerfile.tmp && \
 	  mv Dockerfile.tmp Dockerfile && \
 	  echo "Pinned to $$DIGEST"
 
