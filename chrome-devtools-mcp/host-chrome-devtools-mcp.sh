@@ -1,6 +1,6 @@
 #!/bin/bash
-# Wrapper for launchd: sources nvm so `node`/`npx` resolve to the user's default
-# version, then exec's the Node bridge. Survives nvm version bumps.
+# Wrapper for launchd/systemd --user: sources nvm so `node`/`npx` resolve to the
+# user's default version, then exec's the Node bridge. Survives nvm version bumps.
 set -e
 export NVM_DIR="$HOME/.nvm"
 # shellcheck disable=SC1091

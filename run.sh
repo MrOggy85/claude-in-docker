@@ -341,6 +341,10 @@ kv "egress via central proxy" "network ${EGRESS_NETWORK}, project key ${PROJECT_
 # 4. Run as your host UID:GID; HOME forced so "~" resolves for the passwd-less
 #    UID. NET_ADMIN is needed for the nftables egress-lock, only exercisable via
 #    the sudo rule scoped to init-firewall.sh — no other escalation is possible.
+#    --add-host is needed for host.docker.internal on Linux: Docker Desktop
+#    (macOS/Windows) maps it automatically, but the Linux Docker Engine only does
+#    so with this explicit flag (host-gateway, supported since 20.10); harmless
+#    where it's already mapped.
 #    "${ARR[@]+...}" keeps it safe under `set -u` on macOS bash 3.2. No `exec` so
 #    control returns here to update the usage archive below.
 STATUS=0
@@ -349,6 +353,7 @@ docker run \
   --interactive --tty --rm \
   --user "$(id -u):$(id -g)" \
   --cap-add=NET_ADMIN \
+  --add-host "host.docker.internal:host-gateway" \
   ${PROXY_NET_ARGS[@]+"${PROXY_NET_ARGS[@]}"} \
   --env-file "${ENV_FILE}" \
   ${PROXY_ENV_ARGS[@]+"${PROXY_ENV_ARGS[@]}"} \

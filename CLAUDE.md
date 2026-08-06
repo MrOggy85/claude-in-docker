@@ -88,7 +88,7 @@ sourced file, not in `run.sh`.
 - `templates/` + `Makefile` (`make init`) — user-local config is copied from the
   committed templates in `templates/` into the config dir. Edit the file in
   `templates/` when changing defaults.
-- `docker-bridge/` — host-side bridge (third of the family, same four-file shape
+- `docker-bridge/` — host-side bridge (third of the family, same five-file shape
   as `chrome-devtools-mcp/`): a zero-dep Node MCP server exposing read-only
   `docker_ps` / `docker_logs` / `docker_stats` over Streamable HTTP. Not a stdio
   proxy — it answers MCP itself and spawns one `docker` per call. Enforcement is
@@ -97,11 +97,11 @@ sourced file, not in `run.sh`.
   `CLAUDE_DOCKER_BRIDGE=1`; sanity-checked by `guards/docker-bridge.sh`. No
   mutating verb exists — see docs/docker-bridge.md.
 - `chrome-devtools-mcp/` — host-side bridge (mirrors `sound-effects/`): an
-  nvm-sourcing launcher + a macOS launchd plist that run a small zero-dep Node
-  bridge (`host-chrome-devtools-mcp.js`) which spawns the stdio `chrome-devtools-mcp`
-  server on the host and re-exposes it over MCP Streamable HTTP; the container
-  reaches it via `host.docker.internal` on a host-outbound port. See
-  docs/chrome-devtools-mcp.md.
+  nvm-sourcing launcher + a macOS launchd plist + a Linux systemd `--user` unit
+  that run a small zero-dep Node bridge (`host-chrome-devtools-mcp.js`) which
+  spawns the stdio `chrome-devtools-mcp` server on the host and re-exposes it
+  over MCP Streamable HTTP; the container reaches it via `host.docker.internal`
+  on a host-outbound port. See docs/chrome-devtools-mcp.md.
 - `docs/` — feature guides.
 - `.github/workflows/` — CI. `test.yml` runs bats (ubuntu + macOS) and
   `make lint` on every non-doc change; both are gates, so run `make test` and

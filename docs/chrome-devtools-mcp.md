@@ -41,7 +41,9 @@ one Claude; it is not a multi-client gateway).
 ```bash
 ./chrome-devtools-mcp/host-chrome-devtools-mcp.sh
 ```
-Or install it as a launchd service so it starts automatically:
+Or install it as a service so it starts automatically:
+
+**macOS (launchd):**
 ```bash
 cp chrome-devtools-mcp/com.user.claude-chrome-devtools-mcp.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.user.claude-chrome-devtools-mcp.plist
@@ -51,6 +53,15 @@ The plist assumes the repo lives at `~/code/claude-in-docker`; edit the path in
 `ProgramArguments` if yours is elsewhere. To reload after editing the plist,
 `bootout` first: `launchctl bootout gui/$(id -u)/com.user.claude-chrome-devtools-mcp`.
 Logs go to `/tmp/claude-chrome-devtools-mcp.log`.
+
+**Linux (systemd `--user`):**
+```bash
+cp chrome-devtools-mcp/claude-chrome-devtools-mcp.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now claude-chrome-devtools-mcp
+```
+Same path assumption as the plist; edit `ExecStart` if your repo lives
+elsewhere. Logs: `journalctl --user -u claude-chrome-devtools-mcp -f`.
 
 ### 2. Add the server to your config-dir `mcp-servers.json`
 

@@ -3,7 +3,7 @@
 
 # Claude Code in Docker Container
 
-This is a solution for running Claude Code in a Docker container. It assumes you are on macOS.
+This is a solution for running Claude Code in a Docker container. It supports macOS and Linux hosts (tested in CI on `macos-latest` and `ubuntu-latest`); some of the optional bridge features below note Linux-specific setup where it differs from macOS.
 
 <img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/b55b3975-9adf-4c28-9778-fdb799f64d6c" />
 
@@ -14,6 +14,8 @@ It is **not** an air-gapped, 100% secure setup. It is a solution to mitigate the
 
 ## Prerequisites
 - docker
+- **Linux only:** the Docker Engine must be v20.10+ (for `--add-host ...:host-gateway`, used so the optional host-bridge features — [sound effects](docs/sound-effects.md), [chrome-devtools-mcp](docs/chrome-devtools-mcp.md), [docker bridge](docs/docker-bridge.md) — can reach the host); your user must be in the `docker` group (or run via `sudo`)
+- **macOS only:** Docker Desktop (or an equivalent Docker Engine install)
 
 ## Setup
 
@@ -85,15 +87,14 @@ function claude {
 
 Reload your shell (`source ~/.zshrc`) or open a new terminal, then run `claude` from any project directory.
 
-#### Injecting `MCP_GH_BEARER` from the macOS Keychain
+#### Injecting `MCP_GH_BEARER` from a secret store
 
-`run.sh` passes `--env MCP_GH_BEARER` through to the container for the [GitHub MCP](docs/mcp-servers.md#github-mcp) server. Rather than hardcoding the token, store it in the Keychain once:
+`run.sh` passes `--env MCP_GH_BEARER` through to the container for the [GitHub MCP](docs/mcp-servers.md#github-mcp) server. Rather than hardcoding the token, store it in your OS secret store once and have the alias read it at launch, so the token never sits in a dotfile.
 
+**macOS (Keychain):**
 ```bash
 security add-generic-password -a "$USER" -s "github_pat" -w "github_pat_xxx"
 ```
-
-Then have the alias read it at launch with a small helper, so the token only lives in the Keychain:
 
 ```bash
 function keychain_get {
@@ -107,6 +108,17 @@ function keychain_get {
 
 function claude {
   MCP_GH_BEARER="$(keychain_get "github_pat")" ~/code/claude-in-docker/run.sh "$@"
+}
+```
+
+**Linux (`secret-tool`, from `libsecret-tools`, backed by the desktop keyring):**
+```bash
+secret-tool store --label="github_pat" service github_pat
+```
+
+```bash
+function claude {
+  MCP_GH_BEARER="$(secret-tool lookup service github_pat)" ~/code/claude-in-docker/run.sh "$@"
 }
 ```
 

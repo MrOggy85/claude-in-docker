@@ -4,7 +4,7 @@ Claude Code can trigger sound effects on the host machine when events fire (task
 
 ## Why a host-side server?
 
-Docker containers have no access to audio hardware. The workaround is a small HTTP server running on the host that calls `afplay` when the container makes a request to it. The container reaches the host via `host.docker.internal`.
+Docker containers have no access to audio hardware. The workaround is a small HTTP server running on the host that plays the file when the container makes a request to it — `afplay` on macOS, or the first of `paplay`/`ffplay`/`aplay`/`mpg123` found on `$PATH` on Linux. The container reaches the host via `host.docker.internal`.
 
 ## Setup
 
@@ -13,7 +13,9 @@ Docker containers have no access to audio hardware. The workaround is a small HT
    ```bash
    ./sound-effects/host-sound-server.sh
    ```
-   Or install it as a launchd service so it starts automatically:
+   Or install it as a service so it starts automatically:
+
+   **macOS (launchd):**
    ```bash
    cp sound-effects/com.user.claude-sound-server.plist ~/Library/LaunchAgents/
    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.user.claude-sound-server.plist
@@ -22,6 +24,15 @@ Docker containers have no access to audio hardware. The workaround is a small HT
    The plist assumes the repo lives at `~/code/claude-in-docker`; edit the path in
    `ProgramArguments` if yours is elsewhere. To reload after editing the plist,
    `bootout` first: `launchctl bootout gui/$(id -u)/com.user.claude-sound-server`.
+
+   **Linux (systemd `--user`):**
+   ```bash
+   cp sound-effects/claude-sound-server.service ~/.config/systemd/user/
+   systemctl --user daemon-reload
+   systemctl --user enable --now claude-sound-server
+   ```
+   Same path assumption as the plist; edit `ExecStart` if your repo lives
+   elsewhere. Logs: `journalctl --user -u claude-sound-server -f`.
 3. Add hooks to your `settings.json` that `curl` the server (see example below).
 
 ## settings.json example

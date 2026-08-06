@@ -494,6 +494,14 @@ refute_run_arg() {
   assert_run_arg "--cap-add=NET_ADMIN"
 }
 
+@test "docker run always maps host.docker.internal (Linux Docker Engine needs this explicitly)" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--add-host"
+  assert_run_arg "host.docker.internal:host-gateway"
+}
+
 # ---------------------------------------------------------------------------
 # Egress proxy is always on (no longer opt-in)
 # ---------------------------------------------------------------------------

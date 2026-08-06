@@ -1,0 +1,14 @@
+# Linux systemd --user equivalent of com.user.claude-docker-bridge.plist (macOS).
+# Assumes the repo lives at ~/code/claude-in-docker; edit ExecStart if yours differs.
+# Install: cp to ~/.config/systemd/user/, then
+#   systemctl --user daemon-reload && systemctl --user enable --now claude-docker-bridge
+# Logs: journalctl --user -u claude-docker-bridge -f
+[Unit]
+Description=Claude docker bridge (see docs/docker-bridge.md)
+
+[Service]
+ExecStart=%h/code/claude-in-docker/docker-bridge/host-docker-bridge.sh
+Restart=always
+
+[Install]
+WantedBy=default.target

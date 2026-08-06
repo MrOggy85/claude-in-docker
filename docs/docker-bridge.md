@@ -75,7 +75,9 @@ to 60/min per project.
 ```bash
 ./docker-bridge/host-docker-bridge.sh
 ```
-Or install it as a launchd service so it starts automatically:
+Or install it as a service so it starts automatically:
+
+**macOS (launchd):**
 ```bash
 cp docker-bridge/com.user.claude-docker-bridge.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.user.claude-docker-bridge.plist
@@ -85,6 +87,15 @@ The plist assumes the repo lives at `~/code/claude-in-docker`; edit the path in
 `ProgramArguments` if yours is elsewhere. To reload after editing the plist,
 `bootout` first: `launchctl bootout gui/$(id -u)/com.user.claude-docker-bridge`.
 Logs go to `/tmp/claude-docker-bridge.log`.
+
+**Linux (systemd `--user`):**
+```bash
+cp docker-bridge/claude-docker-bridge.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now claude-docker-bridge
+```
+Same path assumption as the plist; edit `ExecStart` if your repo lives
+elsewhere. Logs: `journalctl --user -u claude-docker-bridge -f`.
 
 ### 2. Declare which containers Claude may see
 
