@@ -16,6 +16,7 @@
 - [Host Docker Bridge](docker-bridge.md) — read-only `docker ps` / `logs` / `stats` for an allowlisted set of host containers, without a Docker socket; off by default
 - [Devcontainers Alternative](devcontainers.md) — using Dev Containers / Codespaces with a squid proxy sidecar instead of `run.sh`
 - [How This Compares to Alternatives](comparison.md) — how this project compares to the devcontainer convention, lightweight recipes, and claudebox, and when to pick each
+- [Permissions: How the Layers Compose](permissions.md) — permission rules vs. permission modes vs. the OS/container sandbox, and how the egress allowlist relates to `WebFetch(domain:...)`
 - [Known Attack Vectors](attack-vectors.md) — threats not handled by this solution
 - [Tracking Usage (ccusage)](tracking-usage.md) — report token usage across all projects with `ccusage`
 - [Usage Log Synchronization](usage-sync.md) — how transcript logs reach `~/.claude-docker-usage/` for `ccusage`
