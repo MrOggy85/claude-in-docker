@@ -141,3 +141,12 @@ This solution is heavily inspired by Anthropic's own approach to running Claude 
 
 - [Anthropic's devcontainer Dockerfile](https://github.com/anthropics/claude-code/blob/main/.devcontainer/Dockerfile)
 - [Claude Code devcontainer docs](https://code.claude.com/docs/en/devcontainer)
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).
+
+This applies to the wrapper in this repository only. The tools it installs into
+the image — Claude Code itself (`@anthropic-ai/claude-code`) and the other
+packages in `package.json` / `install_additional_packages.sh` — keep their own
+licences and terms.
