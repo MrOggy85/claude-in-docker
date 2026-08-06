@@ -146,7 +146,8 @@ function claude {
 
 - [The `cid` config CLI](docs/config-cli.md) — inspect config and edit the allowlists (`cid domains add|rm`, `cid containers add|rm`, per-project or `-g` baseline) without hand-editing files; put it on `$PATH` and ships zsh completion
 - [Centralized Egress Proxy](docs/egress-proxy.md) — the network boundary: every container egresses through one shared Squid proxy that filters by hostname per project
-- [Known Attack Vectors](docs/attack-vectors.md) — the threat model: what's mitigated (project-settings/permissions guard, MCP token, egress) and what isn't
+- [Threat Model](docs/threat-model.md) — one-page summary of what this protects against and what it doesn't, plus how to [report a vulnerability](SECURITY.md)
+- [Known Attack Vectors](docs/attack-vectors.md) — the full vector-by-vector detail: what's mitigated (project-settings/permissions guard, MCP token, egress) and what isn't
 - [MCP Servers](docs/mcp-servers.md) — configure user-level, project-level, and GitHub MCP servers
 - [Mounting extra folders](docs/mounting-extra-folders.md) — make additional host folders visible inside the container via `CLAUDE_MOUNTS`
 - [Publishing ports](docs/publishing-ports.md) — expose a server running inside the container to the host via `CLAUDE_PORTS`
