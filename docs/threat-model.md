@@ -4,6 +4,13 @@ A one-page summary of what this project protects against and what it doesn't.
 For the full vector-by-vector detail behind each row — including what's
 partially mitigated and why — see [Known Attack Vectors](attack-vectors.md).
 
+This page describes the container sandbox `run.sh` builds when you run this
+tool **locally**. This repository's own maintenance automation
+(`.github/workflows/claude.yml`, which runs Claude against issues and PR
+comments on GitHub) is a separate, CI-side surface with its own gap — see
+[Untrusted Issue/Comment-Triggered CI
+Automation](attack-vectors.md#untrusted-issuecomment-triggered-ci-automation-not-mitigated).
+
 ## Protects against
 
 | Threat | How |
@@ -24,6 +31,7 @@ partially mitigated and why — see [Known Attack Vectors](attack-vectors.md).
 | Container escape | The container runs without `--cap-drop=ALL` or `--security-opt no-new-privileges`, so a root-level compromise inside it has a wider capability set and setuid bugs stay live — see [In-Container Privilege Escalation](attack-vectors.md#in-container-privilege-escalation-partially-mitigated). |
 | Malicious packages installed by your own build script | `install_additional_packages.sh` runs as root at image build time; anything it installs is trusted the same as the rest of the image. |
 | Prompt injection acting within its permitted powers | If a compromised or untrusted input convinces Claude to use a tool call it's already allowed to make (write a file in the mount, hit an allowed domain, comment on an issue), nothing here distinguishes that from a legitimate action — the sandbox limits *what's reachable*, not *whether the agent should do it*. |
+| Anyone triggering this repo's own CI agent via a public issue or comment | `.github/workflows/claude.yml` gates only on the literal string `@claude` appearing in the body, not on who posted it — any GitHub account can invoke a `contents: write` / `pull-requests: write` / `issues: write` session — see [Untrusted Issue/Comment-Triggered CI Automation](attack-vectors.md#untrusted-issuecomment-triggered-ci-automation-not-mitigated). |
 
 ## Residual risk, plainly
 

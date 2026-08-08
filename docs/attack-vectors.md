@@ -307,6 +307,90 @@ The GitHub MCP token (`MCP_GH_BEARER`) may hold **Issues** and **Pull requests**
 
 **Reducing it:** scope the fine-grained token to the **minimum set of repositories** it needs (not "all repositories"), and drop Issues / Pull requests write entirely if you do not need Claude acting on your behalf — a read-only token removes this channel. The code-push guard bounds the blast radius (no contents mutation) but does not close the write-to-issues channel; that is inherent to granting the scope.
 
+## Untrusted Issue/Comment-Triggered CI Automation (Not Mitigated)
+
+Everything above concerns the sandbox `run.sh` builds when you run this tool
+**locally**. This repository also uses Claude **on itself**, for maintenance,
+via `.github/workflows/claude.yml` — a separate surface that runs in GitHub
+Actions, outside that sandbox entirely, and is not covered by anything above.
+
+The workflow triggers on `issues: [opened, assigned]`, `issue_comment:
+[created]`, `pull_request_review_comment: [created]`, and
+`pull_request_review: [submitted]`, gated only by a substring check —
+`contains(<body or title>, '@claude')`. It does not check
+`author_association`. On a public repository, opening an issue or posting a
+comment requires no repository permission at all, so **any GitHub account**,
+including one with zero prior history on the repo, can cause this workflow to
+run with:
+
+```yaml
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+```
+
+— and the triggering issue/comment body handed to Claude as its instructions
+(`claude-code-action`'s own design: it follows the text containing the trigger
+phrase). This is one layer earlier than the [GitHub MCP Token Write
+Access](#github-mcp-token-write-access-accepted-trade-off) vector above — that
+row covers what a *running* session with a write-scoped token can do; this one
+is about who can cause a session to run at all.
+
+Unlike `pull_request` from a fork (used by `test.yml` / `image.yml`, where
+GitHub's "require approval for first-time contributors" setting can gate the
+run), `issues` and `issue_comment` events are **not** subject to any approval
+step — they fire immediately, for any account, the moment the event happens.
+Nothing in this repository's workflow narrows that.
+
+This can be verified by inspection alone, no live issue needed: the `if:`
+condition in `claude.yml` is
+
+```
+(github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+```
+
+(and the equivalent for the other three event types) — a pure string match
+against attacker-controlled text, with no reference to
+`github.event.issue.author_association`,
+`github.event.comment.author_association`, or
+`github.event.review.author_association` anywhere in the file. A payload from
+an `author_association` of `NONE` (a brand-new account) satisfies this
+condition exactly as well as one from `OWNER`.
+
+**To reproduce live** (only on a repo you control, since it consumes a real
+Actions run and an OAuth-token-backed Claude session): from an account with no
+prior interaction with the repo, open an issue whose body is just `@claude
+reply with the word PONG and do nothing else`. The workflow run starts
+regardless of that account's association; you can confirm the association was
+`NONE`/`FIRST_TIME_CONTRIBUTOR` from the run's event payload under the
+Actions tab.
+
+**Mitigation:** add an author-association allowlist to the `if:` condition —
+this cannot be applied by Claude itself acting on an issue (this integration's
+GitHub App permissions block edits under `.github/workflows/`), so it needs a
+maintainer commit:
+
+```yaml
+if: |
+  (
+    (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+    (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+    (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+    (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+  ) &&
+  contains(
+    fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+    github.event.issue.author_association || github.event.comment.author_association || github.event.review.author_association
+  )
+```
+
+This narrows the exposure from "any GitHub account" down to the [GitHub MCP
+Token Write Access](#github-mcp-token-write-access-accepted-trade-off) row
+above — a compromised or careless *collaborator* account — which is a real but
+much smaller population than the entire internet on a public repo.
+
 ## Untrusted Package Artifacts on the Host
 
 The project directory is bind-mounted read-write, so anything an in-container install writes (e.g. `node_modules/`, lockfiles, dotfiles) lands on the host disk. Those files are harmless at rest, but the container cannot prevent the host from later executing or interpreting them. The blast radius is whatever you mount (the repo plus any `CLAUDE_MOUNTS`); mitigation is host-side op-sec — never run project tooling on the host, and gate the unsafe path behind a deliberate action (e.g. a `claude-bare` alias).
