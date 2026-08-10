@@ -307,6 +307,50 @@ The GitHub MCP token (`MCP_GH_BEARER`) may hold **Issues** and **Pull requests**
 
 **Reducing it:** scope the fine-grained token to the **minimum set of repositories** it needs (not "all repositories"), and drop Issues / Pull requests write entirely if you do not need Claude acting on your behalf — a read-only token removes this channel. The code-push guard bounds the blast radius (no contents mutation) but does not close the write-to-issues channel; that is inherent to granting the scope.
 
+## Issue/Comment-Triggered CI Automation (mitigated by the action)
+
+Everything above concerns the sandbox `run.sh` builds when you run this tool
+**locally**. This repository also runs Claude **on itself**, for maintenance, via
+`.github/workflows/claude.yml` — a separate surface that executes in GitHub
+Actions, outside that sandbox entirely, with `contents: write` /
+`pull-requests: write` / `issues: write`.
+
+Two gates stand between a comment and a session, and only the second one
+matters:
+
+1. **The workflow `if:`** — a substring check for `@claude` in the issue,
+   comment, or review body. It does not look at `author_association`, so on a
+   public repo any account's comment can *start the job*.
+2. **`claude-code-action`'s own actor check** — the action requires the
+   triggering user to have **write access** to the repository, verified for
+   issue, pull request, comment and review events, and refuses GitHub Apps and
+   bots unless they are named in `allowed_bots`. A run started by an account
+   without write access stops here, before Claude executes. See the action's
+   [security docs](https://github.com/anthropics/claude-code-action/blob/main/docs/security.md).
+
+So the trigger population is collaborators, not the internet. Adding an
+`author_association` allowlist to the `if:` is cheap defence in depth — it
+declines the run a step earlier, before a runner is spent — but it is not what
+closes the hole, and a workflow without it is not open to anonymous invocation.
+
+What remains:
+
+- **A compromised or careless collaborator account** — the same population as
+  the [GitHub MCP Token Write
+  Access](#github-mcp-token-write-access-accepted-trade-off) row above, one
+  layer earlier: that row is what a *running* session can do, this is who can
+  cause one to run.
+- **Prompt injection through text the trigger did not write.** A collaborator
+  who tags `@claude` on an issue opened by a stranger hands that stranger's text
+  to Claude as context. The action strips HTML comments, invisible characters
+  and hidden attributes, but the sanitiser is a filter, not a boundary.
+- **The granted tools.** `claude_args` in the workflow allows `WebFetch`,
+  `WebSearch`, and a pinned set of Bash commands (`make test:*`, `make lint`,
+  `bats`, `shellcheck`, `jq`) on top of the action's file/git/GitHub defaults.
+  `curl`/`wget` are deliberately not granted: `WebFetch` covers reading linked
+  material, and a raw HTTP client in a job holding write tokens is a cleaner
+  exfil path. Widening that list widens this row.
+
 ## Untrusted Package Artifacts on the Host
 
 The project directory is bind-mounted read-write, so anything an in-container install writes (e.g. `node_modules/`, lockfiles, dotfiles) lands on the host disk. Those files are harmless at rest, but the container cannot prevent the host from later executing or interpreting them. The blast radius is whatever you mount (the repo plus any `CLAUDE_MOUNTS`); mitigation is host-side op-sec — never run project tooling on the host, and gate the unsafe path behind a deliberate action (e.g. a `claude-bare` alias).

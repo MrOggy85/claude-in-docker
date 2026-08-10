@@ -34,3 +34,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The action grants only file/git/GitHub tools by default: no web access
+          # and no Bash. Widen it to what a task on this repo actually needs —
+          # reading linked material, and running the same gates CI runs.
+          # Deliberately no `curl`/`wget`: WebFetch already covers fetching, and a
+          # raw HTTP client in a job holding write tokens is a cleaner exfil path.
+          claude_args: |
+            --allowedTools "WebFetch,WebSearch,Bash(make test:*),Bash(make lint),Bash(bats:*),Bash(shellcheck:*),Bash(jq:*)"
