@@ -168,7 +168,7 @@ cmd_project() {
 
   head_ "Overrides (fall back to the global file when absent)"
   local f
-  for f in allowed-domains.txt docker-containers.txt .env container-CLAUDE.md mcp-servers.json install_additional_packages.sh; do
+  for f in allowed-domains.txt docker-containers.txt .env container-CLAUDE.md mcp-servers.json claude.json install_additional_packages.sh; do
     if [[ -f "${pdir}/${f}" ]]; then
       printf '  [override] %s\n' "${f}"
     else
