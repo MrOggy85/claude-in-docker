@@ -86,6 +86,14 @@ project. Find the right directory with `./cid project`, see the effective egress
 allowlist with `./cid domains`, and add/remove entries with `./cid domains add|rm
 <host>` (per-project by default, or `-g` for the shared baseline).
 
+`claude.json` is always per-project (not an opt-in override like the files above):
+`run.sh` seeds `<config-dir>/projects/<key>/claude.json` from the global file the
+first time it sees a project, then mounts that private copy. Claude Code keys
+trust-dialog acceptance and MCP-server approvals in this file by working-directory
+path, and every project mounts at the same in-container path — a single shared
+file would let one project's approvals silently apply to an unrelated one. See
+[Known Attack Vectors](docs/attack-vectors.md#shared-claudejson-collapses-per-project-trust-state-mitigated).
+
 ## Run
 
 - `cd` to the folder you want to run Claude Code from

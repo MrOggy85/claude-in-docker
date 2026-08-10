@@ -131,6 +131,20 @@ STUB
 fi
 # Empty per-project allowlist; Squid already applies the baseline (see 3f).
 [[ -e "${PROJECT_CONFIG_DIR}/allowed-domains.txt" ]] || touch "${PROJECT_CONFIG_DIR}/allowed-domains.txt"
+# Private per-project claude.json: Claude Code keys its own trust/onboarding
+# state and MCP-server approvals in this file by working-directory path, but
+# every project mounts at the SAME in-container path, so a single shared file
+# would collapse every project onto that one key (one project's MCP approval
+# could silently apply to an unrelated one). Seed from the global file on
+# first run so existing onboarding state carries over; from then on mutations
+# stay local to this project. See docs/attack-vectors.md.
+if [[ ! -e "${PROJECT_CONFIG_DIR}/claude.json" ]]; then
+  if [[ -f "${CONFIG_DIR}/claude.json" ]]; then
+    cp "${CONFIG_DIR}/claude.json" "${PROJECT_CONFIG_DIR}/claude.json"
+  else
+    echo '{}' > "${PROJECT_CONFIG_DIR}/claude.json"
+  fi
+fi
 
 # Returns the per-project path if the file exists there, otherwise the root path.
 resolve_config_file() {  # <filename>
@@ -194,7 +208,8 @@ add_rw_mount() {  # <host_path> <container_path>
 # Each file lives in the config dir, seeded by `make init`, mounted only if
 # present. View with `cid list` / `cid show <file>`.
 add_ro_mount "${CONFIG_DIR}/settings.json" "${HOME_IN_CONTAINER}/.claude/settings.json"
-add_rw_mount "${CONFIG_DIR}/claude.json"   "${HOME_IN_CONTAINER}/.claude.json"
+# Per-project (seeded above), not from CONFIG_DIR directly — see the seeding block.
+add_rw_mount "${PROJECT_CONFIG_DIR}/claude.json" "${HOME_IN_CONTAINER}/.claude.json"
 add_rw_mount "${CONFIG_DIR}/.credentials.json" "${HOME_IN_CONTAINER}/.claude/.credentials.json"
 add_ro_mount "$(resolve_config_file container-CLAUDE.md)" "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
 add_ro_mount "${CONFIG_DIR}/.gitconfig"      "${HOME_IN_CONTAINER}/.gitconfig"

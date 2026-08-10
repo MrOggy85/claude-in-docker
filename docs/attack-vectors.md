@@ -151,9 +151,11 @@ to launch it — another way an untrusted repo could run code in the container.
 This is **not** an unguarded path: Claude Code prompts for approval before
 launching any project-scoped server from `.mcp.json`, so a server from an
 untrusted repo is not started until you accept it. The approval is per-project
-and persisted (in the mounted `~/.claude.json`), so you are asked once and not
-re-prompted on later runs. In a non-interactive invocation there is no prompt and
-unapproved servers are simply skipped.
+and persisted in the mounted `~/.claude.json` — see [Shared `claude.json`
+Collapses Per-Project Trust State](#shared-claudejson-collapses-per-project-trust-state-mitigated)
+below for how that file is kept genuinely per-project rather than shared across
+every project run through this tool. In a non-interactive invocation there is no
+prompt and unapproved servers are simply skipped.
 
 The one way to turn this into a silent launch is `enableAllProjectMcpServers` (or
 `enabledMcpjsonServers`) in a project settings file, which auto-approves without
@@ -163,6 +165,49 @@ on its dangerous-key list, so either one triggers the prompt. Note that
 `guards/mcp-bearer-no-push.sh` only vets the GitHub MCP token; it does not
 inspect `.mcp.json` server commands — Claude Code's own approval prompt is what
 covers them.
+
+## Shared `claude.json` Collapses Per-Project Trust State (Mitigated)
+
+Every project run through this tool is bind-mounted at the same in-container
+path (`/home/dev/repo`), and `claude.json` — which Claude Code uses to key
+trust-dialog acceptance and MCP-server approvals by working-directory path — was
+previously mounted straight from the global config dir, read-write, into every
+container. That collapsed every project's entry onto the identical key
+(`projects["/home/dev/repo"]`) in the same host file: approving a `.mcp.json`
+server once for a project you trust could silently pre-approve a same-named
+entry the next time a completely unrelated project — including a stranger's
+freshly cloned repo — defined a server Claude Code matches against that same
+state. This is the same failure class as the public "TrustFall" disclosure
+(a single trust decision extending far past its intended scope), just
+introduced by this tool's fixed-path mount design rather than by Claude Code
+itself.
+
+`run.sh` now seeds a private `claude.json` under
+`<config-dir>/projects/<key>/` the first time it sees a project (copied from
+the global file, so existing onboarding state carries over), and mounts that
+per-project copy instead of the global one — the same fallback pattern already
+used for `container-CLAUDE.md` and `mcp-servers.json`. Mutations after that
+stay local to each project.
+
+This is unrelated to usage/cost tracking: `ccusage` reads the JSONL transcripts
+under `~/.claude/` (the directory), which is backed by the per-project **named
+volume** (`run.sh`'s `VOLUME`, already keyed by a hash of the project path) —
+not `~/.claude.json` (the file), which only ever held onboarding/trust state.
+Making `claude.json` per-project has no effect on statistics.
+
+**Residual risk:** projects that ran this tool before the fix keep whatever
+mixed approval history their pre-fix `claude.json` already accumulated; the fix
+only stops new collisions going forward. If you want a clean slate, delete
+`<config-dir>/projects/<key>/claude.json` and it will be reseeded from the
+global file on the next run.
+
+**To verify:** run this tool against two scratch directories in sequence, each
+with a `.mcp.json` defining a server under the *same* name but a different
+`command`. Approve the prompt in the first; the second should still prompt (not
+silently reuse the first project's approval). Diff
+`<config-dir>/projects/<key-1>/claude.json` against
+`<config-dir>/projects/<key-2>/claude.json` (`./cid project` prints each
+project's `<key>`) to confirm they diverge after the two runs.
 
 ## In-Container Privilege Escalation (Partially Mitigated)
 

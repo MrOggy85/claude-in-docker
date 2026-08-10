@@ -96,6 +96,7 @@ EOF
   # or restore the developer's real config. Both files are wiped with STUB_DIR.
   ENV_FILE="${CLAUDE_DOCKER_CONFIG_DIR}/.env"
   MCP_ROOT="${CLAUDE_DOCKER_CONFIG_DIR}/mcp-servers.json"
+  CLAUDE_JSON_ROOT="${CLAUDE_DOCKER_CONFIG_DIR}/claude.json"
 
   # Convenience: run run.sh from the isolated project dir with test-safe env vars
   # SKIP_CLAUDE_VOLUME_PATHS=1  — skip node_modules docker volume creation
@@ -637,4 +638,71 @@ refute_run_arg() {
   [ "$status" -eq 0 ]
   assert_run_arg "--mcp-config"
   assert_run_arg "${MCP_ROOT}:/home/dev/.mcp-servers.json:ro"
+}
+
+# ---------------------------------------------------------------------------
+# claude.json (per-project trust/MCP-approval state)
+# ---------------------------------------------------------------------------
+
+@test "first run seeds a private claude.json copied from the global file" {
+  printf '{"projects":{"/home/dev/repo":{"hasTrustDialogAccepted":true}}}\n' > "${CLAUDE_JSON_ROOT}"
+  rm -f "${PROJECT_CONFIG_DIR}/claude.json"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  [ -f "${PROJECT_CONFIG_DIR}/claude.json" ]
+  diff "${CLAUDE_JSON_ROOT}" "${PROJECT_CONFIG_DIR}/claude.json"
+  # The per-project copy is mounted, never the global file directly.
+  assert_run_arg "${PROJECT_CONFIG_DIR}/claude.json:/home/dev/.claude.json"
+  ! grep -qxF "${CLAUDE_JSON_ROOT}:/home/dev/.claude.json" "${DOCKER_RUN_ARGS}"
+}
+
+@test "first run with no global claude.json seeds an empty JSON object" {
+  rm -f "${CLAUDE_JSON_ROOT}" "${PROJECT_CONFIG_DIR}/claude.json"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  [ "$(cat "${PROJECT_CONFIG_DIR}/claude.json")" = "{}" ]
+}
+
+@test "existing per-project claude.json is not reseeded from the global file" {
+  printf '{"projects":{"/home/dev/repo":{"hasTrustDialogAccepted":true}}}\n' > "${CLAUDE_JSON_ROOT}"
+  mkdir -p "${PROJECT_CONFIG_DIR}"
+  printf '{"projects":{"/home/dev/repo":{"mcpServers":{"already":"approved"}}}}\n' > "${PROJECT_CONFIG_DIR}/claude.json"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  grep -qF "already" "${PROJECT_CONFIG_DIR}/claude.json"
+}
+
+@test "two different projects get independent claude.json copies" {
+  printf '{"projects":{"/home/dev/repo":{"hasTrustDialogAccepted":true}}}\n' > "${CLAUDE_JSON_ROOT}"
+  rm -f "${PROJECT_CONFIG_DIR}/claude.json"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+
+  # A second, unrelated project directory hashes to a different per-project dir.
+  TEST_PROJECT_DIR_2="$(mktemp -d)"
+  _SAFE_NAME_2="$(printf '%s' "$(basename "${TEST_PROJECT_DIR_2}")" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-')"
+  _SAFE_NAME_2="$(printf '%s' "${_SAFE_NAME_2}" | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$//')"
+  if command -v sha256sum >/dev/null 2>&1; then
+    _PATH_HASH_2="$(printf '%s' "${TEST_PROJECT_DIR_2}" | sha256sum | cut -c1-10)"
+  else
+    _PATH_HASH_2="$(printf '%s' "${TEST_PROJECT_DIR_2}" | shasum -a 256 | cut -c1-10)"
+  fi
+  PROJECT_CONFIG_DIR_2="${CLAUDE_PROJECTS_DIR}/${_SAFE_NAME_2:-repo}-${_PATH_HASH_2}"
+
+  cd "${TEST_PROJECT_DIR_2}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+
+  # Simulate project 1 recording an MCP approval — a mutation writes back to
+  # ITS per-project copy only.
+  printf '{"projects":{"/home/dev/repo":{"mcpServers":{"evil":"approved"}}}}\n' > "${PROJECT_CONFIG_DIR}/claude.json"
+
+  # Project 2's copy is untouched: no cross-project leakage.
+  ! grep -qF "evil" "${PROJECT_CONFIG_DIR_2}/claude.json"
+
+  rm -rf "${TEST_PROJECT_DIR_2}"
 }
