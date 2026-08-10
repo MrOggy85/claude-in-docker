@@ -68,7 +68,7 @@ TEMPLATES_DIR="${SCRIPT_DIR}/templates"
 #  image at build time, so it lives in the repo, not the config dir — see below.)
 GLOBAL_FILES=(
   "settings.json|Claude Code settings mounted at ~/.claude/settings.json"
-  "claude.json|Onboarding state + user-level config (mounted read-write)"
+  "claude.json|Onboarding state + user-level config (seeds a per-project copy, see 'cid project')"
   "mcp-servers.json|MCP server definitions, injected via --mcp-config"
   "container-CLAUDE.md|Personal instructions mounted at ~/.claude/CLAUDE.md"
   ".gitconfig|git user.name / user.email"
@@ -168,7 +168,7 @@ cmd_project() {
 
   head_ "Overrides (fall back to the global file when absent)"
   local f
-  for f in allowed-domains.txt docker-containers.txt .env container-CLAUDE.md mcp-servers.json install_additional_packages.sh; do
+  for f in allowed-domains.txt docker-containers.txt .env container-CLAUDE.md mcp-servers.json install_additional_packages.sh claude.json; do
     if [[ -f "${pdir}/${f}" ]]; then
       printf '  [override] %s\n' "${f}"
     else

@@ -579,6 +579,51 @@ refute_run_arg() {
   assert_run_arg "claude-code:local"
 }
 
+@test "first run seeds a per-project claude.json copied from the global one" {
+  rm -rf "${PROJECT_CONFIG_DIR}"
+  printf '{"hasCompletedOnboarding":true,"projects":{"/home/dev/repo":{"marker":"global"}}}\n' \
+    > "${CLAUDE_DOCKER_CONFIG_DIR}/claude.json"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  [ -f "${PROJECT_CONFIG_DIR}/claude.json" ]
+  grep -qF '"marker":"global"' "${PROJECT_CONFIG_DIR}/claude.json"
+  # Mounted from the per-project copy, not the global file — every project
+  # shares the same in-container path, so a shared claude.json would collapse
+  # trust/MCP-approval state across unrelated projects (see docs/attack-vectors.md).
+  assert_run_arg "${PROJECT_CONFIG_DIR}/claude.json:/home/dev/.claude.json"
+  ! grep -qF "${CLAUDE_DOCKER_CONFIG_DIR}/claude.json:/home/dev/.claude.json" "${DOCKER_RUN_ARGS}"
+}
+
+@test "second project gets its own claude.json, independent of another project's mutations" {
+  printf '{"projects":{"/home/dev/repo":{}}}\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/claude.json"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  # Simulate Claude Code mutating the first project's copy (e.g. an MCP approval).
+  printf '{"projects":{"/home/dev/repo":{"mcpServers":{"test-server":{"approved":true}}}}}\n' \
+    > "${PROJECT_CONFIG_DIR}/claude.json"
+
+  local OTHER_PROJECT_DIR; OTHER_PROJECT_DIR="$(mktemp -d)"
+  local _other_safe _other_hash OTHER_CONFIG_DIR
+  _other_safe="$(printf '%s' "$(basename "${OTHER_PROJECT_DIR}")" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-')"
+  _other_safe="$(printf '%s' "${_other_safe}" | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$//')"
+  if command -v sha256sum >/dev/null 2>&1; then
+    _other_hash="$(printf '%s' "${OTHER_PROJECT_DIR}" | sha256sum | cut -c1-10)"
+  else
+    _other_hash="$(printf '%s' "${OTHER_PROJECT_DIR}" | shasum -a 256 | cut -c1-10)"
+  fi
+  OTHER_CONFIG_DIR="${CLAUDE_PROJECTS_DIR}/${_other_safe:-repo}-${_other_hash}"
+
+  cd "${OTHER_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  # The other project's seed comes from the still-unmutated global file, not
+  # from the first project's approved MCP server.
+  ! grep -qF "test-server" "${OTHER_CONFIG_DIR}/claude.json"
+  rm -rf "${OTHER_PROJECT_DIR}" "${OTHER_CONFIG_DIR}"
+}
+
 @test "per-project install script bakes a derived image and run uses it" {
   mkdir -p "${PROJECT_CONFIG_DIR}"
   printf '#!/bin/bash\napt-get install -y cowsay\n' > "${PROJECT_CONFIG_DIR}/install_additional_packages.sh"

@@ -164,6 +164,70 @@ on its dangerous-key list, so either one triggers the prompt. Note that
 inspect `.mcp.json` server commands — Claude Code's own approval prompt is what
 covers them.
 
+## Shared `claude.json` Collapses Per-Project Trust State (Mitigated)
+
+Every project this tool runs is bind-mounted at the **same** in-container path
+(`/home/dev/repo` — `REPO_IN_CONTAINER` in `run.sh`, also the `--workdir`).
+Claude Code keys its own per-project state in `~/.claude.json` — trust-dialog
+acceptance and, per [Project-Level MCP
+Servers](#project-level-mcp-servers-mitigated-by-claude-code) above, MCP server
+approvals — by that working-directory path. Before this fix, `run.sh` mounted a
+single `claude.json` from the **global** config dir read-write into every
+container regardless of project (`add_rw_mount "${CONFIG_DIR}/claude.json" …`),
+so every project's entry landed under the identical key
+`projects["/home/dev/repo"]` in the same host file. Two projects that have
+never seen each other therefore shared one trust/approval record:
+
+- **Trust-dialog acceptance** — not actually a new hole in practice, because
+  `templates/claude.json` ships with `hasTrustDialogAccepted: true` already, so
+  this dialog is deliberately pre-accepted for every project as a matter of
+  design (the container/proxy sandbox is the intended trust boundary, not the
+  in-app prompt). Worth stating plainly rather than leaving it implicit.
+- **MCP server approval** — the more serious case. `docs/attack-vectors.md`
+  (this file) already documented that Claude Code "prompts for approval before
+  launching any project-scoped server from `.mcp.json`" and that "the approval
+  is per-project and persisted (in the mounted `~/.claude.json`)" — a security
+  property the shared file quietly did not deliver, since "per-project" and
+  "for `/home/dev/repo`" were the same thing for every project. Approving a
+  `.mcp.json` server once, for a project you trust, risked silently pre-approving
+  same-keyed entries the next time *any other* project — including a stranger's
+  freshly cloned repo — defined a server under a name or slot Claude Code
+  matches on. This is the same failure class as the publicly reported
+  ["TrustFall"](https://adversa.ai/blog/trustfall-coding-agent-security-flaw-rce-claude-cursor-gemini-cli-copilot/)
+  bug in Claude Code / Cursor / Gemini CLI / Copilot CLI (a single trust
+  decision silently extending far past its intended scope) — but caused here by
+  this tool's own fixed-path mount design, independent of whether the upstream
+  bug is patched.
+
+**Mitigation:** `run.sh` now seeds a private `claude.json` under
+`<config-dir>/projects/<key>/` the first time it sees a project (copied from
+the current global file, so existing onboarding/trust state carries over
+without re-triggering onboarding) and mounts that per-project copy instead of
+the global one (`resolve_config_file claude.json`, the same fall-back pattern
+already used for `container-CLAUDE.md` and `mcp-servers.json`). From then on,
+mutations Claude Code makes to `claude.json` — new trust entries, new MCP
+approvals — stay local to that project's file. `cid project` lists `claude.json`
+as an override like the others.
+
+**Residual risk:** the initial seed is a point-in-time copy of whatever the
+global file held at that moment, so a project seeded *before* this fix shipped
+still starts from a file that may already contain approvals accumulated from
+other projects; there is no automatic way to retroactively un-mix that history.
+`cid show claude.json` (global) / inspecting
+`<config-dir>/projects/<key>/claude.json` (per-project) lets you audit and
+manually prune the `projects` map if you want a clean slate.
+
+**Verify it yourself:** run this tool against two different empty scratch
+directories in sequence, each with a distinct `.mcp.json` defining a server
+under the *same* server name (e.g. `test-server`) but a different `command`.
+Approve the server prompt in the first project, then check whether the second
+project's session prompts again before launching its own `test-server`. Before
+this fix, on a version of this tool where `claude.json` was still globally
+shared, the second project would not re-prompt. Inspect
+`<config-dir>/projects/<key>/claude.json` after each run to see the two
+projects now keep independent `mcpServers`/approval state instead of both
+writing to the same global file.
+
 ## In-Container Privilege Escalation (Partially Mitigated)
 
 The main process runs as your unprivileged host UID:GID (`run.sh` `--user

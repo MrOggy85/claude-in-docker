@@ -67,7 +67,7 @@ egress allowlists in place — `cid domains add <host>` / `cid domains rm <host>
 All of the following files live in the config directory and are your personal files:
 
 - `settings.json` add your own settings here that will be used by Claude Code
-- `claude.json` contains onboarding state and your user-level MCP server config
+- `claude.json` contains onboarding state, trust-dialog state, and MCP server approvals. `run.sh` seeds a private per-project copy under `<config-dir>/projects/<key>/` the first time it sees a project, so approvals in one project can't silently apply to another (every project is bind-mounted at the same in-container path, so Claude Code's own project entry in this file would otherwise be keyed identically for all of them) — see [Known Attack Vectors](docs/attack-vectors.md#shared-claudejson-collapses-per-project-trust-state-mitigated).
 - `container-CLAUDE.md` add your personal instructions for Claude Code here; mounted into the container as `~/.claude/CLAUDE.md` (user-global). Distinct from the repo's own `CLAUDE.md`, which holds project instructions for working on this tool.
 - `allowed-domains.txt` domains listed here are the only outbound destinations the container can reach. It is the allowlist enforced by the shared Squid egress proxy (read live — edits apply within ~30s, no image rebuild). See [Centralized Egress Proxy](docs/egress-proxy.md) for how egress filtering works.
 - `.gitconfig` set your git `user.name` / `user.email` here.
@@ -80,9 +80,10 @@ workflow needs (e.g. Deno), then rebuild the image. It must stay in the repo bec
 it is `COPY`'d into the image and Docker's build context is the repo directory.
 
 Per-project overrides (a per-repo `allowed-domains.txt`, `.env`, `container-CLAUDE.md`,
-`mcp-servers.json`, or `install_additional_packages.sh`) live under
+`mcp-servers.json`, `install_additional_packages.sh`, or `claude.json`) live under
 `<config-dir>/projects/<key>/`, created automatically the first time you run in a
-project. Find the right directory with `./cid project`, see the effective egress
+project (`claude.json` is seeded there automatically; the others start empty/absent
+and fall back to the global file until you add one). Find the right directory with `./cid project`, see the effective egress
 allowlist with `./cid domains`, and add/remove entries with `./cid domains add|rm
 <host>` (per-project by default, or `-g` for the shared baseline).
 

@@ -132,6 +132,17 @@ fi
 # Empty per-project allowlist; Squid already applies the baseline (see 3f).
 [[ -e "${PROJECT_CONFIG_DIR}/allowed-domains.txt" ]] || touch "${PROJECT_CONFIG_DIR}/allowed-domains.txt"
 
+# Seed a per-project claude.json by copying whatever the global one currently
+# holds. Every project mounts at the SAME in-container path (REPO_IN_CONTAINER
+# above), so Claude Code's own project entry in claude.json — trust-dialog
+# state, MCP server approvals — is keyed identically for every project. A
+# single shared claude.json therefore lets state leak from one project to
+# every other; the copy makes future mutations local to this project. See
+# docs/attack-vectors.md#shared-claudejson-collapses-per-project-trust-state-mitigated.
+if [[ ! -e "${PROJECT_CONFIG_DIR}/claude.json" && -f "${CONFIG_DIR}/claude.json" ]]; then
+  cp "${CONFIG_DIR}/claude.json" "${PROJECT_CONFIG_DIR}/claude.json"
+fi
+
 # Returns the per-project path if the file exists there, otherwise the root path.
 resolve_config_file() {  # <filename>
   local fname="$1"
@@ -194,7 +205,7 @@ add_rw_mount() {  # <host_path> <container_path>
 # Each file lives in the config dir, seeded by `make init`, mounted only if
 # present. View with `cid list` / `cid show <file>`.
 add_ro_mount "${CONFIG_DIR}/settings.json" "${HOME_IN_CONTAINER}/.claude/settings.json"
-add_rw_mount "${CONFIG_DIR}/claude.json"   "${HOME_IN_CONTAINER}/.claude.json"
+add_rw_mount "$(resolve_config_file claude.json)" "${HOME_IN_CONTAINER}/.claude.json"
 add_rw_mount "${CONFIG_DIR}/.credentials.json" "${HOME_IN_CONTAINER}/.claude/.credentials.json"
 add_ro_mount "$(resolve_config_file container-CLAUDE.md)" "${HOME_IN_CONTAINER}/.claude/CLAUDE.md"
 add_ro_mount "${CONFIG_DIR}/.gitconfig"      "${HOME_IN_CONTAINER}/.gitconfig"
