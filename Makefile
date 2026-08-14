@@ -17,9 +17,10 @@ SHELL_SOURCES := cid \
   $(filter-out install_additional_packages.sh,$(wildcard *.sh)) \
   $(wildcard guards/*.sh) $(wildcard scripts/*.sh) $(wildcard proxy/*.sh) \
   $(wildcard docker-bridge/*.sh) $(wildcard chrome-devtools-mcp/*.sh) \
-  $(wildcard sound-effects/*.sh) $(wildcard templates/*.sh)
+  $(wildcard sound-effects/*.sh) $(wildcard templates/*.sh) \
+  $(wildcard skills/*/*.sh)
 
-.PHONY: init migrate bats test test-extra-mounts test-extra-ports test-path-volumes test-run test-e2e test-ext-allowlist test-chrome-devtools-mcp test-docker-bridge test-guards test-scan-settings test-cid test-colors lint lockfile update-claude pin-digest proxy-up proxy-down
+.PHONY: init migrate bats test test-extra-mounts test-extra-ports test-path-volumes test-run test-e2e test-ext-allowlist test-chrome-devtools-mcp test-docker-bridge test-guards test-scan-settings test-cid test-colors test-sandbox-info lint lockfile update-claude pin-digest proxy-up proxy-down
 # install_additional_packages.sh stays in the repo: it is COPY'd into the base
 # image at build time (build context = repo dir), so it can't be mounted.
 init: $(addprefix $(CONFIG_DIR)/,$(GLOBAL_CONFIG)) $(CONFIG_DIR)/.credentials.json install_additional_packages.sh
@@ -94,6 +95,9 @@ test-cid:
 
 test-colors:
 	bats test/colors.bats
+
+test-sandbox-info:
+	bats test/sandbox-info.bats
 
 # Shellcheck every script in SHELL_SOURCES. -x follows `source`d files so
 # paths.sh's helpers are known. Zero exclusions: a finding is either fixed or

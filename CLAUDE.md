@@ -65,6 +65,15 @@ sourced file, not in `run.sh`.
   docker bridge, read per call instead of on a TTL, and so does
   `trusted-settings-rules.txt` (permission rules the settings guard must not
   flag), read per run.
+- `skills/sandbox/` — the one thing mounted *for* the session rather than the
+  user: an on-demand skill (`SKILL.md` + `sandbox-info.sh`) reporting this
+  session's published host↔container ports, mounts, volume-backed paths and
+  egress policy. Mounted ro at `~/.claude/skills/sandbox` (a bind nested under the
+  session volume), gated by `CLAUDE_SANDBOX_INFO`. `sandbox-info.sh` runs INSIDE
+  the container, so like `init-firewall.sh` it is self-contained (no
+  `scripts/colors.sh`) and reads only env vars `run.sh` sets — never secret
+  values. Nothing is baked into the image, so edits apply next run. See
+  docs/sandbox-info.md.
 - `scripts/extra-mounts.sh` — turns `CLAUDE_MOUNTS` into `--volume` tokens.
 - `scripts/path-volumes.sh` — owns the volume-backed in-repo paths: the automatic
   `node_modules` coverage (via `find-node-modules-paths.sh`), `CLAUDE_VOLUME_PATHS`,

@@ -36,6 +36,7 @@ All are optional — with none set, the container runs with its defaults.
 | `DOCKER_BRIDGE_PORT` | `9334` | Host port the read-only docker bridge listens on. Read by **both** the host bridge and `run.sh`, so unlike `CHROME_DEVTOOLS_MCP_PORT` it is auto-merged into the firewall when `CLAUDE_DOCKER_BRIDGE` is on — keep it in sync with the `url` in `mcp-servers.json`. | [Host Docker Bridge](docker-bridge.md) |
 | `DOCKER_BRIDGE_BIND` | `0.0.0.0` | Address the docker bridge binds. `0.0.0.0` is required for the container to reach it over the Docker gateway; narrow it if you know your gateway address. Host-only. | [Host Docker Bridge](docker-bridge.md) |
 | `DOCKER_BRIDGE_DOCKER_CMD` | `docker` | Path to the `docker` CLI the bridge invokes (launchd's `PATH` is minimal). Host-only. | [Host Docker Bridge](docker-bridge.md) |
+| `CLAUDE_SANDBOX_INFO` | `1` | Set to `0`/`false`/`no`/`off` to stop mounting the `sandbox` skill, so the session cannot look up its own port mappings, mounts and egress policy. What the sandbox is does not change. | [Sandbox Self-Awareness](sandbox-info.md) |
 | `CLAUDE_VOLUME` | `claude-<project>-<hash>` | Override the per-project session volume name (e.g. a throwaway one). | — |
 | `CLAUDE_CONTAINER_NAME` | `claude-<project>-<random>` | Pin a specific container name instead of the randomized default. | — |
 

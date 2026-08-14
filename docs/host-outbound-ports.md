@@ -50,6 +50,10 @@ This is the opposite direction from [`CLAUDE_PORTS`](publishing-ports.md):
 | Host reaches a server in the container | host → container | `INPUT` | `CLAUDE_PORTS` |
 | Container reaches a server on the host | container → host | `OUTPUT` | `CLAUDE_HOST_OUTBOUND_PORTS` (+ `SOUND_PORT`, `DOCKER_BRIDGE_PORT`) |
 
+Both lists are reported to the session on demand by the
+[`sandbox` skill](sandbox-info.md), with the ports `run.sh` knows the purpose of
+labelled.
+
 ## Caveats
 
 - **The host must be reachable via the Docker host gateway.** `host.docker.internal`
