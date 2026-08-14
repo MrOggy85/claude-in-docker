@@ -580,6 +580,7 @@ ENV_VARS=(
   "Configuration|DOCKER_BRIDGE_PORT|9334|Host port for the read-only docker bridge"
   "Configuration|DOCKER_BRIDGE_BIND|0.0.0.0|Address the docker bridge listens on (host-only)"
   "Configuration|DOCKER_BRIDGE_DOCKER_CMD|docker|Path to the docker CLI the bridge runs (host-only)"
+  "Configuration|CLAUDE_SANDBOX_INFO|1|Set 0 to skip the sandbox skill (session can't look up its ports/mounts)"
   "Configuration|CLAUDE_VOLUME|claude-<project>-<hash>|Override the per-project session volume name"
   "Configuration|CLAUDE_CONTAINER_NAME|claude-<project>-<random>|Pin the container name instead of the random default"
   "Egress proxy|CLAUDE_EGRESS_NETWORK|claude-egress|Docker network shared by the proxy and containers"

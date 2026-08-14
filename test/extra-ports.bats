@@ -31,22 +31,22 @@ EXTRA_PORTS="${SCRIPT_DIR}/scripts/extra-ports.sh"
 # Simple port (PORT -> PORT:PORT/tcp)
 # ---------------------------------------------------------------------------
 
-@test "single port: emits publish-spec and container-port on one tab-separated line" {
+@test "single port: emits publish-spec, container-port and host endpoint on one tab-separated line" {
   run --separate-stderr env CLAUDE_PORTS="3000" bash "${EXTRA_PORTS}"
   [ "$status" -eq 0 ]
-  [ "$output" = "3000:3000/tcp	3000/tcp" ]
+  [ "$output" = "3000:3000/tcp	3000/tcp	3000" ]
 }
 
 @test "port 1: minimum valid port" {
   run --separate-stderr env CLAUDE_PORTS="1" bash "${EXTRA_PORTS}"
   [ "$status" -eq 0 ]
-  [ "$output" = "1:1/tcp	1/tcp" ]
+  [ "$output" = "1:1/tcp	1/tcp	1" ]
 }
 
 @test "port 65535: maximum valid port" {
   run --separate-stderr env CLAUDE_PORTS="65535" bash "${EXTRA_PORTS}"
   [ "$status" -eq 0 ]
-  [ "$output" = "65535:65535/tcp	65535/tcp" ]
+  [ "$output" = "65535:65535/tcp	65535/tcp	65535" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -56,13 +56,13 @@ EXTRA_PORTS="${SCRIPT_DIR}/scripts/extra-ports.sh"
 @test "HOSTPORT:CPORT: maps host port to different container port" {
   run --separate-stderr env CLAUDE_PORTS="8080:3000" bash "${EXTRA_PORTS}"
   [ "$status" -eq 0 ]
-  [ "$output" = "8080:3000/tcp	3000/tcp" ]
+  [ "$output" = "8080:3000/tcp	3000/tcp	8080" ]
 }
 
 @test "same HOSTPORT:CPORT: equivalent to single port form" {
   run --separate-stderr env CLAUDE_PORTS="4000:4000" bash "${EXTRA_PORTS}"
   [ "$status" -eq 0 ]
-  [ "$output" = "4000:4000/tcp	4000/tcp" ]
+  [ "$output" = "4000:4000/tcp	4000/tcp	4000" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -72,13 +72,13 @@ EXTRA_PORTS="${SCRIPT_DIR}/scripts/extra-ports.sh"
 @test "IP:HOSTPORT:CPORT: emits IP-bound publish spec" {
   run --separate-stderr env CLAUDE_PORTS="127.0.0.1:8080:3000" bash "${EXTRA_PORTS}"
   [ "$status" -eq 0 ]
-  [ "$output" = "127.0.0.1:8080:3000/tcp	3000/tcp" ]
+  [ "$output" = "127.0.0.1:8080:3000/tcp	3000/tcp	127.0.0.1:8080" ]
 }
 
 @test "IP:HOSTPORT:CPORT localhost binding: correct publish spec" {
   run --separate-stderr env CLAUDE_PORTS="127.0.0.1:9000:9000" bash "${EXTRA_PORTS}"
   [ "$status" -eq 0 ]
-  [ "$output" = "127.0.0.1:9000:9000/tcp	9000/tcp" ]
+  [ "$output" = "127.0.0.1:9000:9000/tcp	9000/tcp	127.0.0.1:9000" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -88,19 +88,19 @@ EXTRA_PORTS="${SCRIPT_DIR}/scripts/extra-ports.sh"
 @test "/tcp suffix: explicit tcp protocol" {
   run --separate-stderr env CLAUDE_PORTS="5000/tcp" bash "${EXTRA_PORTS}"
   [ "$status" -eq 0 ]
-  [ "$output" = "5000:5000/tcp	5000/tcp" ]
+  [ "$output" = "5000:5000/tcp	5000/tcp	5000" ]
 }
 
 @test "/udp suffix: emits udp publish spec and container port" {
   run --separate-stderr env CLAUDE_PORTS="5000/udp" bash "${EXTRA_PORTS}"
   [ "$status" -eq 0 ]
-  [ "$output" = "5000:5000/udp	5000/udp" ]
+  [ "$output" = "5000:5000/udp	5000/udp	5000" ]
 }
 
 @test "HOSTPORT:CPORT/udp: udp with port mapping" {
   run --separate-stderr env CLAUDE_PORTS="5353:53/udp" bash "${EXTRA_PORTS}"
   [ "$status" -eq 0 ]
-  [ "$output" = "5353:53/udp	53/udp" ]
+  [ "$output" = "5353:53/udp	53/udp	5353" ]
 }
 
 @test "default protocol is tcp when no suffix given" {
@@ -117,23 +117,23 @@ EXTRA_PORTS="${SCRIPT_DIR}/scripts/extra-ports.sh"
   run --separate-stderr env CLAUDE_PORTS="3000,4000" bash "${EXTRA_PORTS}"
   [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 2 ]
-  [[ "${lines[0]}" == "3000:3000/tcp	3000/tcp" ]]
-  [[ "${lines[1]}" == "4000:4000/tcp	4000/tcp" ]]
+  [[ "${lines[0]}" == "3000:3000/tcp	3000/tcp	3000" ]]
+  [[ "${lines[1]}" == "4000:4000/tcp	4000/tcp	4000" ]]
 }
 
 @test "multiple ports with mixed protocols" {
   run --separate-stderr env CLAUDE_PORTS="3000/tcp,5353/udp" bash "${EXTRA_PORTS}"
   [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 2 ]
-  [[ "${lines[0]}" == "3000:3000/tcp	3000/tcp" ]]
-  [[ "${lines[1]}" == "5353:5353/udp	5353/udp" ]]
+  [[ "${lines[0]}" == "3000:3000/tcp	3000/tcp	3000" ]]
+  [[ "${lines[1]}" == "5353:5353/udp	5353/udp	5353" ]]
 }
 
 @test "valid entry after invalid one: valid entry still emitted" {
   run --separate-stderr env CLAUDE_PORTS="0,3000" bash "${EXTRA_PORTS}"
   [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 1 ]
-  [[ "${lines[0]}" == "3000:3000/tcp	3000/tcp" ]]
+  [[ "${lines[0]}" == "3000:3000/tcp	3000/tcp	3000" ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -185,5 +185,5 @@ EXTRA_PORTS="${SCRIPT_DIR}/scripts/extra-ports.sh"
 @test "whitespace around entry is trimmed" {
   run --separate-stderr env CLAUDE_PORTS="  3000  " bash "${EXTRA_PORTS}"
   [ "$status" -eq 0 ]
-  [ "$output" = "3000:3000/tcp	3000/tcp" ]
+  [ "$output" = "3000:3000/tcp	3000/tcp	3000" ]
 }

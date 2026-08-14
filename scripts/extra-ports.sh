@@ -4,11 +4,13 @@
 # CLAUDE_PORTS (comma-separated), so the host can reach a server running inside
 # the container. Each accepted entry prints ONE tab-separated line on stdout:
 #
-#   <publish-spec>\t<container-port>/<proto>
+#   <publish-spec>\t<container-port>/<proto>\t<host-endpoint>
 #
 # The first field feeds `docker run --publish`; the second tells the in-container
 # firewall (init-firewall.sh) which inbound ports to open — publishing alone is
-# not enough, because the firewall's INPUT policy is DROP. Human-readable
+# not enough, because the firewall's INPUT policy is DROP. The third is the host
+# side of the mapping (`<port>`, or `<ip>:<port>` when bound), reported to the
+# session by skills/sandbox — parsing lives here only. Human-readable
 # progress/skip messages go to stderr.
 #
 # Entry syntax (per comma-separated item), with an optional /tcp (default) or
@@ -66,5 +68,5 @@ for entry in ${ENTRIES[@]+"${ENTRIES[@]}"}; do
   else                    spec="${hport}:${cport}/${proto}"; fi
 
   kv "publish (${proto})" "host ${ip:+${ip}:}${hport} -> container ${cport}"
-  printf '%s\t%s\n' "$spec" "${cport}/${proto}"
+  printf '%s\t%s\t%s\n' "$spec" "${cport}/${proto}" "${ip:+${ip}:}${hport}"
 done

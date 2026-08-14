@@ -304,6 +304,119 @@ refute_run_arg() {
 }
 
 # ---------------------------------------------------------------------------
+# Sandbox skill (see docs/sandbox-info.md). The mount carries the skill; the env
+# vars carry the per-session facts it reports — most importantly the host side of
+# a published port, which the container cannot derive.
+# ---------------------------------------------------------------------------
+
+@test "default: the sandbox skill is mounted read-only" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "${SCRIPT_DIR}/skills/sandbox:/home/dev/.claude/skills/sandbox:ro"
+}
+
+@test "CLAUDE_PORTS=9345:3000: CONTAINER_PUBLISHED_PORTS carries the host endpoint" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_PORTS="9345:3000" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "CONTAINER_PUBLISHED_PORTS=9345:3000/tcp"
+}
+
+@test "ip-bound CLAUDE_PORTS: the bound address is kept in CONTAINER_PUBLISHED_PORTS" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_PORTS="127.0.0.1:5000:5000" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "CONTAINER_PUBLISHED_PORTS=127.0.0.1:5000:5000/tcp"
+}
+
+@test "no CLAUDE_PORTS: CONTAINER_PUBLISHED_PORTS is empty, not absent" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "CONTAINER_PUBLISHED_PORTS="
+}
+
+@test "default: the sound port is labelled for the sandbox skill" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "CONTAINER_HOST_PORT_LABELS=4767=sound server"
+}
+
+@test "chrome bridge port opened: labelled only when the user opened it" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_HOST_OUTBOUND_PORTS="9333" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  grep -q "^CONTAINER_HOST_PORT_LABELS=.*9333=chrome-devtools MCP bridge" "${DOCKER_RUN_ARGS}"
+}
+
+@test "CLAUDE_MOUNTS: the mount is reported to the sandbox skill as target=host:mode" {
+  local mount_src="${TEST_PROJECT_DIR}/extra"
+  mkdir -p "${mount_src}"
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_MOUNTS="${mount_src}" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "CONTAINER_EXTRA_MOUNTS=/home/dev/extra=${mount_src}:ro"
+}
+
+@test "volume-backed paths are reported, and pnpm's --env token is not mistaken for one" {
+  # The only test that lets path-volumes.sh run for real (no SKIP), because the
+  # pnpm store token is what distinguishes "filter the --env= line" from "list
+  # every token". A pnpm lockfile makes the script emit both kinds.
+  cd "${TEST_PROJECT_DIR}"
+  echo '{}' > package.json
+  : > pnpm-lock.yaml
+  run env \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "CONTAINER_VOLUME_PATHS=/home/dev/repo/node_modules"
+  # The store token still reaches the container — it is only kept out of the report.
+  assert_run_arg "--env=npm_config_store_dir=/home/dev/repo/node_modules/.pnpm-store"
+  ! grep -q "^CONTAINER_VOLUME_PATHS=.*npm_config_store_dir" "${DOCKER_RUN_ARGS}"
+}
+
+@test "CLAUDE_SANDBOX_INFO=0: no skill mount and no sandbox env vars" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_SANDBOX_INFO=0 \
+    CLAUDE_PORTS="9345:3000" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  refute_run_arg "${SCRIPT_DIR}/skills/sandbox:/home/dev/.claude/skills/sandbox:ro"
+  refute_run_arg "CONTAINER_PUBLISHED_PORTS=9345:3000/tcp"
+  # ...but the port is still published and opened: opting out of the report must
+  # not change what the sandbox actually is.
+  assert_run_arg "9345:3000/tcp"
+  assert_run_arg "CONTAINER_OPEN_PORTS=3000/tcp"
+}
+
+# ---------------------------------------------------------------------------
 # CLAUDE_MOUNTS (RO_MOUNTS) integration
 # ---------------------------------------------------------------------------
 

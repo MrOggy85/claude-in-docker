@@ -45,5 +45,13 @@ automatically from the single `CLAUDE_PORTS` value.
   published ports.
 
 The parsing lives in [`scripts/extra-ports.sh`](../scripts/extra-ports.sh),
-which `run.sh` calls to turn `CLAUDE_PORTS` into `docker run --publish` flags and
-the firewall's inbound-port list.
+which `run.sh` calls to turn `CLAUDE_PORTS` into `docker run --publish` flags, the
+firewall's inbound-port list, and the host endpoint of each mapping.
+
+## Telling the session about the mapping
+
+With `3000:8080`, code in the container reaches its own server on `8080` while the
+host uses `3000` — and a browser driven by the
+[chrome-devtools MCP server](chrome-devtools-mcp.md) runs on the *host*, so it
+needs `3000`. The [`sandbox` skill](sandbox-info.md) reports the mapping on
+demand so the session uses the right one instead of guessing.

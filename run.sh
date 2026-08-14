@@ -236,8 +236,14 @@ kv "mcp config" "${MCP_FILE}"
 #     separated host folders) into `--volume=...` tokens; see it for the syntax
 #     (ro default, ":rw"/":ro", ~ and relative paths). The primary repo and
 #     session volume are unaffected; usage tracking keys off the primary repo.
+#     Each token is also recorded as "<target>=<host path>:<mode>" for the sandbox
+#     skill to report (see 3g).
+EXTRA_MOUNT_LIST=()
 while IFS= read -r vol; do
   RO_MOUNTS+=("$vol")
+  _spec="${vol#--volume=}"          # <host>:<target>:<mode>
+  _tgt="${_spec#*:}"; _tgt="${_tgt%:*}"
+  EXTRA_MOUNT_LIST+=("${_tgt}=${_spec%%:*}:${_spec##*:}")
 done < <(
   PROJECT_DIR="${PROJECT_DIR}" \
   HOME_IN_CONTAINER="${HOME_IN_CONTAINER}" \
@@ -247,17 +253,23 @@ done < <(
 
 # 3c. Published ports. scripts/extra-ports.sh turns CLAUDE_PORTS into --publish
 #     specs so the host can reach a server in the container. Each line is
-#     "<spec>\t<cport/proto>": the spec becomes --publish; the container ports go
-#     into CONTAINER_OPEN_PORTS for the firewall to open explicitly (its INPUT
-#     policy is DROP — publishing alone isn't enough). See that script's syntax.
+#     "<spec>\t<cport/proto>\t<host endpoint>": the spec becomes --publish; the
+#     container ports go into CONTAINER_OPEN_PORTS for the firewall to open
+#     explicitly (its INPUT policy is DROP — publishing alone isn't enough); the
+#     host endpoint is the one part the container cannot derive, so the full
+#     mapping goes in too for the sandbox skill to report (see 3g). See that
+#     script's syntax.
 PUBLISH_ARGS=()
 OPEN_PORTS=()
-while IFS=$'\t' read -r spec cport; do
+PUBLISHED_PORTS=()
+while IFS=$'\t' read -r spec cport hostep; do
   [[ -z "$spec" ]] && continue
   PUBLISH_ARGS+=(--publish "$spec")
   OPEN_PORTS+=("$cport")
+  PUBLISHED_PORTS+=("${hostep}:${cport}")
 done < <(CLAUDE_PORTS="${CLAUDE_PORTS:-}" "${SCRIPT_DIR}/scripts/extra-ports.sh")
 CONTAINER_OPEN_PORTS="$(IFS=,; printf '%s' "${OPEN_PORTS[*]+${OPEN_PORTS[*]}}")"
+CONTAINER_PUBLISHED_PORTS="$(IFS=,; printf '%s' "${PUBLISHED_PORTS[*]+${PUBLISHED_PORTS[*]}}")"
 
 # 3c-b. Host-outbound ports. The container egresses only via Squid (see 3f),
 #       except for direct connections to the Docker host on this explicit port
@@ -265,6 +277,15 @@ CONTAINER_OPEN_PORTS="$(IFS=,; printf '%s' "${OPEN_PORTS[*]+${OPEN_PORTS[*]}}")"
 #       any CLAUDE_HOST_OUTBOUND_PORTS the user sets; init-firewall.sh opens one
 #       OUTPUT rule per port. See docs/host-outbound-ports.md.
 CONTAINER_HOST_OUTBOUND_PORTS="${SOUND_PORT:-4767}${CLAUDE_HOST_OUTBOUND_PORTS:+,${CLAUDE_HOST_OUTBOUND_PORTS}}"
+# Labels for the ports whose purpose is known here, so the sandbox skill can name
+# them instead of printing a bare number (see 3g). The user's own entries stay
+# unlabelled; CHROME_DEVTOOLS_MCP_PORT is labelled only if they opened it.
+CONTAINER_HOST_PORT_LABELS="${SOUND_PORT:-4767}=sound server"
+# The trailing-comma pattern also accepts a "/tcp" suffix on the user's entry.
+case ",${CLAUDE_HOST_OUTBOUND_PORTS:-}," in
+  *",${CHROME_DEVTOOLS_MCP_PORT:-9333},"*|*",${CHROME_DEVTOOLS_MCP_PORT:-9333}/tcp,"*)
+    CONTAINER_HOST_PORT_LABELS+=",${CHROME_DEVTOOLS_MCP_PORT:-9333}=chrome-devtools MCP bridge (browser runs on the host)" ;;
+esac
 
 # 3c-c. Host docker bridge — OPT-IN, off by default. CLAUDE_DOCKER_BRIDGE=1 mints
 #       a per-project token, forwards it, and opens the bridge port; with the
@@ -290,6 +311,7 @@ case "${CLAUDE_DOCKER_BRIDGE:-}" in
     export DOCKER_BRIDGE_TOKEN
     DOCKER_BRIDGE_ARGS=(--env DOCKER_BRIDGE_TOKEN)
     CONTAINER_HOST_OUTBOUND_PORTS+=",${_DB_PORT}"
+    CONTAINER_HOST_PORT_LABELS+=",${_DB_PORT}=read-only docker bridge"
     kv "docker bridge" "read-only docker via host.docker.internal:${_DB_PORT}"
     ;;
 esac
@@ -312,8 +334,13 @@ _path_volume_out="$(
   SKIP_CLAUDE_VOLUME_PATHS="${SKIP_CLAUDE_VOLUME_PATHS:-}" \
     "${SCRIPT_DIR}/scripts/path-volumes.sh"
 )"
+#     The `--volume=` targets are also recorded for the sandbox skill (see 3g);
+#     the `--env=` token pnpm gets is not a path, so it is skipped.
+VOLUME_PATH_LIST=()
 while IFS= read -r _tok; do
-  [[ -n "${_tok}" ]] && PATH_VOLUME_ARGS+=("${_tok}")
+  [[ -n "${_tok}" ]] || continue
+  PATH_VOLUME_ARGS+=("${_tok}")
+  case "${_tok}" in --volume=*) VOLUME_PATH_LIST+=("${_tok##*:}") ;; esac
 done <<< "${_path_volume_out}"
 
 # 3e. Env vars from the config-dir `.env` via `docker --env-file`. A per-project
@@ -353,6 +380,29 @@ PROXY_ENV_ARGS=(
 )
 kv "egress via central proxy" "network ${EGRESS_NETWORK}, project key ${PROJECT_KEY}"
 
+# 3g. Sandbox self-awareness, ON DEMAND: mount the `sandbox` skill so the session
+#     can look up the one thing it cannot derive — which host port maps to which
+#     container port — plus its mounts, volume-backed paths and egress policy. The
+#     skill's script reads the env vars collected above, so parallel sessions each
+#     report their own shape with nothing generated on the host. A bind nested
+#     under the ~/.claude volume; CLAUDE_SANDBOX_INFO=0 removes it entirely.
+#     See docs/sandbox-info.md.
+SANDBOX_ENV_ARGS=()
+case "${CLAUDE_SANDBOX_INFO:-1}" in
+  0|false|no|off|FALSE|NO|OFF) kv "sandbox skill" "disabled (CLAUDE_SANDBOX_INFO)" ;;
+  *)
+    add_ro_mount "${SCRIPT_DIR}/skills/sandbox" "${HOME_IN_CONTAINER}/.claude/skills/sandbox"
+    SANDBOX_ENV_ARGS=(
+      --env "CONTAINER_PUBLISHED_PORTS=${CONTAINER_PUBLISHED_PORTS}"
+      --env "CONTAINER_HOST_PORT_LABELS=${CONTAINER_HOST_PORT_LABELS}"
+      --env "CONTAINER_EXTRA_MOUNTS=$(IFS=,; printf '%s' "${EXTRA_MOUNT_LIST[*]+${EXTRA_MOUNT_LIST[*]}}")"
+      --env "CONTAINER_VOLUME_PATHS=$(IFS=,; printf '%s' "${VOLUME_PATH_LIST[*]+${VOLUME_PATH_LIST[*]}}")"
+      --env "REPO_IN_CONTAINER=${REPO_IN_CONTAINER}"
+    )
+    kv "sandbox skill" "the session can read its own ports/mounts on demand"
+    ;;
+esac
+
 # 4. Run as your host UID:GID; HOME forced so "~" resolves for the passwd-less
 #    UID. NET_ADMIN is needed for the nftables egress-lock, only exercisable via
 #    the sudo rule scoped to init-firewall.sh — no other escalation is possible.
@@ -374,6 +424,7 @@ docker run \
   ${DOCKER_BRIDGE_ARGS[@]+"${DOCKER_BRIDGE_ARGS[@]}"} \
   --env CONTAINER_OPEN_PORTS="${CONTAINER_OPEN_PORTS}" \
   --env CONTAINER_HOST_OUTBOUND_PORTS="${CONTAINER_HOST_OUTBOUND_PORTS}" \
+  ${SANDBOX_ENV_ARGS[@]+"${SANDBOX_ENV_ARGS[@]}"} \
   ${PUBLISH_ARGS[@]+"${PUBLISH_ARGS[@]}"} \
   --volume "${PROJECT_DIR}:${REPO_IN_CONTAINER}" \
   ${PATH_VOLUME_ARGS[@]+"${PATH_VOLUME_ARGS[@]}"} \
