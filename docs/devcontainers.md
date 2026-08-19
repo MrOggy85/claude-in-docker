@@ -1,16 +1,11 @@
 # Devcontainers Alternative
 
-This page describes how to run Claude Code inside a
-[Dev Container](https://containers.dev/) instead of (or alongside) `run.sh`.
-It is intended for teams that want VS Code / GitHub Codespaces integration, or
-who already have a devcontainer-based workflow.
+How to run Claude Code inside a [Dev Container](https://containers.dev/) instead of (or alongside)
+`run.sh` — for teams that want VS Code / GitHub Codespaces integration, or who already have a
+devcontainer workflow.
 
-> **Trade-off summary:** A devcontainer setup trades the terminal-first,
-> any-project, nftables-enforced security model for IDE integration and
-> Codespaces compatibility. Read the [comparison table](#comparison) before
-> committing to this approach.
-
----
+> **Trade-off:** a devcontainer trades the terminal-first, any-project, nftables-enforced security
+> model for IDE integration and Codespaces compatibility.
 
 ## Comparison
 
@@ -26,21 +21,14 @@ who already have a devcontainer-based workflow.
 | Terminal-first | Yes | IDE-first (VS Code / Codespaces) |
 | `NET_ADMIN` in Codespaces | N/A | **Not available** — use squid sidecar instead |
 
----
+## Network isolation with a squid sidecar
 
-## Architecture
+Codespaces does not grant `NET_ADMIN`, so iptables-based firewalling is unavailable. The replacement
+is a **Squid sidecar** plus Docker's `internal: true` network.
 
-### Network isolation with a squid sidecar
-
-GitHub Codespaces does not grant `NET_ADMIN`, so iptables-based firewalling is
-not available. The recommended replacement is a **Squid proxy sidecar** combined
-with Docker's `internal: true` network.
-
-The key insight is `internal: true` on the sandbox network: Docker removes the
-default gateway for containers on that network, so raw TCP connections from the
-`dev` container have no route to external IPs. The proxy container sits on *both*
-the `sandbox` and `outside` networks, making it the only path out. Even tools
-that ignore `HTTP_PROXY` are blocked — they will get `ENETUNREACH`.
+`internal: true` is the key: Docker removes the default gateway for containers on that network, so
+raw TCP from the `dev` container has no route to external IPs. The proxy sits on *both* `sandbox` and
+`outside`, making it the only path out — even tools that ignore `HTTP_PROXY` just get `ENETUNREACH`.
 
 ```yaml
 # .devcontainer/docker-compose.yml
@@ -85,8 +73,7 @@ networks:
   outside: {}
 ```
 
-**`proxy-allowlist.txt`** (per-project domain allowlist, mirrors
-`allowed-domains.txt` from `run.sh`):
+`proxy-allowlist.txt` is the per-project domain allowlist, mirroring `allowed-domains.txt`:
 
 ```
 api.anthropic.com
@@ -94,11 +81,10 @@ api.github.com
 registry.npmjs.org
 ```
 
-#### Squid HTTPS mode
+### Squid HTTPS mode
 
-For HTTPS, configure Squid in "peek and splice" mode — it reads the hostname
-from the `CONNECT` request without decrypting traffic. No CA cert injection
-needed:
+Configure Squid in "peek and splice" mode — it reads the hostname from the `CONNECT` request without
+decrypting, so no CA cert injection is needed:
 
 ```
 acl step1 at_step SslBump1
@@ -107,24 +93,18 @@ ssl_bump splice allowed_domains
 ssl_bump terminate all
 ```
 
-#### Limitations vs iptables
+### Limitations vs iptables
 
-- `HTTP_PROXY`/`HTTPS_PROXY` only intercepts proxy-aware traffic. The
-  `internal: true` network is the real enforcement layer; even tools that ignore
-  proxy env vars can't reach the internet due to no route.
-- DNS is not filtered — a tool can resolve an allowed domain's IP and attempt a
-  direct connection, but that connection will fail (`ENETUNREACH`) because there
-  is no route on the `sandbox` network.
-- In practice, Claude Code's actual traffic (Anthropic API, npm, git over HTTPS)
-  is fully covered.
-
----
+- `HTTP_PROXY`/`HTTPS_PROXY` only intercepts proxy-aware traffic. The `internal: true` network is the
+  real enforcement layer.
+- DNS is not filtered — a tool can resolve an allowed domain's IP and attempt a direct connection,
+  but it fails with `ENETUNREACH` for lack of a route on `sandbox`.
+- In practice Claude Code's actual traffic (Anthropic API, npm, git over HTTPS) is fully covered.
 
 ## Which programs respect HTTP_PROXY
 
-`HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` are read by most HTTP clients, but
-not all. The enforcement comes from the `internal: true` network, not from
-relying on every tool to honour the env var.
+Most HTTP clients read `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`, but not all — which is why
+enforcement comes from the `internal: true` network rather than from every tool honouring the var.
 
 **Respects proxy env vars:**
 
@@ -138,7 +118,7 @@ relying on every tool to honour the env var.
 | `npm`, `yarn`, `pnpm` | Yes, for package downloads |
 | `apt`, `apt-get` | Reads lowercase `http_proxy`/`https_proxy` |
 
-**Does not respect proxy env vars:**
+**Does not:**
 
 | Tool / library | Notes |
 |---|---|
@@ -146,19 +126,16 @@ relying on every tool to honour the env var.
 | Java `HttpURLConnection` / `HttpClient` | Needs JVM flags (`-Dhttp.proxyHost=...`) |
 | Raw socket code | Bypasses all proxy logic |
 
-**Claude Code** uses the Anthropic SDK, which routes API calls through the proxy
-correctly. Internal Node.js IPC and file-watching do not use the proxy — but
-they also don't need external access.
+**Claude Code** uses the Anthropic SDK, which routes API calls through the proxy correctly. Its
+internal Node IPC and file-watching don't use the proxy, and don't need external access.
 
 ### Verifying proxy traffic
-
-Watch Squid's access log to see exactly what is going through the proxy:
 
 ```bash
 docker compose exec proxy tail -f /var/log/squid/access.log
 ```
 
-Test from inside the dev container:
+From inside the dev container:
 
 ```bash
 # Should succeed (routed through proxy)
@@ -168,22 +145,14 @@ curl https://api.anthropic.com
 curl --noproxy '*' https://api.anthropic.com
 ```
 
----
-
 ## Personal mounts
 
-The equivalent of `CLAUDE_MOUNTS` is handled via Docker Compose override files,
-which are gitignored by convention:
-
-**`.devcontainer/.gitignore`** (committed):
-
-```
-docker-compose.override.yml
-```
-
-**`.devcontainer/docker-compose.override.yml`** (personal, never committed):
+The equivalent of `CLAUDE_MOUNTS` is a Docker Compose override file, gitignored by convention.
+Commit `.devcontainer/.gitignore` containing `docker-compose.override.yml`, then keep your personal
+copy out of git:
 
 ```yaml
+# .devcontainer/docker-compose.override.yml
 services:
   dev:
     volumes:
@@ -191,32 +160,23 @@ services:
       - ~/.ssh:/home/dev/.ssh:ro
 ```
 
-Docker Compose merges this file with `docker-compose.yml` automatically.
-
----
+Compose merges it with `docker-compose.yml` automatically.
 
 ## Personal packages
 
-Two approaches, depending on preference:
-
 ### Gitignored personal Dockerfile
 
-**`.devcontainer/.gitignore`** (committed):
-
-```
-Dockerfile
-docker-compose.override.yml
-```
-
-**`.devcontainer/Dockerfile`** (personal, gitignored — extends the team image):
+Add `Dockerfile` to the committed `.devcontainer/.gitignore` alongside
+`docker-compose.override.yml`, then extend the team image locally:
 
 ```dockerfile
+# .devcontainer/Dockerfile — personal, gitignored
 FROM ghcr.io/your-org/claude-devcontainer:latest
 RUN apt-get update && apt-get install -y ripgrep fd-find htop \
     && rm -rf /var/lib/apt/lists/*
 ```
 
-**`.devcontainer/docker-compose.override.yml`** (personal, switches from `image:` to `build:`):
+and switch from `image:` to `build:` in your override:
 
 ```yaml
 services:
@@ -228,8 +188,8 @@ Teammates without the personal `Dockerfile` use the published image directly.
 
 ### devcontainer Features
 
-The devcontainer spec supports composable [Features](https://containers.dev/features)
-for standard toolchains. Add them to a gitignored `devcontainer.local.json`:
+The spec supports composable [Features](https://containers.dev/features) for standard toolchains.
+Put them in a gitignored `devcontainer.local.json`, which VS Code merges with `devcontainer.json`:
 
 ```json
 {
@@ -240,40 +200,29 @@ for standard toolchains. Add them to a gitignored `devcontainer.local.json`:
 }
 ```
 
-VS Code merges `devcontainer.local.json` with `devcontainer.json` locally.
-
-**When to use which:**
-
 | Scenario | Approach |
 |---|---|
 | A few extra `apt` packages | Gitignored personal `Dockerfile` |
 | Standard toolchains (Rust, Go, Node, Python) | devcontainer Features |
 | Both | Gitignored `Dockerfile` + Features in `devcontainer.local.json` |
 
----
-
 ## Host UID mapping
 
-The `user: dev` in the compose file is static — if your host UID does not match
-the `dev` user's UID baked into the image, files created on the bind-mounted
-workspace will be owned by the wrong user on the host.
+`user: dev` is static — if your host UID doesn't match the `dev` user baked into the image, files
+created on the bind-mounted workspace end up owned by the wrong user on the host. Either build the
+image with your organisation's standard UID (e.g. `1000`), or adjust it dynamically in a
+`postStartCommand`:
 
-Options:
-
-- Build the image with your organisation's standard UID (e.g., `1000`)
-- Use a `postStartCommand` that adjusts the UID dynamically:
-  ```bash
-  sudo usermod -u $(stat -c %u /workspace) dev
-  ```
-
----
+```bash
+sudo usermod -u $(stat -c %u /workspace) dev
+```
 
 ## When devcontainers make sense
 
-- You want colleagues to open a repo in Codespaces and have `claude` ready to go
-- You don't need (or accept) a weaker network boundary than iptables
-- You're comfortable adding `.devcontainer/` to every repo
-- You primarily work in VS Code rather than a standalone terminal
+- You want colleagues to open a repo in Codespaces with `claude` ready to go.
+- You accept a weaker network boundary than iptables.
+- You're comfortable adding `.devcontainer/` to every repo.
+- You primarily work in VS Code rather than a standalone terminal.
 
-The `Dockerfile` from this project is directly reusable as the devcontainer
-image — only `devcontainer.json` and the compose file need to be written.
+This project's `Dockerfile` is directly reusable as the devcontainer image — only
+`devcontainer.json` and the compose file need writing.
