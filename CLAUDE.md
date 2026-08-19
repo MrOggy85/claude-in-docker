@@ -27,6 +27,28 @@ brief — one line on what happens and why, plus a pointer ("see the guard file"
 that duplication drifts out of sync. Put the authoritative description in the
 sourced file, not in `run.sh`.
 
+## Docs
+Brevity comes from cutting prose, never facts. `docs/` was tightened to this
+standard in f6b85b1 (24 guides, 21,873 -> 18,698 words); read
+`docs/publishing-ports.md` for the target density before writing or editing a
+guide. Every technical claim, table row, code block, command, env var and caveat
+stays. What goes:
+- the intro that restates the title, and the closing paragraph that restates the
+  body
+- explanation duplicated from the file or doc already linked — name the link and
+  stop (the `## Comments` rule above, applied to prose)
+- a fact's second phrasing ("use a port >=1024" then "cannot bind privileged
+  ports (<1024)")
+- hedging, and parenthetical examples that add no constraint
+
+Then try to cut 15% of the words with no fact lost; if that succeeds, it was not
+finished. `/tighten-docs` runs this pass and proves the "no fact lost" half
+mechanically.
+
+Wrap prose at 100 columns in `docs/`, 80 in `CLAUDE.md`, `README.md` and
+`skills/*/SKILL.md`. Never leave a 600-character single-line paragraph — make it
+wrapped bullets.
+
 ## Layout
 - `run.sh` — entrypoint: builds the image on context change, derives the
   per-project session volume and a unique container name, assembles mounts, runs
@@ -113,6 +135,9 @@ sourced file, not in `run.sh`.
   reaches it via `host.docker.internal` on a host-outbound port. See
   docs/chrome-devtools-mcp.md.
 - `docs/` — feature guides.
+- `.claude/commands/` — committed slash commands (`/tighten-docs`); the only
+  negation in `.gitignore`'s `.claude/*` rule. Prompts only: never add a settings
+  file or anything granting a permission, since a clone gets whatever is here.
 - `.github/workflows/` — CI. `test.yml` runs bats (ubuntu + macOS) and
   `make lint` on every non-doc change; both are gates, so run `make test` and
   `make lint` before pushing. `image.yml` builds the image weekly and on
