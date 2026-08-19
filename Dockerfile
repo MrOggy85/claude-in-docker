@@ -70,6 +70,12 @@ RUN mkdir -p "$NVM_DIR" \
 # Default node/npm/npx/corepack on PATH for every shell.
 ENV PATH="$NVM_DIR/default/bin:${PATH}"
 
+# uv — Debian's python3 has neither pip nor a working venv and the runtime user
+# cannot apt-get them. Above the npm layer so a claude bump won't re-fetch it.
+ARG UV_VERSION=0.12.5
+RUN curl -fsSL "https://astral.sh/uv/${UV_VERSION}/install.sh" \
+    | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh
+
 # Install Claude Code + deps to /usr/local as root (readable by all; self-updater
 # off via DISABLE_AUTOUPDATER below, since the runtime user can't write it).
 # npm runs in /usr/local (NOT --prefix, which reads the lock from the prefix).

@@ -39,6 +39,10 @@ It reports, in order:
 
 - **Files** — the repo's host path ↔ `/home/dev/repo`, extra `CLAUDE_MOUNTS` targets, and the
   [volume-backed paths](volume-backed-paths.md) that exist only inside the container.
+- **Installing packages** — why `apt-get` and `sudo` cannot work, including the misleading `account
+  validation failure` sudo returns; which package managers work unaided; and the host path of this
+  project's `install_additional_packages.sh` for everything else. See [Installing
+  Packages](installing-packages.md).
 - **Ports published to the host (inbound)** — each container port with the host endpoint forwarding
   to it, or an explicit "none" plus the `CLAUDE_PORTS` relaunch route. See [Publishing
   Ports](publishing-ports.md).
@@ -55,8 +59,9 @@ It reports, in order:
 
 `sandbox-info.sh` is a pure function of the environment, and the environment is per container.
 `run.sh` (step 3g) forwards `CONTAINER_PUBLISHED_PORTS`, `CONTAINER_HOST_PORT_LABELS`,
-`CONTAINER_EXTRA_MOUNTS` and `CONTAINER_VOLUME_PATHS` alongside the `CLAUDE_HOST_PROJECT_DIR` and
-`CONTAINER_HOST_OUTBOUND_PORTS` it already set. Two sessions in one project with different
+`CONTAINER_EXTRA_MOUNTS`, `CONTAINER_VOLUME_PATHS` and `CONTAINER_PROJECT_INSTALL_SCRIPT` alongside
+the `CLAUDE_HOST_PROJECT_DIR` and `CONTAINER_HOST_OUTBOUND_PORTS` it already set, plus
+`CONTAINER_PROJECT_IMAGE` when step 2d derived a per-project image. Two sessions in one project with different
 `CLAUDE_PORTS` each report their own mapping, with nothing generated on the host to clean up.
 
 The host side of a mapping is computed once, in

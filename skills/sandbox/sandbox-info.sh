@@ -23,6 +23,8 @@
 #   CONTAINER_VOLUME_PATHS          container paths backed by named volumes
 #   EGRESS_PROXY_HOST               Squid host when egress is locked to the proxy
 #   DOCKER_BRIDGE_TOKEN             presence only — the value is never printed
+#   CONTAINER_PROJECT_INSTALL_SCRIPT  host path of the project's install script
+#   CONTAINER_PROJECT_IMAGE         per-project image tag, set only when one is used
 set -euo pipefail
 
 REPO_IN_CONTAINER="${REPO_IN_CONTAINER:-/home/dev/repo}"
@@ -86,6 +88,30 @@ while IFS= read -r p; do
   _n=$((_n + 1))
 done < <(items "${CONTAINER_VOLUME_PATHS:-}")
 [[ "$_n" == 0 ]] && echo "- Volume-backed paths: none — writes land on the host disk."
+echo
+
+echo "## Installing packages"
+echo
+echo "- You are not root and cannot become root. \`apt-get\` fails on permissions;"
+echo "  \`sudo\` is scoped to one firewall script, so any other command reports"
+echo "  \`sudo: account validation failure, is your account locked?\` — that is this"
+echo "  policy, not a broken account. Debian mirrors are off the allowlist too."
+echo "- Language package managers DO work and need no permission: \`npm i -g\`"
+echo "  (npm's prefix is the writable nvm dir), \`uv\`, and \`nvm install\`."
+if [[ -n "${CONTAINER_PROJECT_IMAGE:-}" ]]; then
+  echo "- System packages: this project already builds its own image"
+  echo "  (\`${CONTAINER_PROJECT_IMAGE}\`) from the script below, so additions bake in"
+  echo "  on the next run."
+fi
+if [[ -n "${CONTAINER_PROJECT_INSTALL_SCRIPT:-}" ]]; then
+  echo "- For a system package, the user edits this file ON THE HOST and relaunches"
+  echo "  \`run.sh\`, which rebuilds: \`${CONTAINER_PROJECT_INSTALL_SCRIPT}\`"
+  echo "  It runs as root at build time, so no \`sudo\` in it. Create it if absent."
+else
+  echo "- System packages: the host-side install script path was not passed in. Tell"
+  echo "  the user to add the package to their \`install_additional_packages.sh\` and"
+  echo "  relaunch \`run.sh\`; you cannot install it from here."
+fi
 echo
 
 echo "## Ports published to the host (inbound)"

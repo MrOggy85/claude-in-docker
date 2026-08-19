@@ -382,7 +382,8 @@ kv "egress via central proxy" "network ${EGRESS_NETWORK}, project key ${PROJECT_
 
 # 3g. Sandbox self-awareness, ON DEMAND: mount the `sandbox` skill so the session
 #     can look up the one thing it cannot derive — which host port maps to which
-#     container port — plus its mounts, volume-backed paths and egress policy. The
+#     container port — plus its mounts, volume-backed paths, egress policy and how
+#     to get a package installed instead of reaching for apt-get. The
 #     skill's script reads the env vars collected above, so parallel sessions each
 #     report their own shape with nothing generated on the host. A bind nested
 #     under the ~/.claude volume; CLAUDE_SANDBOX_INFO=0 removes it entirely.
@@ -398,7 +399,15 @@ case "${CLAUDE_SANDBOX_INFO:-1}" in
       --env "CONTAINER_EXTRA_MOUNTS=$(IFS=,; printf '%s' "${EXTRA_MOUNT_LIST[*]+${EXTRA_MOUNT_LIST[*]}}")"
       --env "CONTAINER_VOLUME_PATHS=$(IFS=,; printf '%s' "${VOLUME_PATH_LIST[*]+${VOLUME_PATH_LIST[*]}}")"
       --env "REPO_IN_CONTAINER=${REPO_IN_CONTAINER}"
+      # The host file to edit to add a system package (see 2d) — passed whether or
+      # not it exists yet, since "create this file" is the answer either way.
+      --env "CONTAINER_PROJECT_INSTALL_SCRIPT=${_PROJECT_INSTALL}"
     )
+    # Only when 2d actually derived one, so the session never claims a per-project
+    # image that isn't in play.
+    if [[ "${IMAGE}" != "${BASE_IMAGE}" ]]; then
+      SANDBOX_ENV_ARGS+=(--env "CONTAINER_PROJECT_IMAGE=${IMAGE}")
+    fi
     kv "sandbox skill" "the session can read its own ports/mounts on demand"
     ;;
 esac

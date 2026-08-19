@@ -1,6 +1,6 @@
 ---
 name: sandbox
-description: Report this session's sandbox shape — which host port maps to a container port, what is mounted from the host, which paths are Docker volumes, and why network requests get blocked. Use when you need the URL the user (or a host-side browser such as the chrome-devtools MCP server) must open to reach a server you started, when a fetch/curl/install fails on the network, when a file you wrote is not visible on the host, or when the user asks what is reachable from where. The values change per session, so read them rather than assuming.
+description: Report this session's sandbox shape — which host port maps to a container port, what is mounted from the host, which paths are Docker volumes, what is installed and how to get more, and why network requests get blocked. Read this BEFORE reaching for apt-get, sudo, or any install command, and whenever a command is "not found" — apt-get cannot succeed here. Also use when you need the URL the user (or a host-side browser such as the chrome-devtools MCP server) must open to reach a server you started, when a fetch/curl/install fails on the network, when a file you wrote is not visible on the host, or when the user asks what is reachable from where. The values change per session, so read them rather than assuming.
 ---
 
 # This session's sandbox
@@ -40,10 +40,35 @@ nothing to clean up. Re-run it any time; it is cheap.
 - **Files.** The repo's host path (use it when telling the user which folder to
   open) plus extra mounts, and the volume-backed paths — those exist only inside
   the container, so a `node_modules` you install is invisible to host tooling.
+- **Installing packages.** Which package managers work, and the host file the
+  user must edit for anything else.
+
+## Toolchain
+
+The base image ships git, ripgrep, `fd`, `bat`, jq, curl, wget, python3, `uv`,
+Node via nvm, sqlite3, shellcheck, yamllint, make, tree, zip/unzip and an editor.
+A per-project install script may have added more — confirm with `command -v`.
+
+What you can install yourself, with no permission and no rebuild:
+
+- **Node** — `npm i -g <pkg>`; npm's prefix is the writable nvm directory.
+  `nvm install <ver>` also works. `nvm use` affects only the shell it runs in and
+  each Bash call is a fresh shell, so a project's `.nvmrc` needs chaining:
+  `nvm use && npm test`.
+- **Python** — `uv`, not pip: there is no `pip` and no working `python3 -m venv`
+  (no `ensurepip`). `uv venv` and `uv pip install` replace both; `uv run <script>`
+  needs neither.
+
+Anything else cannot be installed from in here. See the script's
+"Installing packages" section for why, and for the host file the user edits.
 
 ## Rules
 
 - Report facts from the script, not guesses; if a value is absent, say it is absent.
+- Never try to install your way past a missing tool. Do not run `apt-get`, do not
+  retry it under `sudo`, and do not look for a portable binary to drop somewhere
+  writable. Name the tool, give the user the host-side edit, and carry on with
+  what is installed.
 - Never print or echo secret values (`DOCKER_BRIDGE_TOKEN`, `MCP_GH_BEARER`, the
   proxy URL's credentials). The script reports secrets as present/absent only —
   keep it that way.

@@ -17,5 +17,15 @@ For **inspecting** host containers, use the `docker` MCP server if it is connect
 
 For anything that **changes** state — build, run, compose up/down, exec, restart, rm — there is no tool. Give the user the exact command to run in a terminal on the host and ask them to paste back the output you need.
 
+## Packages
+
+You are not root here and `sudo` is scoped to a single firewall script, so
+`apt-get` cannot work — under `sudo` it fails with the misleading
+`account validation failure, is your account locked?`. Do not retry it.
+
+`npm i -g`, `nvm install` and `uv` work. For a system package, name it and I will
+add it to `install_additional_packages.sh` on the host and relaunch. Run the
+`sandbox` skill for this session's toolchain and that file's path.
+
 ## YAML validation
 Use `yamllint <file>` to validate YAML files. It is installed in the container and available on PATH. For quick syntax-only checks use `yamllint -d "{extends: relaxed, rules: {line-length: disable}}" <file>`.
