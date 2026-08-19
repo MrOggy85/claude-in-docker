@@ -16,6 +16,7 @@ CLAUDE_MOUNTS="$HOME/data:/data" ./run.sh
 | Variable | Default | Description | Reference |
 | --- | --- | --- | --- |
 | `CLAUDE_DOCKER_CONFIG_DIR` | `$XDG_CONFIG_HOME/claude-in-docker` (i.e. `~/.config/claude-in-docker`) | All user config: settings, credentials, allowed-domains, per-project dirs. Read by `run.sh`, `proxy/up.sh`, `cid`, `Makefile`. | — |
+| `CLAUDE_DOCKER_BASE_IMAGE` | _(unset)_ | Build FROM a published base image (e.g. `ghcr.io/...@sha256:...`) instead of building the Dockerfile's `base` stage from source. Falls back to a `base-image` file in the config dir. | [Publishing to ghcr.io](publishing-ghcr.md) |
 | `CLAUDE_PROJECTS_DIR` | `<config-dir>/projects` | Base directory for per-project config dirs. The test suite points this at a throwaway dir. | — |
 | `CLAUDE_MOUNTS` | _(unset)_ | Extra host folders to bind-mount in. | [Mounting Extra Folders](mounting-extra-folders.md) |
 | `CLAUDE_PORTS` | _(unset)_ | Ports to publish container → host (and open in the firewall). | [Publishing Ports](publishing-ports.md) |

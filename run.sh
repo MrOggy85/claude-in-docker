@@ -43,6 +43,15 @@ source "${SCRIPT_DIR}/guards/project-settings.sh"
 source "${SCRIPT_DIR}/guards/mcp-bearer-no-push.sh"
 source "${SCRIPT_DIR}/guards/docker-bridge.sh"
 
+# 0. Reuse a published base image (see docs/publishing-ghcr.md) instead of
+#    building the Dockerfile's `base` stage from source. CLAUDE_DOCKER_BASE_IMAGE
+#    (env) wins over a `base-image` file in the config dir; empty/absent means
+#    build from source, exactly like before this existed.
+BASE_IMAGE_OVERRIDE="${CLAUDE_DOCKER_BASE_IMAGE:-}"
+if [[ -z "${BASE_IMAGE_OVERRIDE}" && -f "${CONFIG_DIR}/base-image" ]]; then
+  BASE_IMAGE_OVERRIDE="$(tr -d '[:space:]' < "${CONFIG_DIR}/base-image")"
+fi
+
 # 1. Build the image when missing or when the build context changed. A SHA-256
 #    of the key files is stored as an image label at build time; each run
 #    recomputes it and rebuilds on mismatch.
@@ -58,9 +67,11 @@ context_hash() {
   local existing=()
   for f in "${files[@]}"; do [ -f "$f" ] && existing+=("$f"); done
   # Include caller identity: the image embeds host UID/GID/username via
-  # --build-arg, so a different user must get a fresh image.
+  # --build-arg, so a different user must get a fresh image. Also include the
+  # base-image override so switching to/from a published base rebuilds too.
   { sha256_ "${existing[@]}"
     printf 'uid=%s gid=%s user=%s\n' "$(id -u)" "$(id -g)" "$(id -un)"
+    printf 'base_image=%s\n' "${BASE_IMAGE_OVERRIDE}"
   } | sha256_ - | cut -c1-16
 }
 
@@ -71,12 +82,19 @@ if [[ "$BASE_IMAGE_HASH" != "$CURRENT_HASH" ]]; then
   if [[ -n "$BASE_IMAGE_HASH" ]]; then kv "rebuilding — build context changed" "${BASE_IMAGE}"
   else                                 kv "building" "${BASE_IMAGE}"
   fi
+  BUILD_ARGS=(
+    --build-arg "USER_ID=$(id -u)"
+    --build-arg "GROUP_ID=$(id -g)"
+    --build-arg "USERNAME=$(id -un)"
+  )
+  if [[ -n "${BASE_IMAGE_OVERRIDE}" ]]; then
+    BUILD_ARGS+=(--build-arg "BASE_IMAGE=${BASE_IMAGE_OVERRIDE}")
+    kv "base image" "${BASE_IMAGE_OVERRIDE} (published, not built from source)"
+  fi
   docker build \
     --tag "${BASE_IMAGE}" \
     --label "build.context-hash=${CURRENT_HASH}" \
-    --build-arg "USER_ID=$(id -u)" \
-    --build-arg "GROUP_ID=$(id -g)" \
-    --build-arg "USERNAME=$(id -un)" \
+    "${BUILD_ARGS[@]}" \
     "${SCRIPT_DIR}"
 fi
 

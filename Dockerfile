@@ -1,6 +1,13 @@
+# Two stages: `base` (apt/node/claude/firewall — identical for every user,
+# publishable to a registry) and `final` (host UID/GID + this user's
+# install_additional_packages.sh — always built locally). `final`'s FROM below
+# defaults to the local `base` stage, so `docker build .` (run.sh, CI) is
+# unchanged; pass `--build-arg BASE_IMAGE=<published ref>` to reuse a published
+# base instead of building it. See docs/publishing-ghcr.md.
+
 # Pin the base image digest for supply-chain security (blank = dev only).
 # Run `make pin-digest` after an upstream patch to append @sha256:... here.
-FROM debian:trixie-slim
+FROM debian:trixie-slim AS base
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -107,10 +114,24 @@ JSON
 
 RUN chmod -R 777 /home/dev
 
+# Egress lock: the entrypoint applies these rules via a sudo rule scoped to only
+# this script (no other root escalation). Allowlist policy lives in Squid.
+COPY init-firewall.sh /usr/local/bin/init-firewall.sh
+RUN chmod +x /usr/local/bin/init-firewall.sh \
+ && printf 'Defaults!/usr/local/bin/init-firewall.sh !pam_acct_mgmt\nALL ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh\n' \
+      > /etc/sudoers.d/firewall \
+ && chmod 0440 /etc/sudoers.d/firewall
+
+# ---------------------------------------------------------------------------
+# final: everything that differs per host/user, so it never needs publishing.
+# BASE_IMAGE lets you swap `base` above for a published image (default: the
+# local `base` stage, so a plain `docker build .` behaves exactly as before).
+ARG BASE_IMAGE=base
+FROM ${BASE_IMAGE} AS final
+
 # The runtime host UID has no /etc/passwd entry, breaking whoami, os.userInfo(),
 # getpwuid(). Inject it from the --build-arg UID/GID/name (keeps /etc/passwd at
-# 644). ARGs declared late so they only affect this layer onward — the expensive
-# apt/nvm/npm layers above stay cached across builders.
+# 644).
 ARG USER_ID=1000
 ARG GROUP_ID=1000
 ARG USERNAME=dev
@@ -120,14 +141,6 @@ RUN if ! getent passwd "${USER_ID}" >/dev/null 2>&1; then \
  && if ! getent group "${GROUP_ID}" >/dev/null 2>&1; then \
       echo "${USERNAME}:x:${GROUP_ID}:" >> /etc/group; \
     fi
-
-# Egress lock: the entrypoint applies these rules via a sudo rule scoped to only
-# this script (no other root escalation). Allowlist policy lives in Squid.
-COPY init-firewall.sh /usr/local/bin/init-firewall.sh
-RUN chmod +x /usr/local/bin/init-firewall.sh \
- && printf 'Defaults!/usr/local/bin/init-firewall.sh !pam_acct_mgmt\nALL ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh\n' \
-      > /etc/sudoers.d/firewall \
- && chmod 0440 /etc/sudoers.d/firewall
 
 # User extra packages: gitignored, created from templates/ by `make init`; baked
 # here near the end so edits only rebuild this layer onward. Runs as root, so

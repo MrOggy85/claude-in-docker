@@ -52,9 +52,16 @@ sourced file, not in `run.sh`.
 - `scripts/migrate-config.sh` — `make migrate`: moves a pre-existing repo-root
   config (and per-project dirs) into the config dir, non-destructively.
 - `Dockerfile`, `entrypoint.sh`, `init-firewall.sh` — image build context; their
-  hash gates rebuilds (`run.sh` `context_hash`). `init-firewall.sh` is the thin
-  in-container egress-lock: it confines outbound traffic to the Squid proxy and
-  nothing else (all allowlist policy lives in Squid, see `proxy/`).
+  hash (plus any base-image override) gates rebuilds (`run.sh` `context_hash`).
+  The `Dockerfile` is two named stages: `base` (apt/node/claude/firewall —
+  identical for every user, publishable) and `final` (host UID/GID +
+  `install_additional_packages.sh` — always local). `final`'s `FROM` defaults to
+  the local `base` stage, so `docker build .` is unchanged; `--build-arg
+  BASE_IMAGE=<ref>` (wired via `CLAUDE_DOCKER_BASE_IMAGE` or a config-dir
+  `base-image` file) swaps in a published image instead. See
+  docs/publishing-ghcr.md. `init-firewall.sh` is the thin in-container
+  egress-lock: it confines outbound traffic to the Squid proxy and nothing else
+  (all allowlist policy lives in Squid, see `proxy/`).
 - `proxy/` — the shared Squid egress proxy: the sole path out for every
   container. `up.sh` brings it up; `squid.conf` + `ext-allowlist.sh` enforce each
   project's `allowed-domains.txt` by CONNECT hostname. See `docs/egress-proxy.md`.

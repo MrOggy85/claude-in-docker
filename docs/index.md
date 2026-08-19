@@ -11,6 +11,7 @@
 - [Per-Project Launch Config](per-project-env.md) — per-repo mounts, ports, and secrets in a gitignored `.claude-env`
 - [Volume-Backed Paths](volume-backed-paths.md) — `node_modules` and the pnpm store stay off the host disk; extend with `CLAUDE_VOLUME_PATHS`
 - [Installing Additional Packages](installing-packages.md) — add tools (e.g. Deno) at image build time
+- [Publishing to ghcr.io](publishing-ghcr.md) — reuse a published `base` stage instead of building it from source; how to publish one
 - [Updating Claude Code](updating-claude-code.md) — bump the pinned `@anthropic-ai/claude-code` version and rebuild
 - [Host Path in the Status Line](host-path-statusline.md) — show which host folder a session belongs to
 - [Sound Effects](sound-effects.md) — play host sounds on Claude Code events

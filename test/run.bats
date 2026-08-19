@@ -721,6 +721,51 @@ refute_run_arg() {
 }
 
 # ---------------------------------------------------------------------------
+# CLAUDE_DOCKER_BASE_IMAGE / base-image (publishing-ghcr.md) --build-arg wiring
+# ---------------------------------------------------------------------------
+
+@test "no base-image override: docker build has no --build-arg BASE_IMAGE" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  ! grep -qF -- "--build-arg BASE_IMAGE=" "${DOCKER_ALL_CALLS}"
+}
+
+@test "CLAUDE_DOCKER_BASE_IMAGE env: passed as --build-arg BASE_IMAGE" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_DOCKER_BASE_IMAGE="ghcr.io/example/claude-in-docker:v1@sha256:deadbeef" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  grep -qF -- "--build-arg BASE_IMAGE=ghcr.io/example/claude-in-docker:v1@sha256:deadbeef" "${DOCKER_ALL_CALLS}"
+}
+
+@test "base-image config file: passed as --build-arg BASE_IMAGE" {
+  printf 'ghcr.io/example/claude-in-docker:v2@sha256:cafef00d\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/base-image"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  grep -qF -- "--build-arg BASE_IMAGE=ghcr.io/example/claude-in-docker:v2@sha256:cafef00d" "${DOCKER_ALL_CALLS}"
+}
+
+@test "CLAUDE_DOCKER_BASE_IMAGE takes precedence over the base-image config file" {
+  printf 'ghcr.io/example/claude-in-docker:file@sha256:cafef00d\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/base-image"
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_DOCKER_BASE_IMAGE="ghcr.io/example/claude-in-docker:env@sha256:deadbeef" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  grep -qF -- "--build-arg BASE_IMAGE=ghcr.io/example/claude-in-docker:env@sha256:deadbeef" "${DOCKER_ALL_CALLS}"
+  ! grep -qF -- "--build-arg BASE_IMAGE=ghcr.io/example/claude-in-docker:file@sha256:cafef00d" "${DOCKER_ALL_CALLS}"
+}
+
+# ---------------------------------------------------------------------------
 # mcp-servers.json (--mcp-config) integration
 # ---------------------------------------------------------------------------
 

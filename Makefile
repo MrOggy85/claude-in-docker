@@ -130,7 +130,7 @@ update-claude:
 pin-digest:
 	@DIGEST=$$(docker manifest inspect debian:trixie-slim \
 	  | jq -r '.manifests[] | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest') && \
-	  sed "s|FROM debian:trixie-slim.*|FROM debian:trixie-slim@$$DIGEST|" Dockerfile > Dockerfile.tmp && \
+	  sed "s|FROM debian:trixie-slim.*AS base|FROM debian:trixie-slim@$$DIGEST AS base|" Dockerfile > Dockerfile.tmp && \
 	  mv Dockerfile.tmp Dockerfile && \
 	  echo "Pinned to $$DIGEST"
 

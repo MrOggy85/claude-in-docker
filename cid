@@ -78,6 +78,7 @@ GLOBAL_FILES=(
   "docker-containers.txt|Baseline container allowlist for the docker bridge (optional)"
   "trusted-settings-rules.txt|permissions.allow rules the settings guard should not flag (optional)"
   ".env|Arbitrary KEY=VALUE env vars injected via --env-file"
+  "base-image|Published base image ref to build FROM instead of from source (optional, see docs/publishing-ghcr.md)"
 )
 
 err()  { printf '%s\n' "$*" >&2; }
@@ -570,6 +571,7 @@ ENV_VARS=(
   "Configuration|CLAUDE_VOLUME_PATHS|(unset)|Extra in-container paths to back with named volumes"
   "Configuration|SKIP_CLAUDE_VOLUME_PATHS|(unset)|Disable all volume-backing, including node_modules"
   "Configuration|MCP_GH_BEARER|(unset)|Read-only GitHub token for the GitHub MCP server"
+  "Configuration|CLAUDE_DOCKER_BASE_IMAGE|(unset)|Build FROM a published base image instead of from source (see docs/publishing-ghcr.md)"
   "Configuration|CLAUDE_ALLOW_PROJECT_SETTINGS|(unset)|Auto-accept a project-level .claude/settings.json"
   "Configuration|CLAUDE_PROJECT_SETTINGS_STRICT|(unset)|Set 1 to review the whole settings file every run, ignoring approvals"
   "Configuration|SOUND_PORT|4767|Host port the container reaches to play sound effects"
