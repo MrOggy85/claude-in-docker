@@ -3,11 +3,26 @@
 The image ships a baseline toolchain (Node, git, ripgrep, Python, etc.). Add anything else via
 `install_additional_packages.sh`.
 
+The container user is not root and `sudo` is scoped to the firewall script alone, so a session
+cannot install a system package itself — under `sudo` it gets the misleading `account validation
+failure, is your account locked?`. The [`sandbox` skill](sandbox-info.md) says so and prints the
+host path below.
+
 > **Node comes from [nvm](https://github.com/nvm-sh/nvm)** and needs no script. One pinned version
 > (`NODE_VERSION` in the `Dockerfile`) is the default; at runtime `nvm install` / `nvm use` adds or
 > switches versions (`nodejs.org` is in the baseline allowlist). Caveat: `nvm use` affects only the
 > shell it runs in, and Claude's Bash tool starts a fresh shell per command, so bare `node` always
 > gets the pinned default. To honor a project's `.nvmrc`, chain it: `nvm use && npm test`.
+>
+> `npm i -g` needs no script either: npm's prefix is the writable nvm directory.
+
+> **Python packages come from [uv](https://github.com/astral-sh/uv)** (`UV_VERSION` in the
+> `Dockerfile`), also with no script — Debian ships pip and `ensurepip` separately, so the image's
+> `python3` has neither `pip` nor a working `python3 -m venv`. Runtime use needs `pypi.org` and
+> `files.pythonhosted.org`, both in the baseline template, so an existing config needs
+> `cid domains add pypi.org files.pythonhosted.org`. `uv python install` also reaches `github.com`
+> and `objects.githubusercontent.com`; `uv venv --python 3.13` reuses the image's interpreter
+> instead.
 
 `make init` creates the script from `templates/install_additional_packages.sh`. Unlike other user
 config it stays **in the repo root**, because it is `COPY`'d into the image and Docker's build

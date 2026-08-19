@@ -4,7 +4,10 @@
 # defensive safety net so that config left behind by an older layout — above all
 # .credentials.json — can never be committed by accident. They are harmless when
 # no such files exist.
-.claude/
+#
+# `.claude/*` not `.claude/` so git descends; never negate a secret-bearing path.
+.claude/*
+!.claude/commands/
 
 # Legacy repo-root config (moved to the config dir; ignored here defensively).
 /settings.json

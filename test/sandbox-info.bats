@@ -21,6 +21,7 @@ render() {  # <VAR=VALUE>...
     -u CONTAINER_HOST_OUTBOUND_PORTS -u CONTAINER_HOST_PORT_LABELS \
     -u CONTAINER_EXTRA_MOUNTS -u CONTAINER_VOLUME_PATHS \
     -u REPO_IN_CONTAINER -u EGRESS_PROXY_HOST -u DOCKER_BRIDGE_TOKEN \
+    -u CONTAINER_PROJECT_INSTALL_SCRIPT -u CONTAINER_PROJECT_IMAGE \
     "$@" bash "${SANDBOX_INFO}"
 }
 
@@ -157,6 +158,44 @@ render() {  # <VAR=VALUE>...
 }
 
 # ---------------------------------------------------------------------------
+# Installing packages — the section exists to stop a session reaching for apt-get
+# ---------------------------------------------------------------------------
+
+@test "install guidance renders with no input at all" {
+  render
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"apt-get"* ]]
+  [[ "$output" == *"account validation failure"* ]]
+  [[ "$output" == *"npm i -g"* ]]
+}
+
+@test "project install script: the host path is named" {
+  render CONTAINER_PROJECT_INSTALL_SCRIPT="/h/.config/claude-in-docker/projects/p-ab12/install_additional_packages.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'`/h/.config/claude-in-docker/projects/p-ab12/install_additional_packages.sh`'* ]]
+  [[ "$output" == *"ON THE HOST"* ]]
+}
+
+@test "no project install script: absence is stated, not omitted" {
+  render
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"install script path was not passed in"* ]]
+}
+
+@test "per-project image: reported so additions are known to bake in" {
+  render CONTAINER_PROJECT_IMAGE="claude-code:p-ab12"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'this project already builds its own image'* ]]
+  [[ "$output" == *'`claude-code:p-ab12`'* ]]
+}
+
+@test "no per-project image: no claim of one" {
+  render
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"already builds its own image"* ]]
+}
+
+# ---------------------------------------------------------------------------
 # Shape of the whole report
 # ---------------------------------------------------------------------------
 
@@ -164,6 +203,7 @@ render() {  # <VAR=VALUE>...
   render
   [ "$status" -eq 0 ]
   [[ "$output" == *"## Files"* ]]
+  [[ "$output" == *"## Installing packages"* ]]
   [[ "$output" == *"## Ports published to the host (inbound)"* ]]
   [[ "$output" == *"## Host services reachable from here (outbound)"* ]]
   [[ "$output" == *"## Everything else on the network"* ]]
