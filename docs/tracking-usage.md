@@ -1,14 +1,12 @@
 # Tracking Usage (ccusage)
 
-`ccusage` reads Claude Code's transcript logs, but in this setup they live inside per-project
-Docker volumes rather than your host `~/.claude`, so running `npx ccusage` on the host reports
-`No usage data found`. `usage.sh` bridges the gap: it copies the cost-only records out of every
-`claude-*` volume into a single host archive (`~/.claude-docker-usage` by default) and runs
-`ccusage` over the combined set. `run.sh` also refreshes the archive automatically after each
-session.
+`ccusage` reads Claude Code's transcript logs, but here they live in per-project Docker volumes
+rather than the host `~/.claude`, so `npx ccusage` on the host reports `No usage data found`.
+`usage.sh` copies the cost-only records out of every `claude-*` volume into one host archive
+(`~/.claude-docker-usage` by default) and runs `ccusage` over the combined set. `run.sh` refreshes
+the archive after each session.
 
-Run it from this repository's checkout (unlike `claude`, which runs from your project
-directories):
+Run it from this repository's checkout, not from a project directory:
 
 ```bash
 cd ~/code/claude-in-docker
@@ -17,17 +15,15 @@ cd ~/code/claude-in-docker
 ./usage.sh monthly --json
 ```
 
-`ccusage` is baked into the container image, so **no host Node/npm is required**. `usage.sh`
-uses a host-installed `ccusage` if you happen to have one (a fast path that skips the container);
-otherwise it runs the copy inside the image. The script can be re-run at any time — it only reads
-from the volumes, and `ccusage` deduplicates by message ID, so usage is never double-counted.
+`ccusage` is baked into the image, so **no host Node/npm is required** — a host-installed `ccusage`
+is used as a fast path if present. Re-run it freely: it only reads from the volumes, and `ccusage`
+deduplicates by message ID.
 
-The in-image run is fully **network-isolated** (`--network none --offline`): `ccusage`'s only
-network use is downloading the LiteLLM model-pricing table to turn tokens into costs, and
-`--offline` serves that from a snapshot bundled into the image at build time. The one tradeoff is
-that the snapshot can lag the very newest models, which would then report `$0.00` until you
-rebuild the image — though records that already carry Claude Code's precomputed cost stay correct.
-Set `CLAUDE_USAGE_ONLINE=1` to fetch live pricing instead when you need it.
+The in-image run is **network-isolated** (`--network none --offline`). `ccusage` otherwise fetches
+the LiteLLM model-pricing table to convert tokens to costs; `--offline` serves that from a snapshot
+baked in at build time. The snapshot can lag the newest models, which then report `$0.00` until you
+rebuild — records carrying Claude Code's precomputed cost stay correct either way. Set
+`CLAUDE_USAGE_ONLINE=1` to fetch live pricing.
 
-See [usage-sync.md](usage-sync.md) for how the sync works, what is (and isn't) copied,
-and the requirements and caveats (archive protection, volume pruning, project relabeling).
+See [usage-sync.md](usage-sync.md) for how the sync works, what is copied, and the caveats
+(archive protection, volume pruning, project relabeling).

@@ -1,24 +1,24 @@
 # Additional Information
 
-- [The `cid` config CLI](config-cli.md) — inspect the config and add/remove egress-allowlist domains and docker-bridge containers (per-project or the shared baseline) without hand-editing files; ships zsh completion
-- [Centralized Egress Proxy](egress-proxy.md) — the network boundary: every container egresses through one shared Squid proxy that filters by hostname per project, with a thin nftables rule locking egress to the proxy
+- [The `cid` config CLI](config-cli.md) — inspect config and edit the egress allowlist and docker-bridge container list without hand-editing files; ships zsh completion
+- [Centralized Egress Proxy](egress-proxy.md) — the network boundary: every container egresses through one shared Squid proxy that filters by hostname per project
 - [MCP Servers](mcp-servers.md) — configure user-level, project-level, and GitHub MCP servers
-- [Mounting Extra Folders](mounting-extra-folders.md) — mount additional host folders into the container via `CLAUDE_MOUNTS`
-- [Publishing Ports](publishing-ports.md) — expose a server running inside the container to the host via `CLAUDE_PORTS`
-- [Sandbox Self-Awareness](sandbox-info.md) — an on-demand `sandbox` skill that tells the session which host port maps to its container port, what is mounted, and why a request was blocked
-- [Passing Environment Variables](passing-env-vars.md) — inject arbitrary env vars into the container via a `.env` file in the config dir
-- [Per-Project Launch Config](per-project-env.md) — keep per-repo mounts, ports, and secrets in a gitignored `.claude-env` sourced at launch
-- [Volume-Backed Paths](volume-backed-paths.md) — `node_modules` and the pnpm store are kept off the host disk by default; add paths via `CLAUDE_VOLUME_PATHS`, opt out via `SKIP_CLAUDE_VOLUME_PATHS`
-- [Installing Additional Packages](installing-packages.md) — install extra tools a workflow needs (e.g. Deno) at image build time
-- [Updating Claude Code](updating-claude-code.md) — bump the pinned `@anthropic-ai/claude-code` version in the lockfile and rebuild
-- [Host Path in the Status Line](host-path-statusline.md) — show which host folder a session belongs to via `CLAUDE_HOST_PROJECT_DIR`
-- [Sound Effects](sound-effects.md) — play sounds on the host when Claude Code events fire
-- [Chrome DevTools MCP](chrome-devtools-mcp.md) — run the `chrome-devtools-mcp` server on the host and reach it from the container over HTTP, so Claude can drive a real browser
-- [Host Docker Bridge](docker-bridge.md) — read-only `docker ps` / `logs` / `stats` for an allowlisted set of host containers, without a Docker socket; off by default
-- [Devcontainers Alternative](devcontainers.md) — using Dev Containers / Codespaces with a squid proxy sidecar instead of `run.sh`
-- [How This Compares to Alternatives](comparison.md) — how this project compares to the devcontainer convention, lightweight recipes, and claudebox, and when to pick each
+- [Mounting Extra Folders](mounting-extra-folders.md) — mount additional host folders via `CLAUDE_MOUNTS`
+- [Publishing Ports](publishing-ports.md) — expose a container server to the host via `CLAUDE_PORTS`
+- [Sandbox Self-Awareness](sandbox-info.md) — an on-demand `sandbox` skill telling the session its port mappings, mounts, and why a request was blocked
+- [Passing Environment Variables](passing-env-vars.md) — inject env vars via a `.env` file in the config dir
+- [Per-Project Launch Config](per-project-env.md) — per-repo mounts, ports, and secrets in a gitignored `.claude-env`
+- [Volume-Backed Paths](volume-backed-paths.md) — `node_modules` and the pnpm store stay off the host disk; extend with `CLAUDE_VOLUME_PATHS`
+- [Installing Additional Packages](installing-packages.md) — add tools (e.g. Deno) at image build time
+- [Updating Claude Code](updating-claude-code.md) — bump the pinned `@anthropic-ai/claude-code` version and rebuild
+- [Host Path in the Status Line](host-path-statusline.md) — show which host folder a session belongs to
+- [Sound Effects](sound-effects.md) — play host sounds on Claude Code events
+- [Chrome DevTools MCP](chrome-devtools-mcp.md) — run `chrome-devtools-mcp` on the host and reach it from the container, so Claude can drive a real browser
+- [Host Docker Bridge](docker-bridge.md) — read-only `docker ps` / `logs` / `stats` for allowlisted host containers, without a Docker socket; off by default
+- [Devcontainers Alternative](devcontainers.md) — Dev Containers / Codespaces with a squid sidecar instead of `run.sh`
+- [How This Compares to Alternatives](comparison.md) — versus the devcontainer convention, lightweight recipes, and claudebox
 - [Threat Model](threat-model.md) — one-page summary of what this protects against and what it doesn't
 - [Known Attack Vectors](attack-vectors.md) — threats not handled by this solution
-- [Tracking Usage (ccusage)](tracking-usage.md) — report token usage across all projects with `ccusage`
-- [Usage Log Synchronization](usage-sync.md) — how transcript logs reach `~/.claude-docker-usage/` for `ccusage`
+- [Tracking Usage (ccusage)](tracking-usage.md) — report token usage across all projects
+- [Usage Log Synchronization](usage-sync.md) — how transcript logs reach `~/.claude-docker-usage/`
 - [Environment Variables](environment-variables.md) — reference for every environment variable this project reads or sets
