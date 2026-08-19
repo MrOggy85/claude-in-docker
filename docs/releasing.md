@@ -22,7 +22,8 @@ The annotated tag is the only version store. There is no `VERSION` file and no `
 ## How the version is derived
 
 [`scripts/release.sh`](../scripts/release.sh) reads the previous release with `git describe --tags
---abbrev=0` and scans every commit since it:
+--abbrev=0 --match 'v[0-9]*'` — a tag that is not `vX.Y.Z` is skipped by the match or aborts the
+run — and scans every commit since it:
 
 | Found in the range                                                      | Bump    |
 | ----------------------------------------------------------------------- | ------- |

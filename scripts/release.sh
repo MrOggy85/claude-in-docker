@@ -35,6 +35,10 @@ color_init 2
 US=$'\037'
 RS=$'\036'
 
+# The one shape a version may have, applied to the previous tag and to the next
+# version alike.
+SEMVER='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+
 # --- repo + guards ---------------------------------------------------------
 
 REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null)" || {
@@ -69,9 +73,20 @@ fi
 
 # --abbrev=0 gives the bare tag name of the nearest reachable tag. It fails when
 # none exists, which is the first release: take all of history.
-if PREV_TAG="$(git describe --tags --abbrev=0 2>/dev/null)"; then
+#
+# --match keeps a non-release tag (a `nightly`, a submodule marker) from being
+# read as the previous version: CUR would then be non-numeric, bash arithmetic
+# would silently treat it as an unset variable, and the range would be measured
+# from the wrong commit.
+if PREV_TAG="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null)"; then
   RANGE="${PREV_TAG}..HEAD"
   CUR="${PREV_TAG#v}"
+  # --match only asks for a leading v and a digit; a `v1.2` or `v1.2.3.4` would
+  # get through it and reach the arithmetic below as garbage.
+  if [[ ! "${CUR}" =~ ${SEMVER} && -z "${VERSION:-}" ]]; then
+    fail "previous tag ${PREV_TAG} is not vX.Y.Z" "set VERSION=x.y.z to release anyway"
+    exit 1
+  fi
 else
   PREV_TAG=""
   RANGE="HEAD"
@@ -234,10 +249,7 @@ fi
 
 if [[ -n "${VERSION:-}" ]]; then
   NEXT="${VERSION#v}"
-  if [[ ! "${NEXT}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-    fail "VERSION is not semver: ${VERSION}"
-    exit 1
-  fi
+  ORIGIN="VERSION"
 else
   IFS=. read -r MAJ MIN PAT <<<"${CUR%%-*}"
   case "${BUMP}" in
@@ -246,6 +258,15 @@ else
     patch) PAT=$((PAT + 1)) ;;
   esac
   NEXT="${MAJ}.${MIN}.${PAT}"
+  ORIGIN="derived version"
+fi
+
+# Both paths, not just VERSION: the derived one is only as good as PREV_TAG, and
+# the commit lands before the tag — an invalid name discovered by `git tag` would
+# leave a release commit behind with nothing pointing at it.
+if [[ ! "${NEXT}" =~ ${SEMVER} ]]; then
+  fail "${ORIGIN} is not semver: ${VERSION:-${NEXT}}"
+  exit 1
 fi
 
 TAG="v${NEXT}"

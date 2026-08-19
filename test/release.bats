@@ -137,6 +137,38 @@ _dry() { run env DRY_RUN=1 "$@" "${RELEASE}"; }
   [[ "$output" == *"from 2 commits"* ]]
 }
 
+# A stray tag used to become "the previous release": the version derived from it
+# was garbage, and `git tag` rejected the name only after the release commit.
+@test "release: a non-version tag is not read as the previous release" {
+  _tagged v1.4.0
+  _commit "fix: a fix"
+  git tag nightly
+  _commit "fix: another fix"
+  _dry
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"previous release: v1.4.0"* ]]
+  [[ "$output" == *"next version: v1.4.1"* ]]
+  [[ "$output" == *"from 2 commits"* ]]
+}
+
+@test "release: a previous tag that is not vX.Y.Z aborts before anything is written" {
+  _commit "feat: base"
+  git tag -a v1.2 -m v1.2
+  _commit "fix: a fix"
+  _dry
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"previous tag v1.2 is not vX.Y.Z"* ]]
+}
+
+@test "release: an explicit VERSION releases past an unparseable previous tag" {
+  _commit "feat: base"
+  git tag -a v1.2 -m v1.2
+  _commit "fix: a fix"
+  _dry VERSION=1.3.0
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"next version: v1.3.0"* ]]
+}
+
 @test "release: an explicit VERSION overrides the derived bump" {
   _commit "feat: first thing"
   _dry VERSION=1.0.0
