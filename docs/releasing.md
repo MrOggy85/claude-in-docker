@@ -46,7 +46,8 @@ get-url origin`; with no origin, entries render unlinked.
 
 Two kinds of commit are dropped from the section but still bump the version: non-conventional
 subjects (this repo has 16, all pre-`#30`), and `chore(release):` commits, so a release never
-appears in the next release's notes.
+appears in the next release's notes. A range of nothing but the former renders one Other Changes
+line with their count — an empty section is what the workflow refuses to publish.
 
 A breaking commit also gets a `### BREAKING CHANGES` group at the top, using the `BREAKING CHANGE:`
 footer text where there is one and the subject otherwise.

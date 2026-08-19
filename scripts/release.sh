@@ -121,6 +121,7 @@ RENDERED="$(
         title["chore"]    = "Chores"
         level = 0   # 0 nothing, 1 patch, 2 minor, 3 major
         entries = 0
+        dropped = 0
       }
 
       {
@@ -144,7 +145,7 @@ RENDERED="$(
 
         # Non-conventional subjects (this repo has 16, all pre-#30) bump the
         # version but cannot be grouped, so they are dropped from the section.
-        if (!match(subject, /^[a-z]+(\([^)]+\))?!?: /)) next
+        if (!match(subject, /^[a-z]+(\([^)]+\))?!?: /)) { dropped++; next }
 
         head = substr(subject, 1, RLENGTH - 2)    # strip the trailing ": "
         rest = substr(subject, RLENGTH + 1)
@@ -201,12 +202,26 @@ RENDERED="$(
           if (t in lines) printf "### %s\n\n%s\n", title[t], lines[t]
         }
         if ("other" in lines) printf "### Other Changes\n\n%s\n", lines["other"]
+
+        # A range of nothing but non-conventional subjects still releases, so say
+        # so in one line rather than emit a heading with no body — an empty
+        # section is what release.yml refuses to publish.
+        if (entries == 0)
+          printf "### Other Changes\n\n* %d non-conventional commit%s in this range — see the commit log\n\n",
+            dropped, (dropped == 1 ? "" : "s")
       }
     '
 )"
 
 SUMMARY="${RENDERED%%$'\n'*}"
-SECTION="${RENDERED#*$'\n'}"
+# Guarded rather than a bare `#*\n`: with an empty section there is no newline
+# left to split on and the pattern would not match, handing the whole summary
+# line back as the section.
+if [[ "${RENDERED}" == *$'\n'* ]]; then
+  SECTION="${RENDERED#*$'\n'}"
+else
+  SECTION=""
+fi
 BUMP="${SUMMARY#bump=}"; BUMP="${BUMP%% *}"
 ENTRIES="${SUMMARY##*entries=}"
 
@@ -243,7 +258,7 @@ kv "previous release" "${PREV_TAG:-none (first release)}"
 kv "bump" "${BUMP}" "from $(git rev-list --count "${RANGE}") commits"
 kv "next version" "${TAG}"
 if [[ "${ENTRIES}" == "0" ]]; then
-  warn "no conventional commits in range — the section will have no entries"
+  warn "no conventional commits in range" "the section will only say how many commits it covers"
 fi
 
 # --- assemble the section --------------------------------------------------

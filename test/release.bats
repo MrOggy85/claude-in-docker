@@ -237,6 +237,34 @@ _dry() { run env DRY_RUN=1 "$@" "${RELEASE}"; }
   [[ "$output" != *"* Update the readme"* ]]
 }
 
+# The section is empty here, which is where the awk summary line used to survive
+# into it: with nothing after it there was no newline left to split the two apart.
+@test "release: a range with no conventional commits says so instead of leaking awk's summary" {
+  _tagged v1.0.0
+  _commit "Update the readme"
+  _commit "Another stray subject"
+  _dry
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"* 2 non-conventional commits in this range"* ]]
+  [[ "$output" != *"bump=patch"* ]]
+  [[ "$output" != *"entries="* ]]
+}
+
+@test "release: one non-conventional commit is counted in the singular" {
+  _tagged v1.0.0
+  _commit "Update the readme"
+  _dry
+  [[ "$output" == *"* 1 non-conventional commit in this range"* ]]
+}
+
+@test "release: the committed changelog never carries awk's summary line" {
+  _tagged v1.0.0
+  _commit "Update the readme"
+  run "${RELEASE}"
+  [ "$status" -eq 0 ]
+  ! grep -q 'entries=' CHANGELOG.md
+}
+
 @test "release: an unknown type lands under Other Changes" {
   _tagged v1.0.0
   _commit "style: reflow the comments"
