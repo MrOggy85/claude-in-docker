@@ -79,7 +79,9 @@ key does not make the `allow` list beneath it irrelevant, so both are always rep
 
 If stdin is not a terminal (`/dev/tty` unavailable), the prompt is treated as declined and the run
 aborts, so non-interactive invocations stay secure by default. The container's own settings come from
-the config dir (mounted read-only at `~/.claude/settings.json`), never from the project.
+the config dir (mounted read-only at `~/.claude/settings.json`), never from the project. That
+read-only mount is also why in-session `/effort` fails — see
+[Changing Settings for One Session](session-settings.md).
 
 Why a memo rather than prompting every time: Claude Code **rewrites `settings.local.json` every
 session** as you approve permissions, so a presence-triggered guard dumped a 50-rule file at every

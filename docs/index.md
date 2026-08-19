@@ -1,6 +1,7 @@
 # Additional Information
 
 - [The `cid` config CLI](config-cli.md) — inspect config and edit the egress allowlist and docker-bridge container list without hand-editing files; ships zsh completion
+- [Changing Settings for One Session](session-settings.md) — why `/effort` fails with `EBUSY` on the read-only `settings.json`, and the `run.sh` flags to use instead
 - [Centralized Egress Proxy](egress-proxy.md) — the network boundary: every container egresses through one shared Squid proxy that filters by hostname per project
 - [MCP Servers](mcp-servers.md) — configure user-level, project-level, and GitHub MCP servers
 - [Mounting Extra Folders](mounting-extra-folders.md) — mount additional host folders via `CLAUDE_MOUNTS`

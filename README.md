@@ -99,7 +99,7 @@ file would let one project's approvals silently apply to an unrelated one. See
 - `cd` to the folder you want to run Claude Code from
 - execute `run.sh` from that folder
 
-Any arguments you pass are forwarded verbatim to `claude` (e.g. `run.sh --model opus "fix the bug"`).
+Any arguments you pass are forwarded verbatim to `claude` (e.g. `run.sh --model opus "fix the bug"`). `settings.json` is mounted read-only, so slash commands that persist a setting (`/effort`) fail with `EBUSY` — use the equivalent flag instead; see [Changing Settings for One Session](docs/session-settings.md).
 
 > **Note:** Running `run.sh` directly from your home directory (`~`) is blocked on purpose. Doing so would mount your entire home directory into the container, defeating the sandboxing. `cd` into a project subdirectory first.
 
