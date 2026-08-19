@@ -12,6 +12,7 @@
 - [Volume-Backed Paths](volume-backed-paths.md) — `node_modules` and the pnpm store stay off the host disk; extend with `CLAUDE_VOLUME_PATHS`
 - [Installing Additional Packages](installing-packages.md) — add tools (e.g. Deno) at image build time
 - [Updating Claude Code](updating-claude-code.md) — bump the pinned `@anthropic-ai/claude-code` version and rebuild
+- [Cutting a Release](releasing.md) — `make release` derives the version from Conventional Commits, writes CHANGELOG.md and tags; pushing the tag publishes the GitHub Release
 - [Host Path in the Status Line](host-path-statusline.md) — show which host folder a session belongs to
 - [Sound Effects](sound-effects.md) — play host sounds on Claude Code events
 - [Chrome DevTools MCP](chrome-devtools-mcp.md) — run `chrome-devtools-mcp` on the host and reach it from the container, so Claude can drive a real browser

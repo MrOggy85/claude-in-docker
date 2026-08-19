@@ -73,6 +73,13 @@ wrapped bullets.
   `$PATH`; ships a zsh completion in `completions/_cid`. See docs/config-cli.md.
 - `scripts/migrate-config.sh` — `make migrate`: moves a pre-existing repo-root
   config (and per-project dirs) into the config dir, non-destructively.
+- `scripts/release.sh` — `make release`: derives the next version from the
+  Conventional Commits since the last tag, prepends a `CHANGELOG.md` section,
+  commits it and annotates the tag. The annotated TAG is the only version store —
+  no `VERSION` file, and no `version` field in `package.json` (that file is the
+  image's npm manifest). Never pushes: the tag push is what fires `release.yml`.
+  Operates on the git repo containing `$PWD`, not on its own location, so it is
+  testable and can be pointed at a scratch clone. See docs/releasing.md.
 - `Dockerfile`, `entrypoint.sh`, `init-firewall.sh` — image build context; their
   hash gates rebuilds (`run.sh` `context_hash`). `init-firewall.sh` is the thin
   in-container egress-lock: it confines outbound traffic to the Squid proxy and
@@ -143,4 +150,6 @@ wrapped bullets.
   `make lint` before pushing. `image.yml` builds the image weekly and on
   Dockerfile/lockfile changes — the image is the one thing here that rots with no
   commit behind it. `update-claude.yml` opens the weekly claude-code bump PR
-  (Dependabot cannot: package.json pins `"latest"`).
+  (Dependabot cannot: package.json pins `"latest"`). `release.yml` fires on a
+  `v*` tag push and turns that tag's `CHANGELOG.md` section into a GitHub
+  Release; it derives nothing, so a tag/changelog mismatch fails the run.

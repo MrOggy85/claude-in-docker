@@ -1,0 +1,54 @@
+name: Release
+
+# The tag is the trigger. `make release` writes the CHANGELOG commit and the
+# annotated tag locally, `git push --follow-tags origin master` sends both, and
+# this job turns the tag into a Release page. It derives nothing: the notes are
+# the section already committed under that tag.
+#
+# It is also the only automated path to a Release for this project — gh is not
+# installed in the container, the container cannot push, and neither GitHub MCP
+# server exposes a create-release tool. See docs/releasing.md.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      # Checking out at the tag lands on the release commit, so CHANGELOG.md
+      # here already holds this version's section.
+      - uses: actions/checkout@v7
+
+      # Everything between this version's heading and the next one. `index(...)
+      # == 1` rather than a regex: the version's dots are metacharacters, and
+      # `1.0.0` must not match a heading for `1x0x0`.
+      #
+      # Failing on an empty result is the point — a Release with no notes means
+      # the tag and the changelog disagree, which is worth a red run rather than
+      # a silent stub.
+      - name: Extract the release notes
+        run: |
+          awk -v pre="## ${GITHUB_REF_NAME#v} " '
+            index($0, pre) == 1 { f = 1; next }
+            /^## / { f = 0 }
+            f
+          ' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::CHANGELOG.md has no section for ${GITHUB_REF_NAME#v}"
+            exit 1
+          fi
+          cat notes.md
+
+      # --verify-tag: fail rather than create a tag, if the ref is somehow not one.
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            --verify-tag
