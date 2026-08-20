@@ -140,9 +140,12 @@ _cid() {
             _files -/
           else
             local kind=${line[1]}
+            local -a for_flag=()
+            [[ $kind == domains ]] && for_flag=('--for[expire the entry after a duration, e.g. 15m/2h/1d]:duration:')
             _arguments \
               '(-g --global)'{-g,--global}'[target the shared baseline list]' \
               '(-C --dir --project)'{-C,--dir,--project}'[select project by directory]:dir:_files -/' \
+              "${for_flag[@]}" \
               '1: :->sub' \
               '*:: :->rest'
             case $state in
@@ -152,6 +155,7 @@ _cid() {
                   subs=(
                     'add:add host(s) to the allowlist'
                     'rm:remove host(s) from the allowlist'
+                    'prune:drop expired --for entries'
                     'ls:show the effective allowlist'
                   )
                 else
