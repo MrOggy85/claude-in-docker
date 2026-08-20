@@ -200,6 +200,43 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# Temporary entries ("# expires=<epoch>", written by `cid domains add --for`)
+# ---------------------------------------------------------------------------
+
+@test "temp entry: not yet expired is allowed" {
+  local future=$(( $(date +%s) + 3600 ))
+  printf 'temp.aaa.test  # expires=%s\n' "${future}" >> "${PROJECTS_DIR}/proj-aaa111/allowed-domains.txt"
+  ask proj-aaa111 temp.aaa.test
+  [ "$output" = "OK" ]
+}
+
+@test "temp entry: expired in the past is denied" {
+  printf 'temp.aaa.test  # expires=1\n' >> "${PROJECTS_DIR}/proj-aaa111/allowed-domains.txt"
+  ask proj-aaa111 temp.aaa.test
+  [ "$output" = "ERR" ]
+}
+
+@test "temp entry: expiry does not leak to other projects" {
+  local future=$(( $(date +%s) + 3600 ))
+  printf 'temp.aaa.test  # expires=%s\n' "${future}" >> "${PROJECTS_DIR}/proj-aaa111/allowed-domains.txt"
+  ask proj-bbb222 temp.aaa.test
+  [ "$output" = "ERR" ]
+}
+
+@test "temp entry: malformed expires= value fails closed (denied)" {
+  printf 'temp.aaa.test  # expires=notanumber\n' >> "${PROJECTS_DIR}/proj-aaa111/allowed-domains.txt"
+  ask proj-aaa111 temp.aaa.test
+  [ "$output" = "ERR" ]
+}
+
+@test "temp entry: wildcard with a future expiry still matches subdomains" {
+  local future=$(( $(date +%s) + 3600 ))
+  printf '.temp.aaa.test  # expires=%s\n' "${future}" >> "${PROJECTS_DIR}/proj-aaa111/allowed-domains.txt"
+  ask proj-aaa111 sub.temp.aaa.test
+  [ "$output" = "OK" ]
+}
+
+# ---------------------------------------------------------------------------
 # Missing baseline file must not crash or fail open
 # ---------------------------------------------------------------------------
 

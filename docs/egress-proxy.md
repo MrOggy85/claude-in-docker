@@ -89,9 +89,21 @@ One entry per line; `#` comments and blank lines ignored. Matching is on the **h
 | --------------------- | ------------------------------------------------------------------- |
 | `api.example.com`     | that exact host only                                                |
 | `.example.com`        | the apex `example.com` **and** any subdomain (`a.example.com`, …)   |
+| `api.example.com  # expires=1719999999` | that exact host, but only until the epoch timestamp passes |
 
 That is the full grammar — no path, URL, or port syntax. An entry like `example.com/some/path` is
 compared against the hostname and never matches. List the host and every path on it is reachable.
+
+### Temporary entries
+
+`cid domains add --for <duration> <host>` (`15m`, `2h`, `1d`, …) appends the host with an
+`# expires=<epoch>` annotation instead of a bare line. [`ext-allowlist.sh`](../proxy/ext-allowlist.sh)
+checks that timestamp on every lookup — past it, the line stops matching, on the same ~30s
+propagation window as any other allowlist edit. No daemon sweeps it; enforcement is just "is this
+still in the future" at read time. `cid domains prune` drops stale expired lines for hygiene only —
+an unpruned expired line is already ignored. Re-running `add --for` on the same host replaces its
+expiry; a later plain `add` (no `--for`) promotes it to permanent. See [The `cid` config
+CLI](config-cli.md#domains-add--domains-rm).
 
 ## Trust model / limitations
 

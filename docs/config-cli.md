@@ -13,7 +13,9 @@ place so you never open `allowed-domains.txt` or `docker-containers.txt` by hand
 ./cid project [dir]              # per-project key, config dir, and which overrides exist
 ./cid domains [dir]              # effective allowlist = baseline + this project's additions
 ./cid domains add <host>...      # add host(s) to the egress allowlist
+./cid domains add --for <dur> <host>...   # add, but the entry auto-expires after <dur>
 ./cid domains rm  <host>...      # remove host(s) from the egress allowlist
+./cid domains prune              # drop expired --for entries (hygiene only)
 ./cid containers [dir]           # containers the docker bridge may inspect (baseline + project)
 ./cid containers add <name>...   # allow container(s) for the docker bridge
 ./cid containers rm  <name>...   # remove container(s) from that allowlist
@@ -51,6 +53,21 @@ cid domains add -C ~/code/other foo.com  # edit a different project's list
 Edits take effect **within ~30s**: Squid re-reads both lists on each request and caches verdicts for
 30 seconds (`ttl=30` in `proxy/squid.conf`). No rebuild, no proxy restart. (Creating the baseline
 file for the first time still needs `make init`, since the proxy mounts it.)
+
+#### `domains add --for <duration>`
+
+Adds the host with an expiry instead of permanently: `<duration>` is digits plus an optional
+`s`/`m`/`h`/`d` suffix (bare digits = seconds). The proxy stops honoring the entry once the
+duration elapses — see [Temporary entries](egress-proxy.md#temporary-entries) for how enforcement
+works. Re-running `add --for` on the same host replaces its expiry; a later plain `add` (no
+`--for`) promotes it to permanent. `--for` is only valid with `domains add` (not `containers` or
+`settings`).
+
+```bash
+cid domains add --for 15m github.com         # allow for 15 minutes, then auto-deny
+cid domains add --for 2h -g ci.example.com   # ...in the baseline, for 2 hours
+cid domains prune                            # drop expired --for entries (hygiene; not required)
+```
 
 ### `containers add` / `containers rm`
 

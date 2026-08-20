@@ -19,15 +19,29 @@ PROJECTS_DIR="${PROJECTS_DIR:-/etc/squid/projects}"
 
 # Is $1 (host) allowed by $2 (file)? One hostname per line, '#' starts a comment.
 # A leading '.' (".example.com") matches the apex and any subdomain; else exact.
+# A line may carry "# expires=<unix-epoch>" (written by `cid domains add --for`);
+# once that time has passed the line no longer matches — cheap, checked at read
+# time, no daemon needed. A malformed expires= value fails closed (skipped).
 # _-prefixed vars (no `local`) avoid clobbering the caller's $host, portably.
 host_in_file() {
   _host="$1"
   _file="$2"
   [ -f "$_file" ] || return 1
-  while IFS= read -r _entry || [ -n "$_entry" ]; do
-    _entry="${_entry%%#*}"                                # strip trailing comment
+  _now=$(date +%s)
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    _entry="${_line%%#*}"                                 # strip trailing comment
     _entry=$(printf '%s' "$_entry" | tr -d '[:space:]')   # drop all whitespace
     [ -z "$_entry" ] && continue
+    case "$_line" in
+      *'#'*expires=*)
+        _exp="${_line#*expires=}"
+        _exp=$(printf '%s' "$_exp" | tr -d '[:space:]')
+        case "$_exp" in
+          ''|*[!0-9]*) continue ;;        # malformed — fail closed, skip
+        esac
+        [ "$_exp" -le "$_now" ] && continue   # expired — skip
+        ;;
+    esac
     case "$_entry" in
       .*)   # wildcard: matches the apex and any subdomain, on a label boundary
         case "$_host" in

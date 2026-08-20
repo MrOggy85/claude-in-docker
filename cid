@@ -19,8 +19,16 @@
 #                              the baseline plus any per-project additions.
 #   cid domains add <host>...  Add host(s) to the per-project allowlist (default)
 #                              or, with -g, the shared baseline list.
+#   cid domains add --for <dur> <host>...
+#                              Same, but the entry expires after <dur> (e.g. 15m,
+#                              2h, 1d) — the proxy stops honoring it once it's
+#                              passed. Re-adding refreshes the expiry; a plain
+#                              add (no --for) on a temporary entry makes it
+#                              permanent.
 #   cid domains rm  <host>...  Remove host(s) from the per-project allowlist
 #                              (default) or, with -g, the shared baseline list.
+#   cid domains prune          Drop expired --for entries from the list (hygiene
+#                              only — the proxy already ignores them).
 #   cid containers [dir]       Show which Docker containers the host docker bridge
 #                              may inspect for a project (baseline + per-project).
 #   cid containers add <name>… Allow container(s) for this project (-g: baseline).
@@ -41,6 +49,8 @@
 #                              current project's per-project list.
 #   -C, --dir <dir>            Select the project by directory (default: PWD).
 #                              Ignored with -g (the baseline is not per-project).
+#   --for <duration>           domains add only: expire the entry after
+#                              <duration> (digits + optional s/m/h/d suffix).
 #
 # The domain allowlist is read live by the Squid proxy (30s cache), so add/rm take
 # effect within ~30s — no image rebuild or proxy restart. The container allowlist
@@ -238,6 +248,29 @@ _entry_in_file() {  # <entry> <file>
   return 1
 }
 
+# The first raw line in <file> whose bare entry equals <entry>, verbatim
+# (comment/expiry annotation intact) — or nothing.
+_raw_line_for() {  # <entry> <file>
+  local entry="$1" file="$2" line
+  [[ -f "${file}" ]] || return 0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ "$(_entry_of "${line}")" == "${entry}" ]]; then printf '%s' "${line}"; return 0; fi
+  done < "${file}"
+}
+
+# Rewrite <file> dropping any line whose bare entry equals <entry>. No-op if absent.
+_drop_entry() {  # <entry> <file>
+  local entry="$1" file="$2"
+  [[ -f "${file}" ]] || return 0
+  local tmp line
+  tmp="$(mktemp "${file}.XXXXXX")"
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ "$(_entry_of "${line}")" == "${entry}" ]] && continue
+    printf '%s\n' "${line}"
+  done < "${file}" > "${tmp}"
+  mv "${tmp}" "${file}"
+}
+
 # Resolve the target allowlist for add/rm. Sets TARGET_FILE, TARGET_LABEL and the
 # per-kind TARGET_VALIDATOR / TARGET_PARSER / TARGET_HINT / TARGET_APPLIES /
 # TARGET_LOWER. The baseline allowed-domains.txt must already exist (the proxy
@@ -302,6 +335,15 @@ _entries_add() {  # <kind> <global> <dir> <entry>...
       continue
     fi
     if _entry_in_file "${entry}" "${TARGET_FILE}"; then
+      # A domains entry with a "--for" expiry is promoted to permanent by a
+      # plain (non-expiring) add, rather than treated as a no-op duplicate.
+      if [[ "${kind}" == domains && "$(_raw_line_for "${entry}" "${TARGET_FILE}")" == *'# expires='* ]]; then
+        _drop_entry "${entry}" "${TARGET_FILE}"
+        printf '%s\n' "${entry}" >> "${TARGET_FILE}"
+        note "promoted to permanent in ${TARGET_LABEL}: ${entry}"
+        added=$((added + 1))
+        continue
+      fi
       note "already in ${TARGET_LABEL}: ${entry}"
       continue
     fi
@@ -348,14 +390,104 @@ _entries_rm() {  # <kind> <global> <dir> <entry>...
   return 0
 }
 
-cmd_domains_add() {  # <global> <dir> <host>...
-  [[ $# -ge 3 ]] || { err "usage: cid domains add [-g] [-C dir] <host>..."; return 2; }
-  _entries_add domains "$@"
+# Seconds for a duration like "30s"/"15m"/"2h"/"1d" (bare digits = seconds).
+_parse_duration() {  # <duration>
+  local d="$1"
+  [[ "${d}" =~ ^([0-9]+)([smhd]?)$ ]] || return 1
+  local n="${BASH_REMATCH[1]}" unit="${BASH_REMATCH[2]}"
+  n=$((10#${n}))   # force base-10: a leading zero (e.g. "018") would otherwise read as octal
+  case "${unit}" in
+    s|"") printf '%s' "${n}" ;;
+    m)    printf '%s' "$((n * 60))" ;;
+    h)    printf '%s' "$((n * 3600))" ;;
+    d)    printf '%s' "$((n * 86400))" ;;
+  esac
+}
+
+# Human-readable local time for an epoch: GNU date, then BSD/macOS date, then
+# the bare epoch (matches the stat -c/-f fallback pattern used elsewhere here).
+_fmt_epoch() {  # <epoch>
+  date -d "@${1}" '+%Y-%m-%d %H:%M' 2>/dev/null \
+    || date -r "${1}" '+%Y-%m-%d %H:%M' 2>/dev/null \
+    || printf 'epoch %s' "${1}"
+}
+
+# `cid domains add --for <dur> <host>...`: (re)write each host with a fresh
+# expiry, replacing any prior line (temporary or permanent) for that host. The
+# proxy (proxy/ext-allowlist.sh) is what actually enforces the expiry; this
+# only writes it.
+_domains_add_temp() {  # <global> <dir> <for_dur> <host>...
+  local is_global="$1" dir="$2" for_dur="$3"; shift 3
+  local secs
+  secs="$(_parse_duration "${for_dur}")" || {
+    err "bad --for duration '${for_dur}' (want e.g. 30s, 15m, 2h, 1d)"; return 2
+  }
+  local expiry=$(( $(date +%s) + secs ))
+
+  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_PARSER TARGET_HINT TARGET_APPLIES TARGET_LOWER
+  _resolve_target "${is_global}" "${dir}" domains || return 1
+
+  local entry added=0
+  for entry in "$@"; do
+    entry="$(printf '%s' "${entry}" | tr '[:upper:]' '[:lower:]')"
+    if ! _valid_host "${entry}"; then
+      err "  skip '${entry}' — ${TARGET_HINT}"
+      continue
+    fi
+    _drop_entry "${entry}" "${TARGET_FILE}"
+    mkdir -p "$(dirname "${TARGET_FILE}")"
+    printf '%s  # expires=%s\n' "${entry}" "${expiry}" >> "${TARGET_FILE}"
+    note "added to ${TARGET_LABEL} until $(_fmt_epoch "${expiry}") (${for_dur}): ${entry}"
+    added=$((added + 1))
+  done
+  [[ "${added}" -gt 0 ]] && note "→ ${TARGET_FILE} (${TARGET_APPLIES}; auto-expires — hygiene-prune with: cid domains prune)"
+  return 0
+}
+
+cmd_domains_add() {  # <global> <dir> <for_dur> <host>...
+  local is_global="$1" dir="$2" for_dur="$3"; shift 3
+  [[ $# -ge 1 ]] || { err "usage: cid domains add [-g] [-C dir] [--for <dur>] <host>..."; return 2; }
+  if [[ -z "${for_dur}" ]]; then
+    _entries_add domains "${is_global}" "${dir}" "$@"
+  else
+    _domains_add_temp "${is_global}" "${dir}" "${for_dur}" "$@"
+  fi
 }
 
 cmd_domains_rm() {  # <global> <dir> <host>...
   [[ $# -ge 3 ]] || { err "usage: cid domains rm [-g] [-C dir] <host>..."; return 2; }
   _entries_rm domains "$@"
+}
+
+cmd_domains_prune() {  # <global> <dir>
+  local is_global="$1" dir="$2"
+  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_PARSER TARGET_HINT TARGET_APPLIES TARGET_LOWER
+  _resolve_target "${is_global}" "${dir}" domains || return 1
+  if [[ ! -f "${TARGET_FILE}" ]]; then
+    note "no ${TARGET_LABEL} allowlist yet (${TARGET_FILE}); nothing to prune"
+    return 0
+  fi
+
+  local now; now="$(date +%s)"
+  local tmp line expiry pruned=0
+  tmp="$(mktemp "${TARGET_FILE}.XXXXXX")"
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ "${line}" == *'# expires='* ]]; then
+      expiry="${line##*expires=}"
+      expiry="${expiry%%[![:digit:]]*}"
+      if [[ -n "${expiry}" && "${expiry}" -le "${now}" ]]; then
+        pruned=$((pruned + 1))
+        continue
+      fi
+    fi
+    printf '%s\n' "${line}"
+  done < "${TARGET_FILE}" > "${tmp}"
+  mv "${tmp}" "${TARGET_FILE}"
+  if [[ "${pruned}" -gt 0 ]]; then
+    note "pruned ${pruned} expired entrie(s) from ${TARGET_LABEL}"
+  else
+    note "nothing to prune in ${TARGET_LABEL}"
+  fi
 }
 
 cmd_containers_add() {  # <global> <dir> <name>...
@@ -532,7 +664,7 @@ cmd_settings() {
 # shows the effective list.
 _cmd_allowlist() {  # <kind: domains|containers> [args...]
   local kind="$1"; shift
-  local sub="" is_global=0 dir="${PWD}"
+  local sub="" is_global=0 dir="${PWD}" for_dur=""
   local -a items=()
   local a
   while [[ $# -gt 0 ]]; do
@@ -540,18 +672,34 @@ _cmd_allowlist() {  # <kind: domains|containers> [args...]
     case "${a}" in
       -g|--global)        is_global=1 ;;
       -C|--dir|--project) dir="${1:?-C needs a directory}"; shift ;;
-      add)             if [[ -z "${sub}" ]]; then sub='add';  else items+=("${a}"); fi ;;
-      rm|remove)       if [[ -z "${sub}" ]]; then sub='rm';   else items+=("${a}"); fi ;;
-      ls|show|list)    if [[ -z "${sub}" ]]; then sub='show'; else items+=("${a}"); fi ;;
+      --for)              for_dur="${1:?--for needs a duration}"; shift ;;
+      add)             if [[ -z "${sub}" ]]; then sub='add';   else items+=("${a}"); fi ;;
+      rm|remove)       if [[ -z "${sub}" ]]; then sub='rm';    else items+=("${a}"); fi ;;
+      prune)           if [[ -z "${sub}" ]]; then sub='prune'; else items+=("${a}"); fi ;;
+      ls|show|list)    if [[ -z "${sub}" ]]; then sub='show';  else items+=("${a}"); fi ;;
       -h|--help)       cmd_help; return 0 ;;
       -*)              err "unknown flag: ${a}"; return 2 ;;
       *)               items+=("${a}") ;;
     esac
   done
 
+  if [[ -n "${for_dur}" && ( "${kind}" != domains || "${sub}" != add ) ]]; then
+    err "--for is only valid for 'cid domains add'"; return 2
+  fi
+  if [[ "${sub}" == prune && "${kind}" != domains ]]; then
+    err "'prune' is only valid for 'cid domains'"; return 2
+  fi
+
   case "${sub}" in
-    add)  "cmd_${kind}_add" "${is_global}" "${dir}" "${items[@]+"${items[@]}"}" ;;
+    add)
+      if [[ "${kind}" == domains ]]; then
+        cmd_domains_add "${is_global}" "${dir}" "${for_dur}" "${items[@]+"${items[@]}"}"
+      else
+        "cmd_${kind}_add" "${is_global}" "${dir}" "${items[@]+"${items[@]}"}"
+      fi
+      ;;
     rm)   "cmd_${kind}_rm"  "${is_global}" "${dir}" "${items[@]+"${items[@]}"}" ;;
+    prune) cmd_domains_prune "${is_global}" "${dir}" ;;
     show|"") "cmd_${kind}_show" "${items[0]:-${dir}}" ;;
   esac
 }
@@ -646,7 +794,11 @@ Commands:
   project [dir]           Per-project key, config dir, and which overrides exist
   domains [dir]           Effective egress allowlist (baseline + per-project) for a project
   domains add <host>...   Add host(s) to the per-project list (-g for the baseline)
+  domains add --for <dur> <host>...
+                          Same, but the entry expires after <dur> (15m, 2h, 1d, ...)
   domains rm  <host>...   Remove host(s) from the per-project list (-g for the baseline)
+  domains prune           Drop expired --for entries (hygiene only; the proxy already
+                          ignores them)
   containers [dir]        Containers the docker bridge may inspect (baseline + per-project)
   containers add <name>...  Allow container(s) for this project (-g for the baseline)
   containers rm  <name>...  Disallow container(s) (-g for the baseline)
@@ -666,7 +818,9 @@ Examples:
   cid domains add example.com              # allow example.com for THIS project
   cid domains add .githubusercontent.com   # wildcard: apex + all subdomains
   cid domains add -g registry.npmjs.org    # allow for EVERY project (baseline)
+  cid domains add --for 15m github.com     # allow for 15 minutes, then auto-deny
   cid domains rm  example.com              # remove from this project's list
+  cid domains prune                        # drop expired --for entries
   cid containers add myapp-web             # let the bridge read this container
   cid containers add 'myapp-*'             # trailing '*' = prefix glob (quote it)
   cid settings                             # what this project's settings grant

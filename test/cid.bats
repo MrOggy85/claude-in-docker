@@ -127,6 +127,92 @@ proj_file() { echo "${CLAUDE_PROJECTS_DIR}"/*/allowed-domains.txt; }
 }
 
 # ---------------------------------------------------------------------------
+# domains add --for <duration> — temporary, auto-expiring entries
+# ---------------------------------------------------------------------------
+
+@test "add --for: writes an expires= annotation in the future" {
+  run "${CID}" domains add --for 15m example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_file)"
+  [[ "$output" == example.com*"# expires="* ]]
+  local exp; exp="${output##*expires=}"
+  [ "${exp}" -gt "$(date +%s)" ]
+}
+
+@test "add --for: rejects a malformed duration and writes nothing" {
+  run "${CID}" domains add --for potato example.com -C "${PROJ}"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"bad --for duration"* ]]
+  run bash -c "cat ${CLAUDE_PROJECTS_DIR}/*/allowed-domains.txt 2>/dev/null || true"
+  [ -z "$output" ]
+}
+
+@test "add --for: re-adding refreshes the expiry (one line, not two)" {
+  "${CID}" domains add --for 1s example.com -C "${PROJ}"
+  run "${CID}" domains add --for 1h example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run grep -c 'example.com' "$(proj_file)"
+  [ "$output" -eq 1 ]
+  run cat "$(proj_file)"
+  local exp; exp="${output##*expires=}"
+  [ "${exp}" -gt "$(( $(date +%s) + 1800 ))" ]
+}
+
+@test "add --for: a later plain add (no --for) promotes it to permanent" {
+  "${CID}" domains add --for 1h example.com -C "${PROJ}"
+  run "${CID}" domains add example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"promoted to permanent"* ]]
+  run cat "$(proj_file)"
+  [ "$output" = "example.com" ]
+}
+
+@test "add --for: a leading-zero duration is decimal, not octal" {
+  # "018" starts with a digit sequence that isn't valid octal (8) — a naive
+  # bash arithmetic expansion of the raw string would blow up or misparse.
+  run "${CID}" domains add --for 018s example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_file)"
+  local exp; exp="${output##*expires=}"
+  local now; now="$(date +%s)"
+  [ "${exp}" -ge "$(( now + 15 ))" ]
+  [ "${exp}" -le "$(( now + 25 ))" ]
+}
+
+@test "add --for: rejected for a non-domains kind (containers)" {
+  run "${CID}" containers add --for 15m myapp-web -C "${PROJ}"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"only valid for 'cid domains add'"* ]]
+}
+
+@test "prune: drops an expired entry, keeps a live one and a permanent one" {
+  "${CID}" domains add example.com -C "${PROJ}"
+  printf 'gone.com  # expires=1\n' >> "$(proj_file)"
+  local future=$(( $(date +%s) + 3600 ))
+  printf 'stays.com  # expires=%s\n' "${future}" >> "$(proj_file)"
+  run "${CID}" domains prune -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pruned 1"* ]]
+  run cat "$(proj_file)"
+  [[ "$output" == *"example.com"* ]]
+  [[ "$output" == *"stays.com"* ]]
+  [[ "$output" != *"gone.com"* ]]
+}
+
+@test "prune: no-op on a list with nothing expired" {
+  "${CID}" domains add example.com -C "${PROJ}"
+  run "${CID}" domains prune -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nothing to prune"* ]]
+}
+
+@test "prune: absent per-project list is a graceful no-op" {
+  run "${CID}" domains prune -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nothing to prune"* ]]
+}
+
+# ---------------------------------------------------------------------------
 # domains show + smoke tests for the read-only commands
 # ---------------------------------------------------------------------------
 
