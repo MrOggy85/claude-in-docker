@@ -206,8 +206,8 @@ mounted project, and is bind-mounted read-only into the Squid proxy. It is **not
 Claude containers, so Claude running in them cannot see or edit it.
 
 The narrow exception is running Claude **on this repo itself** with the config dir mounted in. Then
-Claude can edit `allowed-domains.txt`, and because the proxy re-reads the lists live (≈30s verdict
-cache, no rebuild), a widened allowlist takes effect within ~30s. The blast radius is still bounded:
+Claude can edit `allowed-domains.txt`, and because the proxy re-reads the lists live (≈2s verdict
+cache, no rebuild), a widened allowlist takes effect within ~2s. The blast radius is still bounded:
 a widened list only adds hostnames the proxy will then permit by CONNECT target. Treat edits to these
 files as changes to a security boundary, and review the diffs.
 

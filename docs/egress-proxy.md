@@ -78,8 +78,8 @@ Tear down with `make proxy-down`. Rename the network and container via `CLAUDE_E
 | `<config-dir>/allowed-domains.txt`         | **baseline** — always allowed, every project (falls back to `templates/allowed-domains.txt` if absent) |
 | `<config-dir>/projects/<key>/allowed-domains.txt` | that project's full list (seeded by `run.sh` on first run) |
 
-Both are bind-mounted read-only into the proxy and read live by the helper (30-second verdict cache),
-so **editing a list needs no proxy restart** — the change applies within ~30s.
+Both are bind-mounted read-only into the proxy and read live by the helper (2-second verdict cache),
+so **editing a list needs no proxy restart** — the change applies within ~2s.
 
 ### Entry syntax
 

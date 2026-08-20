@@ -42,8 +42,8 @@
 #   -C, --dir <dir>            Select the project by directory (default: PWD).
 #                              Ignored with -g (the baseline is not per-project).
 #
-# The domain allowlist is read live by the Squid proxy (30s cache), so add/rm take
-# effect within ~30s — no image rebuild or proxy restart. The container allowlist
+# The domain allowlist is read live by the Squid proxy (2s cache), so add/rm take
+# effect within ~2s — no image rebuild or proxy restart. The container allowlist
 # is read per bridge call, so it applies immediately. See docs/config-cli.md.
 
 set -euo pipefail
@@ -251,7 +251,7 @@ _resolve_target() {  # <global?0|1> <dir> <kind: domains|containers|rules>
       name='allowed-domains.txt'
       TARGET_VALIDATOR='_valid_host'
       TARGET_HINT="not a valid hostname (letters, digits, '.', '-'; leading '.' = wildcard)"
-      TARGET_APPLIES='applies within ~30s, no restart'
+      TARGET_APPLIES='applies within ~2s, no restart'
       TARGET_LOWER=1
       ;;
     containers)
@@ -673,7 +673,7 @@ Examples:
   cid settings trust 'Bash(python3 *)'     # accept that rule here without a prompt
   cid settings trust -g 'Bash(npx *)'      # ...in every project
 
-Domain edits apply within ~30s (Squid re-reads the lists live — no rebuild/restart);
+Domain edits apply within ~2s (Squid re-reads the lists live — no rebuild/restart);
 container edits apply to the next bridge call.
 Seed the config dir with 'make init'; migrate an old repo-root config with 'make migrate'.
 EOF
