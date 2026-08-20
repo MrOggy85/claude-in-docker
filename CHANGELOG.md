@@ -7,3 +7,146 @@ section by hand — the Release page is a copy taken at tag time. See
 [docs/releasing.md](docs/releasing.md).
 
 [releases]: https://github.com/MrOggy85/claude-in-docker/releases
+
+## 1.0.0 (2026-08-20)
+
+First tagged release, covering the project's history to this point.
+
+`claude-in-docker` runs Claude Code inside a hardened Docker container as the
+host user: outbound traffic leaves only through a shared Squid proxy enforcing a
+per-project domain allowlist, user config lives outside the repo, and
+`node_modules` and the pnpm store stay in named volumes instead of on the host
+disk. Pre-flight guards refuse to start in `$HOME`, prompt on what a project's
+`.claude/settings*.json` actually grants, and reject a GitHub MCP token that can
+push code.
+
+### Features
+
+* **release:** cut releases from conventional commits ([#106](https://github.com/MrOggy85/claude-in-docker/pull/106))
+* sandbox package awareness ([#105](https://github.com/MrOggy85/claude-in-docker/pull/105))
+* **sandbox:** report this session's sandbox via an on-demand skill ([#101](https://github.com/MrOggy85/claude-in-docker/pull/101))
+* colour-code every run-time message, not just the settings guard ([#85](https://github.com/MrOggy85/claude-in-docker/pull/85))
+* prompt on what project settings grant, not on their existence ([#80](https://github.com/MrOggy85/claude-in-docker/pull/80))
+* docker bridge ([#79](https://github.com/MrOggy85/claude-in-docker/pull/79))
+* add `cid env` to list settable environment variables ([#75](https://github.com/MrOggy85/claude-in-docker/pull/75))
+* turn config.sh into the `cid` config CLI with allowlist editing ([#74](https://github.com/MrOggy85/claude-in-docker/pull/74))
+* let chrome-devtools bridge use a pre-installed server binary ([#73](https://github.com/MrOggy85/claude-in-docker/pull/73))
+* add host-bridged chrome-devtools-mcp support ([#72](https://github.com/MrOggy85/claude-in-docker/pull/72))
+* make project-settings guard react to a single keypress ([#71](https://github.com/MrOggy85/claude-in-docker/pull/71))
+* generalize SOUND_PORT into a host-outbound port allowlist ([#69](https://github.com/MrOggy85/claude-in-docker/pull/69))
+* make nvm the sole Node source, user-controlled at runtime ([#60](https://github.com/MrOggy85/claude-in-docker/pull/60))
+* seed a baseline .env via make init and guard un-initialized config ([#59](https://github.com/MrOggy85/claude-in-docker/pull/59))
+* move user config to ~/.config, add view CLI and migration ([#57](https://github.com/MrOggy85/claude-in-docker/pull/57))
+* make Squid proxy the sole egress path, remove IP-allowlist firewall ([#55](https://github.com/MrOggy85/claude-in-docker/pull/55))
+* support convention-based global gitignore ([#52](https://github.com/MrOggy85/claude-in-docker/pull/52))
+* add opt-in centralized Squid egress proxy ([#50](https://github.com/MrOggy85/claude-in-docker/pull/50))
+* mcp servers file ([#44](https://github.com/MrOggy85/claude-in-docker/pull/44))
+* show host project path in the status line ([#43](https://github.com/MrOggy85/claude-in-docker/pull/43))
+* add yamllint for YAML validation ([#42](https://github.com/MrOggy85/claude-in-docker/pull/42))
+* add per-project config overrides under projects/ ([#36](https://github.com/MrOggy85/claude-in-docker/pull/36))
+* reject MCP_GH_BEARER tokens with write access at startup ([#22](https://github.com/MrOggy85/claude-in-docker/pull/22))
+* harden Docker image — debian:trixie-slim base, no build-essential, package.json for npm pins ([#28](https://github.com/MrOggy85/claude-in-docker/pull/28))
+* inject arbitrary env vars via gitignored .env file ([3a7dbb6](https://github.com/MrOggy85/claude-in-docker/commit/3a7dbb6))
+* guard against project-level Claude settings hooks ([bbc77cf](https://github.com/MrOggy85/claude-in-docker/commit/bbc77cf))
+* prevent starting from home directory ([#16](https://github.com/MrOggy85/claude-in-docker/pull/16))
+* refresh firewall allowlist to track rotating IPs ([#15](https://github.com/MrOggy85/claude-in-docker/pull/15))
+* add nano in the docker image ([#17](https://github.com/MrOggy85/claude-in-docker/pull/17))
+* run ccusage through Docker, offline by default ([c9663d6](https://github.com/MrOggy85/claude-in-docker/commit/c9663d6))
+* keep node_modules off the host via named volumes, on by default ([51b3e62](https://github.com/MrOggy85/claude-in-docker/commit/51b3e62))
+* publish container ports to the host via CLAUDE_PORTS ([379701f](https://github.com/MrOggy85/claude-in-docker/commit/379701f))
+* decouple container name from volume, add random suffix ([c6a9d26](https://github.com/MrOggy85/claude-in-docker/commit/c6a9d26))
+* reject blocked outbound connections instead of dropping ([f4fc0c1](https://github.com/MrOggy85/claude-in-docker/commit/f4fc0c1))
+* install user-supplied extra packages at image build time ([7bde791](https://github.com/MrOggy85/claude-in-docker/commit/7bde791))
+* mount extra host folders via CLAUDE_MOUNTS ([e44f95b](https://github.com/MrOggy85/claude-in-docker/commit/e44f95b))
+* add make init to copy example templates into place ([08c1105](https://github.com/MrOggy85/claude-in-docker/commit/08c1105))
+* use the GitHub MCP server instead of the gh CLI ([d3f59ff](https://github.com/MrOggy85/claude-in-docker/commit/d3f59ff))
+* use a repo-local .gitconfig instead of the host's ([02345d0](https://github.com/MrOggy85/claude-in-docker/commit/02345d0))
+* name the container after the session volume ([0f0237b](https://github.com/MrOggy85/claude-in-docker/commit/0f0237b))
+* add outbound firewall with domain allowlist ([da7a10b](https://github.com/MrOggy85/claude-in-docker/commit/da7a10b))
+* add user-level CLAUDE.md via mounted script-dir file ([4bb6d5a](https://github.com/MrOggy85/claude-in-docker/commit/4bb6d5a))
+* add user-level MCP server config via mounted claude.json ([2bb1c00](https://github.com/MrOggy85/claude-in-docker/commit/2bb1c00))
+
+### Bug Fixes
+
+* **security:** stop claude.json trust/MCP-approval state leaking across projects ([#100](https://github.com/MrOggy85/claude-in-docker/pull/100))
+* **ci:** grant claude.yml the tools a task needs, document the CI surface ([#97](https://github.com/MrOggy85/claude-in-docker/pull/97))
+* path volume chown and pnpm store ([#84](https://github.com/MrOggy85/claude-in-docker/pull/84))
+* pin the bats install so CI stops hitting the GitHub API ([#82](https://github.com/MrOggy85/claude-in-docker/pull/82))
+* raise squid read_timeout to 4h for long-lived tunnels ([#76](https://github.com/MrOggy85/claude-in-docker/pull/76))
+* make Squid egress helper POSIX sh and pin proxy image by digest ([#68](https://github.com/MrOggy85/claude-in-docker/pull/68))
+* install npm deps into /usr/local so npm ci finds the lockfile ([#62](https://github.com/MrOggy85/claude-in-docker/pull/62))
+* switch egress-lock to nftables, fixing IPv6 resolve crash ([#58](https://github.com/MrOggy85/claude-in-docker/pull/58))
+* add new claude domain to templates ([#56](https://github.com/MrOggy85/claude-in-docker/pull/56))
+* allow container to reach host sound server through firewall ([#46](https://github.com/MrOggy85/claude-in-docker/pull/46))
+* pin claude-code-action to v1.0.150 due to possible issue ([#40](https://github.com/MrOggy85/claude-in-docker/pull/40))
+* add /usr/local/node_modules/.bin to PATH for npm v10 compatibility ([#31](https://github.com/MrOggy85/claude-in-docker/pull/31))
+* inject /etc/passwd and /etc/group entries at build time ([#27](https://github.com/MrOggy85/claude-in-docker/pull/27))
+* reject tilde-prefixed CLAUDE_VOLUME_PATHS entries ([a5db1ef](https://github.com/MrOggy85/claude-in-docker/commit/a5db1ef))
+* rebuild image when install_additional_packages.sh changes ([2b4f215](https://github.com/MrOggy85/claude-in-docker/commit/2b4f215))
+* **docker:** mark mounted repos as safe.directory ([aff2256](https://github.com/MrOggy85/claude-in-docker/commit/aff2256))
+* resolve sudo passwd/PAM failures for dynamic host UID ([3a7f7e7](https://github.com/MrOggy85/claude-in-docker/commit/3a7f7e7))
+* mount claude.json read-write so MCP config changes persist ([eb3bcd7](https://github.com/MrOggy85/claude-in-docker/commit/eb3bcd7))
+
+### Code Refactoring
+
+* extract pre-flight guards into guards/ folder ([#37](https://github.com/MrOggy85/claude-in-docker/pull/37))
+* manage .credentials.json via template; drop .env from make init ([#34](https://github.com/MrOggy85/claude-in-docker/pull/34))
+* move config templates into templates/ folder ([#33](https://github.com/MrOggy85/claude-in-docker/pull/33))
+* separate project CLAUDE.md from container-mounted one ([1cf890e](https://github.com/MrOggy85/claude-in-docker/commit/1cf890e))
+* extract extra-mounts logic into scripts/extra-mounts.sh ([9a49680](https://github.com/MrOggy85/claude-in-docker/commit/9a49680))
+* make each config file its own target in Makefile ([aae09ca](https://github.com/MrOggy85/claude-in-docker/commit/aae09ca))
+* extract entrypoint.sh from inline Dockerfile printf ([f6ab1cf](https://github.com/MrOggy85/claude-in-docker/commit/f6ab1cf))
+
+### Documentation
+
+* explain why /effort fails with EBUSY and how to set it per session ([#103](https://github.com/MrOggy85/claude-in-docker/pull/103))
+* tighten every guide in docs/ to the load-bearing facts ([#102](https://github.com/MrOggy85/claude-in-docker/pull/102))
+* add SECURITY.md and docs/threat-model.md ([#95](https://github.com/MrOggy85/claude-in-docker/pull/95))
+* rewrite README to lead with the value proposition ([#94](https://github.com/MrOggy85/claude-in-docker/pull/94))
+* reframe GitHub MCP token guard as no-code-push, not read-only ([#70](https://github.com/MrOggy85/claude-in-docker/pull/70))
+* trim comments across build and usage scripts ([#61](https://github.com/MrOggy85/claude-in-docker/pull/61))
+* add alternatives comparison ([#54](https://github.com/MrOggy85/claude-in-docker/pull/54))
+* add bear-chase image to README intro ([#53](https://github.com/MrOggy85/claude-in-docker/pull/53))
+* add per-project .claude-env launch config recipe ([#51](https://github.com/MrOggy85/claude-in-docker/pull/51))
+* add environment-variables reference and expand settings/MCP attack vectors ([#49](https://github.com/MrOggy85/claude-in-docker/pull/49))
+* document in-container privilege escalation vector ([#48](https://github.com/MrOggy85/claude-in-docker/pull/48))
+* note Docker is unavailable in container CLAUDE.md ([#45](https://github.com/MrOggy85/claude-in-docker/pull/45))
+* add devcontainers.md covering squid proxy, personal mounts, and packages ([#32](https://github.com/MrOggy85/claude-in-docker/pull/32))
+* document DNS exfiltration attack vector ([f1922a0](https://github.com/MrOggy85/claude-in-docker/commit/f1922a0))
+* note untrusted package artifacts on the host as an attack vector ([6e98926](https://github.com/MrOggy85/claude-in-docker/commit/6e98926))
+* add guide for installing additional packages ([5f7c6f7](https://github.com/MrOggy85/claude-in-docker/commit/5f7c6f7))
+* move MCP Servers and ccusage tracking guides into docs/ ([f5603c3](https://github.com/MrOggy85/claude-in-docker/commit/f5603c3))
+* move extra-folders guide to docs/, add Additional Features section ([7d80bd1](https://github.com/MrOggy85/claude-in-docker/commit/7d80bd1))
+* credit Anthropic's devcontainer solution ([429c0a3](https://github.com/MrOggy85/claude-in-docker/commit/429c0a3))
+* add cf.mcp.atlassian.com to allowlist and document attack vectors ([aea55e9](https://github.com/MrOggy85/claude-in-docker/commit/aea55e9))
+* replace example with shell profile alias section ([a153c7c](https://github.com/MrOggy85/claude-in-docker/commit/a153c7c))
+
+### Tests
+
+* capture stdout separately so stderr progress lines don't break assertions ([7bd0a1e](https://github.com/MrOggy85/claude-in-docker/commit/7bd0a1e))
+* add bats unit tests for run.sh, extra-mounts.sh, and extra-ports.sh ([3de8da6](https://github.com/MrOggy85/claude-in-docker/commit/3de8da6))
+
+### Build System
+
+* add make bats target to install bats ([021dd93](https://github.com/MrOggy85/claude-in-docker/commit/021dd93))
+
+### Continuous Integration
+
+* move off Node 20 actions ([#83](https://github.com/MrOggy85/claude-in-docker/pull/83))
+* master and scheduled jobs ([#81](https://github.com/MrOggy85/claude-in-docker/pull/81))
+* scope push trigger to master to avoid duplicate runs on PRs ([45e64e3](https://github.com/MrOggy85/claude-in-docker/commit/45e64e3))
+* run bats tests on push and PR ([32fd0e6](https://github.com/MrOggy85/claude-in-docker/commit/32fd0e6))
+* add Claude Code workflow with PR-creation support ([865a8f6](https://github.com/MrOggy85/claude-in-docker/commit/865a8f6))
+
+### Chores
+
+* relicense under Apache-2.0 ([#86](https://github.com/MrOggy85/claude-in-docker/pull/86))
+* add Claude Code update process and bump to 2.1.220 ([#77](https://github.com/MrOggy85/claude-in-docker/pull/77))
+* require mcp-servers.json and stop seeding per-project allowlist ([#66](https://github.com/MrOggy85/claude-in-docker/pull/66))
+* cleanup projects dir ([#67](https://github.com/MrOggy85/claude-in-docker/pull/67))
+* trim proxy comments and require config-dir allowlist ([#65](https://github.com/MrOggy85/claude-in-docker/pull/65))
+* disable nonessential traffic ([#63](https://github.com/MrOggy85/claude-in-docker/pull/63))
+* install make in container image ([#47](https://github.com/MrOggy85/claude-in-docker/pull/47))
+* run e2e tests in ci ([726de08](https://github.com/MrOggy85/claude-in-docker/commit/726de08))
+* **docker:** add shellcheck and fd/bat aliases ([b83f882](https://github.com/MrOggy85/claude-in-docker/commit/b83f882))
+* reorganise sound files and add docs structure ([b3a5422](https://github.com/MrOggy85/claude-in-docker/commit/b3a5422))
