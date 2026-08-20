@@ -22,9 +22,6 @@ SHELL_SOURCES := cid \
 
 .PHONY: init migrate bats test test-extra-mounts test-extra-ports test-path-volumes test-run test-e2e test-ext-allowlist test-chrome-devtools-mcp test-docker-bridge test-guards test-scan-settings test-cid test-colors test-sandbox-info test-release lint lockfile update-claude pin-digest proxy-up proxy-down release
 
-# Command-line overrides for `release` reach the script as environment variables
-# rather than make variables: `make release VERSION=1.0.0 DRY_RUN=1`.
-export VERSION DRY_RUN INTRO_FILE ALLOW_BRANCH
 # install_additional_packages.sh stays in the repo: it is COPY'd into the base
 # image at build time (build context = repo dir), so it can't be mounted.
 init: $(addprefix $(CONFIG_DIR)/,$(GLOBAL_CONFIG)) $(CONFIG_DIR)/.credentials.json install_additional_packages.sh
@@ -145,6 +142,10 @@ pin-digest:
 # last tag, prepend a CHANGELOG.md section, commit it and annotate the tag.
 # Deliberately does not push — the tag push is what makes CI create the GitHub
 # Release. Preview with `make release DRY_RUN=1`. See docs/releasing.md.
+#
+# No `export` needed for VERSION / DRY_RUN / INTRO_FILE / ALLOW_BRANCH: make puts
+# command-line variables in the recipe environment already, and an `export` of an
+# unset one hands every recipe an empty-but-defined variable instead.
 release:
 	./scripts/release.sh
 
