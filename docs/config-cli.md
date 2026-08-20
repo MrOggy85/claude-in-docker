@@ -50,8 +50,8 @@ cid domains rm  -g sentry.io             # remove from the baseline
 cid domains add -C ~/code/other foo.com  # edit a different project's list
 ```
 
-Edits take effect **within ~30s**: Squid re-reads both lists on each request and caches verdicts for
-30 seconds (`ttl=30` in `proxy/squid.conf`). No rebuild, no proxy restart. (Creating the baseline
+Edits take effect **within ~2s**: Squid re-reads both lists on each request and caches verdicts for
+2 seconds (`ttl=2` in `proxy/squid.conf`). No rebuild, no proxy restart. (Creating the baseline
 file for the first time still needs `make init`, since the proxy mounts it.)
 
 #### `domains add --for <duration>`

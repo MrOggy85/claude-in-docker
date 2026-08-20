@@ -69,7 +69,7 @@ All of the following files live in the config directory and are your personal fi
 - `settings.json` add your own settings here that will be used by Claude Code
 - `claude.json` contains onboarding state and your user-level MCP server config
 - `container-CLAUDE.md` add your personal instructions for Claude Code here; mounted into the container as `~/.claude/CLAUDE.md` (user-global). Distinct from the repo's own `CLAUDE.md`, which holds project instructions for working on this tool.
-- `allowed-domains.txt` domains listed here are the only outbound destinations the container can reach. It is the allowlist enforced by the shared Squid egress proxy (read live — edits apply within ~30s, no image rebuild). See [Centralized Egress Proxy](docs/egress-proxy.md) for how egress filtering works.
+- `allowed-domains.txt` domains listed here are the only outbound destinations the container can reach. It is the allowlist enforced by the shared Squid egress proxy (read live — edits apply within ~2s, no image rebuild). See [Centralized Egress Proxy](docs/egress-proxy.md) for how egress filtering works.
 - `.gitconfig` set your git `user.name` / `user.email` here.
 - `.gitignore_global` optional global (user-level) gitignore; mounted read-only at `~/.config/git/ignore`, which git reads automatically (no `.gitconfig` entry needed). Patterns apply to every repo you work in inside the container.
 - `.env` arbitrary `KEY=VALUE` environment variables injected into the container via `docker --env-file`. Created (comment-only) by `make init` and required — `run.sh` aborts with a `make init` pointer if it is missing — but may safely stay empty. See [Passing environment variables](docs/passing-env-vars.md).
