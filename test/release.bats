@@ -184,6 +184,13 @@ _dry() { run env DRY_RUN=1 "$@" "${RELEASE}"; }
   [[ "$output" == *"VERSION is not semver"* ]]
 }
 
+@test "release: a prerelease VERSION is rejected — this project does not cut them" {
+  _commit "feat: first thing"
+  _dry VERSION=1.0.0-rc.1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"VERSION is not semver"* ]]
+}
+
 @test "release: a leading v on VERSION is accepted and not doubled" {
   _commit "feat: first thing"
   _dry VERSION=v2.5.0

@@ -14,7 +14,7 @@ The annotated tag is the only version store. There is no `VERSION` file and no `
 
 | Variable       | Effect                                                                       |
 | -------------- | ---------------------------------------------------------------------------- |
-| `VERSION`      | explicit `x.y.z`, skipping bump derivation                                   |
+| `VERSION`      | explicit `x.y.z`, skipping bump derivation; no prerelease suffix             |
 | `DRY_RUN=1`    | print the version and section on stdout, write nothing                       |
 | `INTRO_FILE`   | file inserted under the version heading, above the first group               |
 | `ALLOW_BRANCH` | release off a branch other than `master`                                      |

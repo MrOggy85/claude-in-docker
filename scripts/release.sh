@@ -36,8 +36,10 @@ US=$'\037'
 RS=$'\036'
 
 # The one shape a version may have, applied to the previous tag and to the next
-# version alike.
-SEMVER='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+# version alike. No prerelease suffix: this project does not cut them, and half
+# support was worse than none — the next derivation dropped the suffix and then
+# bumped the patch, so a `1.0.0-rc.1` tag made `1.0.0` itself unreachable.
+SEMVER='^[0-9]+\.[0-9]+\.[0-9]+$'
 
 # --- repo + guards ---------------------------------------------------------
 
@@ -254,7 +256,7 @@ if [[ -n "${VERSION:-}" ]]; then
   NEXT="${VERSION#v}"
   ORIGIN="VERSION"
 else
-  IFS=. read -r MAJ MIN PAT <<<"${CUR%%-*}"
+  IFS=. read -r MAJ MIN PAT <<<"${CUR}"
   case "${BUMP}" in
     major) MAJ=$((MAJ + 1)); MIN=0; PAT=0 ;;
     minor) MIN=$((MIN + 1)); PAT=0 ;;
