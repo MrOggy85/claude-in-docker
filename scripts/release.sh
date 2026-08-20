@@ -116,9 +116,12 @@ fi
 # can never disagree about what a commit is. `%b` (the body) is included for
 # BREAKING CHANGE footers, hence the record separator: bodies are multi-line.
 #
+# --no-merges: a "Merge pull request #NN" subject is not a change of its own, and
+# counting it would credit the range with work its children already describe.
+#
 # The first output line is "bump=<level> entries=<n>"; the rest is the section.
 RENDERED="$(
-  git log --format="%s${US}%h${US}%b${RS}" "${RANGE}" |
+  git log --no-merges --format="%s${US}%h${US}%b${RS}" "${RANGE}" |
     awk -v RS="${RS}" -v FS="${US}" -v base="${BASE}" '
       BEGIN {
         # Display order, and every type this repo uses. Unlike the
@@ -276,7 +279,7 @@ if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
 fi
 
 kv "previous release" "${PREV_TAG:-none (first release)}"
-kv "bump" "${BUMP}" "from $(git rev-list --count "${RANGE}") commits"
+kv "bump" "${BUMP}" "from $(git rev-list --no-merges --count "${RANGE}") commits"
 kv "next version" "${TAG}"
 if [[ "${ENTRIES}" == "0" ]]; then
   warn "no conventional commits in range" "the section will only say how many commits it covers"

@@ -23,7 +23,7 @@ The annotated tag is the only version store. There is no `VERSION` file and no `
 
 [`scripts/release.sh`](../scripts/release.sh) reads the previous release with `git describe --tags
 --abbrev=0 --match 'v[0-9]*'` — a tag that is not `vX.Y.Z` is skipped by the match or aborts the
-run — and scans every commit since it:
+run — and scans every non-merge commit since it:
 
 | Found in the range                                                      | Bump    |
 | ----------------------------------------------------------------------- | ------- |

@@ -297,6 +297,19 @@ _dry() { run env DRY_RUN=1 "$@" "${RELEASE}"; }
   ! grep -q 'entries=' CHANGELOG.md
 }
 
+@test "release: merge commits are neither listed nor counted" {
+  _tagged v1.0.0
+  git checkout -q -b side
+  _commit "feat: work done on a branch"
+  git checkout -q master
+  git merge -q --no-ff -m 'Merge branch side' side
+  _dry
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"from 1 commits"* ]]
+  [[ "$output" == *"* work done on a branch"* ]]
+  [[ "$output" != *"Merge branch side"* ]]
+}
+
 @test "release: an unknown type lands under Other Changes" {
   _tagged v1.0.0
   _commit "style: reflow the comments"
