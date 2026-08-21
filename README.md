@@ -3,9 +3,13 @@
 
 # Claude Code in Docker Container
 
-One Claude Code login, shared across every project. `cd` into any repo and run
-`run.sh`. Outbound network is locked to a hostname allowlist by default, so a 
-compromised dependency can't phone home. It assumes you are on macOS.
+One Claude Code login, shared across every project — plus the host integrations
+containerizing normally breaks: publish ports (`CLAUDE_PORTS`), mount extra
+folders (`CLAUDE_MOUNTS`), inject Keychain-held tokens, bridge to host tools
+(browser, docker, sound) over MCP, and track usage across projects despite logs
+living in Docker volumes. `cd` into any repo and run `run.sh`. Outbound network
+is locked to a hostname allowlist by default, so a compromised dependency can't
+phone home. It assumes you are on macOS.
 
 <img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/b55b3975-9adf-4c28-9778-fdb799f64d6c" />
 
@@ -26,12 +30,14 @@ here won't be trivially reachable to a non-determined attacker.
 | Login | One login, shared across every project | Per devcontainer / Codespace | One login |
 | Per-project setup | None — `cd` and run | Add `.devcontainer/` to every repo | None |
 | Works from | Any terminal | IDE / Codespaces-first | Any terminal |
+| Host integrations lost by containerizing | Restored — ports, mounts, Keychain-injected tokens, browser/docker/sound MCP bridges, cross-project usage tracking | Partial — `forwardPorts` / bind mounts only | N/A — native |
 | Outbound egress | Hostname allowlist, on by default | Firewall reference exists, but opt-in and VS Code/Codespaces-bound | Unrestricted |
 | `node_modules` on host disk | No — volume-backed by default | Yes | Yes |
 | Credential / hook guards | Yes (settings, MCP token) | No | No |
 
-Full breakdown, including claudebox and lightweight Dockerfile recipes: [How This
-Compares to Alternatives](docs/comparison.md) and [Devcontainers
+Full breakdown, including claudebox, OpenShell, agentsh, and lightweight
+Dockerfile recipes: [How This Compares to
+Alternatives](docs/comparison.md) and [Devcontainers
 Alternative](docs/devcontainers.md).
 
 ## Prerequisites
