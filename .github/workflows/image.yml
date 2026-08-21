@@ -1,9 +1,10 @@
 name: Image
 
-# The image is the one thing here that rots without a commit: Dockerfile:3 is an
-# unpinned `FROM debian:trixie-slim`, the apt layer floats, and `npm ci` pulls
-# tarballs from the registry. So build it on a schedule as well as on change — a
-# red Monday means "upstream moved", usually answered with `make pin-digest`.
+# The images are the one thing here that rots without a commit: both Dockerfiles
+# start from an unpinned `FROM debian:trixie-slim`, the apt layers float, and
+# `npm ci` pulls tarballs from the registry. So build them on a schedule as well
+# as on change — a red Monday means "upstream moved", usually answered with
+# `make pin-digest`.
 on:
   schedule:
     - cron: '0 3 * * 1'   # Mondays 03:00 UTC
@@ -17,6 +18,8 @@ on:
       - 'entrypoint.sh'
       - 'init-firewall.sh'
       - 'templates/install_additional_packages.sh'
+      - 'proxy/**'
+      - 'scripts/gen-ca.sh'
       - '.github/workflows/image.yml'
   pull_request:
     paths:
@@ -26,6 +29,8 @@ on:
       - 'entrypoint.sh'
       - 'init-firewall.sh'
       - 'templates/install_additional_packages.sh'
+      - 'proxy/**'
+      - 'scripts/gen-ca.sh'
       - '.github/workflows/image.yml'
 jobs:
   build:
@@ -55,3 +60,72 @@ jobs:
       # actually runs as the host user. Nothing is pushed anywhere.
       - name: Smoke-test the installed claude
         run: docker run --rm --user "$(id -u):$(id -g)" --entrypoint claude claude-in-docker:ci --version
+
+  # The egress proxy, end to end. This is the only place TLS interception can be
+  # exercised for real (no Docker daemon inside a Claude container), so it stands
+  # in for a manual check: a rejected `ssl_bump` directive, an unreadable CA, or a
+  # squid-openssl package that stops shipping the cert-generation helper all fail
+  # here rather than in a session.
+  proxy:
+    runs-on: ubuntu-latest
+    env:
+      # Throwaway config dir, so nothing touches ~/.config.
+      CLAUDE_DOCKER_CONFIG_DIR: ${{ runner.temp }}/cid-config
+    steps:
+      - uses: actions/checkout@v7
+
+      # Seeds the baseline allowlists AND generates the egress CA (`init`
+      # depends on `ca`), which is what the proxy signs bumped traffic with.
+      - name: Seed a throwaway config dir
+        run: make init
+
+      - name: Build and start the proxy
+        run: ./proxy/up.sh
+
+      # curl trusting ONLY our CA: a successful handshake means the certificate
+      # was signed by it, i.e. Squid really terminated the TLS session. Against
+      # an unbumped tunnel this fails with exit 60. api.anthropic.com is on the
+      # baseline allowlist, so the proxy permits it; the HTTP status is
+      # irrelevant (401 is expected) — reaching one at all is the assertion.
+      - name: Bumped TLS is signed by our CA
+        run: |
+          docker run --rm --network claude-egress \
+            --volume "${CLAUDE_DOCKER_CONFIG_DIR}/ca/ca.crt:/ca.crt:ro" \
+            curlimages/curl:latest \
+              --silent --show-error --cacert /ca.crt \
+              --proxy "http://ci-key:x@squid:3128" \
+              --output /dev/null --write-out 'bumped, HTTP %{http_code}\n' \
+              https://api.anthropic.com/v1/messages
+
+      # The same request must now FAIL against our CA alone (exit 60: the real
+      # certificate is presented), and succeed against the public roots. That
+      # pair is the proof the splice list is honoured, and that the ~2s verdict
+      # cache is what "applies within ~2s" means.
+      - name: A spliced host is not decrypted
+        run: |
+          ./cid splice add -g api.anthropic.com
+          sleep 4
+          ! docker run --rm --network claude-egress \
+            --volume "${CLAUDE_DOCKER_CONFIG_DIR}/ca/ca.crt:/ca.crt:ro" \
+            curlimages/curl:latest \
+              --silent --show-error --cacert /ca.crt \
+              --proxy "http://ci-key:x@squid:3128" \
+              --output /dev/null https://api.anthropic.com/v1/messages
+          docker run --rm --network claude-egress curlimages/curl:latest \
+            --silent --show-error \
+            --proxy "http://ci-key:x@squid:3128" \
+            --output /dev/null --write-out 'spliced, HTTP %{http_code}\n' \
+            https://api.anthropic.com/v1/messages
+
+      # A host on neither list must still be refused — bumping must not have
+      # turned the allowlist into a no-op.
+      - name: An unlisted host is still denied
+        run: |
+          ! docker run --rm --network claude-egress curlimages/curl:latest \
+            --silent --show-error --insecure \
+            --proxy "http://ci-key:x@squid:3128" \
+            --output /dev/null https://example.com/
+
+      - name: Proxy log (full URLs, the point of bumping)
+        if: always()
+        run: docker exec claude-egress-proxy tail -20 /var/log/squid/access.log || true

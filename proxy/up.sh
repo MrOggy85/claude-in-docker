@@ -120,7 +120,13 @@ if [[ "${RUNNING}" != "true" ]]; then
   fail "${PROXY_NAME} did not stay up — Squid rejected its config or the CA."
   cont "Last log lines:"
   docker logs --tail 20 "${PROXY_NAME}" 2>&1 | while IFS= read -r l; do cont "  ${l}"; done
-  cont "Check the config with: docker run --rm ${IMAGE} squid -k parse"
+  # Stop it so `--restart unless-stopped` gives up; the container (and its logs)
+  # stay around for inspection.
+  docker stop "${PROXY_NAME}" >/dev/null 2>&1 || true
+  cont "Full log: docker logs ${PROXY_NAME}" \
+       "Re-check the config alone:" \
+       "  docker run --rm --entrypoint squid \\" \
+       "    --volume ${SCRIPT_DIR}/squid.conf:/etc/squid/squid.conf:ro ${IMAGE} -k parse"
   exit 1
 fi
 

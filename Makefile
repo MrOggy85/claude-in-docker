@@ -136,17 +136,20 @@ lockfile:
 update-claude:
 	npm update @anthropic-ai/claude-code --package-lock-only
 
-# Fetch the current amd64 digest of debian:trixie-slim into the Dockerfile FROM
-# line. Run after upstream security patches, then rebuild. Requires docker (or
-# swap in `skopeo inspect --no-creds docker://debian:trixie-slim | jq -r '.Digest'`).
+# Fetch the current amd64 digest of debian:trixie-slim into the FROM line of BOTH
+# Dockerfiles (the base image and the egress proxy share the base). Run after
+# upstream security patches, then rebuild. Requires docker (or swap in
+# `skopeo inspect --no-creds docker://debian:trixie-slim | jq -r '.Digest'`).
 # sed to a temp file then mv: `sed -i` alone is GNU-only (BSD/macOS sed reads the
 # next argument as a mandatory backup suffix and would eat "s|FROM ...").
 pin-digest:
 	@DIGEST=$$(docker manifest inspect debian:trixie-slim \
 	  | jq -r '.manifests[] | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest') && \
-	  sed "s|FROM debian:trixie-slim.*|FROM debian:trixie-slim@$$DIGEST|" Dockerfile > Dockerfile.tmp && \
-	  mv Dockerfile.tmp Dockerfile && \
-	  echo "Pinned to $$DIGEST"
+	  for f in Dockerfile proxy/Dockerfile; do \
+	    sed "s|FROM debian:trixie-slim.*|FROM debian:trixie-slim@$$DIGEST|" $$f > $$f.tmp && \
+	    mv $$f.tmp $$f; \
+	  done && \
+	  echo "Pinned both Dockerfiles to $$DIGEST"
 
 # Cut a release: derive the next version from the Conventional Commits since the
 # last tag, prepend a CHANGELOG.md section, commit it and annotate the tag.
