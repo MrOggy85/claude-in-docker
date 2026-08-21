@@ -65,8 +65,9 @@ wrapped bullets.
   message looks here, never at the call site. `init-firewall.sh` carries the one
   deliberate copy — it runs inside the image, where this file does not exist.
 - `cid` — the config CLI. Read-only viewers (`list` / `show` / `project` /
-  `domains` / `splice` / `containers` / `settings` / `ca` / `env`) plus in-place
-  allowlist editing (`domains add|rm <host>`, `splice add|rm <host>`,
+  `domains` / `skip-decryption` / `containers` / `settings` / `ca` / `env`) plus
+  in-place allowlist editing (`domains add|rm <host>`,
+  `skip-decryption add|rm <host>`,
   `containers add|rm <name>`, `settings trust|untrust <rule>`, `-g` for the
   shared baseline, `-C dir` to pick the project; all four share `_resolve_target` +
   `_entries_add`/`_entries_rm`, so add a kind there rather than duplicating).
@@ -91,7 +92,7 @@ wrapped bullets.
   container. `up.sh` builds the image (`Dockerfile` + `entrypoint.sh`: Debian's
   plain `squid` rejects `ssl_bump`, so `squid-openssl` it is) and brings it up;
   `squid.conf` + `ext-allowlist.sh` enforce each project's `allowed-domains.txt`
-  by hostname and decide bump-vs-splice. See `docs/egress-proxy.md` and
+  by hostname and decide whether to decrypt. See `docs/egress-proxy.md` and
   `docs/tls-inspection.md`.
 - `scripts/gen-ca.sh` — `make ca`: the CA Squid signs intercepted TLS with, in
   `<config-dir>/ca/`. `ca.key` goes only to the proxy container; `ca.crt` also
@@ -101,7 +102,7 @@ wrapped bullets.
 - `allowed-domains.txt` — the egress allowlist, read live by Squid (not baked
   into the image). The baseline copy lives at `<config-dir>/allowed-domains.txt`;
   `<config-dir>/projects/<key>/allowed-domains.txt` is the per-project list.
-  `splice-domains.txt` has the same layout, TTL and grammar, and answers a
+  `skip-decryption.txt` has the same layout, TTL and grammar, and answers a
   different question: which hosts Squid must NOT decrypt.
   `docker-containers.txt` follows the same baseline+per-project layout for the
   docker bridge, read per call instead of on a TTL, and so does

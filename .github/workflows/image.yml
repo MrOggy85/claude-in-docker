@@ -99,11 +99,11 @@ jobs:
 
       # The same request must now FAIL against our CA alone (exit 60: the real
       # certificate is presented), and succeed against the public roots. That
-      # pair is the proof the splice list is honoured, and that the ~2s verdict
+      # pair is the proof skip-decryption is honoured, and that the ~2s verdict
       # cache is what "applies within ~2s" means.
-      - name: A spliced host is not decrypted
+      - name: A skip-decryption host is not decrypted
         run: |
-          ./cid splice add -g api.anthropic.com
+          ./cid skip-decryption add -g api.anthropic.com
           sleep 4
           ! docker run --rm --network claude-egress \
             --volume "${CLAUDE_DOCKER_CONFIG_DIR}/ca/ca.crt:/ca.crt:ro" \
@@ -114,7 +114,7 @@ jobs:
           docker run --rm --network claude-egress curlimages/curl:latest \
             --silent --show-error \
             --proxy "http://ci-key:x@squid:3128" \
-            --output /dev/null --write-out 'spliced, HTTP %{http_code}\n' \
+            --output /dev/null --write-out 'not decrypted, HTTP %{http_code}\n' \
             https://api.anthropic.com/v1/messages
 
       # A host on neither list must still be refused — bumping must not have

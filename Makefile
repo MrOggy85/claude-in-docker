@@ -6,7 +6,7 @@ XDG_CONFIG_HOME ?= $(HOME)/.config
 CLAUDE_DOCKER_CONFIG_DIR ?= $(XDG_CONFIG_HOME)/claude-in-docker
 CONFIG_DIR := $(CLAUDE_DOCKER_CONFIG_DIR)
 
-GLOBAL_CONFIG := settings.json claude.json mcp-servers.json container-CLAUDE.md allowed-domains.txt splice-domains.txt .gitconfig .gitignore_global .env
+GLOBAL_CONFIG := settings.json claude.json mcp-servers.json container-CLAUDE.md allowed-domains.txt skip-decryption.txt .gitconfig .gitignore_global .env
 
 # Everything `make lint` shellchecks. Globbed per directory so a new script is
 # picked up automatically; extend the list when a new script *directory* appears.

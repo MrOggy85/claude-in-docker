@@ -20,7 +20,7 @@ _cid_files() {
   files=(
     settings.json claude.json mcp-servers.json container-CLAUDE.md
     .gitconfig .gitignore_global .credentials.json allowed-domains.txt
-    splice-domains.txt docker-containers.txt trusted-settings-rules.txt .env
+    skip-decryption.txt docker-containers.txt trusted-settings-rules.txt .env
     install_additional_packages.sh
   )
   _describe -t files 'config file' files
@@ -63,8 +63,8 @@ _cid_hosts() {
   _cid_entries allowed-domains.txt hosts 'allowed host'
 }
 
-_cid_spliced() {
-  _cid_entries splice-domains.txt hosts 'spliced host'
+_cid_skip_decryption() {
+  _cid_entries skip-decryption.txt hosts 'host that is not decrypted'
 }
 
 _cid_containers() {
@@ -92,7 +92,7 @@ _cid() {
     'show:print a global config file'
     'project:per-project key, config dir, and overrides'
     'domains:show or edit the egress allowlist'
-    'splice:show or edit the hosts whose TLS is not decrypted'
+    'skip-decryption:show or edit the hosts whose TLS is not decrypted'
     'ca:show the egress CA (path, expiry, fingerprint)'
     'containers:show or edit the docker-bridge container allowlist'
     'settings:what the project .claude/settings*.json grants'
@@ -140,8 +140,8 @@ _cid() {
               ;;
           esac
           ;;
-        project|domains|splice|containers)
-          # Second word: for domains/splice/containers, the add/rm/ls verbs; then
+        project|domains|skip-decryption|containers)
+          # Second word: for the list commands, the add/rm/ls verbs; then
           # flags/entries. `project` just takes a directory.
           if [[ ${line[1]} == project ]]; then
             _files -/
@@ -165,11 +165,11 @@ _cid() {
                     'prune:drop expired --for entries'
                     'ls:show the effective allowlist'
                   )
-                elif [[ $kind == splice ]]; then
+                elif [[ $kind == skip-decryption ]]; then
                   subs=(
                     'add:stop decrypting host(s)'
                     'rm:decrypt host(s) again'
-                    'ls:show the effective splice list'
+                    'ls:show which hosts are not decrypted'
                   )
                 else
                   subs=(
@@ -185,7 +185,7 @@ _cid() {
                 if [[ ${line[1]} == rm ]]; then
                   case $kind in
                     domains) _cid_hosts ;;
-                    splice)  _cid_spliced ;;
+                    skip-decryption) _cid_skip_decryption ;;
                     *)       _cid_containers ;;
                   esac
                 fi

@@ -176,8 +176,8 @@ if [[ -n "${EGRESS_PROXY_HOST:-}" ]]; then
     echo "  An issuer of \"claude-in-docker egress CA\" is expected, not an attack."
     echo "- So never disable verification to get past a certificate error (no"
     echo "  \`--insecure\`, no \`NODE_TLS_REJECT_UNAUTHORIZED=0\`, no \`verify=False\`). Report"
-    echo "  the error and the host: the user either splices that host out of decryption"
-    echo "  (\`cid splice add <host>\`) or points the runtime at \$SSL_CERT_FILE."
+    echo "  the error and the host: the user either exempts that host from decryption"
+    echo "  (\`cid skip-decryption add <host>\`) or points the runtime at \$SSL_CERT_FILE."
   fi
 else
   echo "- No egress proxy is configured for this session."

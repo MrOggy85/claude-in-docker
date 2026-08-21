@@ -18,7 +18,7 @@ HELPER="${SCRIPT_DIR}/proxy/ext-allowlist.sh"
 # BATS_TEST_TMPDIR is unique per test, so tests never share state.
 setup() {
   export BASELINE="${BATS_TEST_TMPDIR}/baseline-domains.txt"
-  export SPLICE_BASELINE="${BATS_TEST_TMPDIR}/baseline-splice.txt"
+  export SKIP_DECRYPTION_BASELINE="${BATS_TEST_TMPDIR}/baseline-skip-decryption.txt"
   export PROJECTS_DIR="${BATS_TEST_TMPDIR}/projects"
 
   cat > "${BASELINE}" <<'EOF'
@@ -40,14 +40,15 @@ EOF
 internal.bbb.test
 EOF
 
-  # Splice lists (--splice mode): hosts the proxy must NOT decrypt. Deliberately
+  # skip-decryption lists (--skip-decryption mode): hosts the proxy must NOT decrypt.
+  # Deliberately
   # disjoint from the allowlists above, so a mode reading the wrong file shows up.
-  cat > "${SPLICE_BASELINE}" <<'EOF'
+  cat > "${SKIP_DECRYPTION_BASELINE}" <<'EOF'
 # Baseline — never decrypted, for every project
 pinned.example.org
 .pinnedwild.example.org
 EOF
-  cat > "${PROJECTS_DIR}/proj-aaa111/splice-domains.txt" <<'EOF'
+  cat > "${PROJECTS_DIR}/proj-aaa111/skip-decryption.txt" <<'EOF'
 pinned.aaa.test
 EOF
 }
@@ -62,9 +63,9 @@ ask() {  # <project-key> <host>
   run sh "${HELPER}" <<< "$1 $2 -"
 }
 
-# Same, in --splice mode: "should this host be tunnelled without decryption?"
-ask_splice() {  # <project-key> <host>
-  run sh "${HELPER}" --splice <<< "$1 $2 -"
+# Same, in --skip-decryption mode: "should this host be tunnelled without decryption?"
+ask_skip_decryption() {  # <project-key> <host>
+  run sh "${HELPER}" --skip-decryption <<< "$1 $2 -"
 }
 
 # ---------------------------------------------------------------------------
@@ -271,50 +272,50 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# --splice mode: the same grammar answering "do NOT decrypt this host"
+# --skip-decryption mode: the same grammar answering "do NOT decrypt this host"
 # ---------------------------------------------------------------------------
 
-@test "splice: baseline entry matches" {
-  ask_splice proj-aaa111 pinned.example.org
+@test "skip-decryption: baseline entry matches" {
+  ask_skip_decryption proj-aaa111 pinned.example.org
   [ "$output" = "OK" ]
 }
 
-@test "splice: wildcard entry matches a subdomain" {
-  ask_splice proj-bbb222 api.pinnedwild.example.org
+@test "skip-decryption: wildcard entry matches a subdomain" {
+  ask_skip_decryption proj-bbb222 api.pinnedwild.example.org
   [ "$output" = "OK" ]
 }
 
-@test "splice: project entry matches only in that project" {
-  ask_splice proj-aaa111 pinned.aaa.test
+@test "skip-decryption: project entry matches only in that project" {
+  ask_skip_decryption proj-aaa111 pinned.aaa.test
   [ "$output" = "OK" ]
-  ask_splice proj-bbb222 pinned.aaa.test
+  ask_skip_decryption proj-bbb222 pinned.aaa.test
   [ "$output" = "ERR" ]
 }
 
-@test "splice: an unlisted host is not spliced, so it gets bumped" {
-  ask_splice proj-aaa111 api.anthropic.com
+@test "skip-decryption: an unlisted host is decrypted (bumped)" {
+  ask_skip_decryption proj-aaa111 api.anthropic.com
   [ "$output" = "ERR" ]
 }
 
-@test "splice mode does not read the egress allowlist (and vice versa)" {
-  # internal.aaa.test is allowed but not spliced; pinned.aaa.test the reverse.
-  ask_splice proj-aaa111 internal.aaa.test
+@test "skip-decryption mode does not read the egress allowlist (and vice versa)" {
+  # internal.aaa.test is allowed but decrypted; pinned.aaa.test the reverse.
+  ask_skip_decryption proj-aaa111 internal.aaa.test
   [ "$output" = "ERR" ]
   ask proj-aaa111 pinned.aaa.test
   [ "$output" = "ERR" ]
 }
 
-@test "splice: missing lists mean nothing is spliced (everything is decrypted)" {
-  rm -f "${SPLICE_BASELINE}" "${PROJECTS_DIR}/proj-aaa111/splice-domains.txt"
-  ask_splice proj-aaa111 pinned.example.org
+@test "skip-decryption: missing lists mean everything is decrypted" {
+  rm -f "${SKIP_DECRYPTION_BASELINE}" "${PROJECTS_DIR}/proj-aaa111/skip-decryption.txt"
+  ask_skip_decryption proj-aaa111 pinned.example.org
   [ "$status" -eq 0 ]
   [ "$output" = "ERR" ]
 }
 
-@test "splice: expiry annotations work here too (cid writes the same grammar)" {
+@test "skip-decryption: expiry annotations work here too (same grammar)" {
   local past=$(( $(date +%s) - 60 ))
-  printf 'temp.pinned.test  # expires=%s\n' "${past}" >> "${SPLICE_BASELINE}"
-  ask_splice proj-aaa111 temp.pinned.test
+  printf 'temp.pinned.test  # expires=%s\n' "${past}" >> "${SKIP_DECRYPTION_BASELINE}"
+  ask_skip_decryption proj-aaa111 temp.pinned.test
   [ "$output" = "ERR" ]
 }
 

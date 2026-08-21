@@ -1,11 +1,21 @@
 # TLS Inspection (ssl_bump)
 
-The egress proxy decrypts HTTPS. It terminates each connection with a certificate signed by a CA on
-your machine, reads the request, then opens its own TLS session to the real host. So Squid sees the
-full URL instead of just `CONNECT <host>:443`, and validates the upstream certificate itself.
+The egress proxy decrypts HTTPS. What that means for one request to an allowlisted `github.com`:
 
-This is mandatory, not a mode: `run.sh` aborts when the CA is missing or invalid. A session that
-quietly fell back to blind tunnelling would look identical while inspecting nothing.
+1. The container sends `CONNECT github.com:443` to Squid. Squid checks
+   [`allowed-domains.txt`](egress-proxy.md#allowlists) — that file's only job — and allows it.
+2. Squid then **impersonates github.com**: it mints a certificate naming that host, signs it with a
+   CA on your machine, and presents it to the container.
+3. The container trusts that CA (the image installs it), so its client accepts and sends
+   `GET /repos/x HTTP/1.1` — encrypted to *Squid*, not to GitHub.
+4. Squid decrypts it, logs `GET https://github.com/repos/x`, then opens its **own** TLS session to
+   the real github.com and forwards the request.
+
+Two TLS sessions instead of one, with plaintext in the middle. Before this, step 2 onward was a
+blind byte relay and the log line was just `CONNECT github.com:443`.
+
+It is mandatory, not a mode: `run.sh` aborts when the CA is missing or invalid, because a session
+that quietly fell back to blind relaying would look identical while inspecting nothing.
 
 ## Setup
 
@@ -63,22 +73,45 @@ Node is the trap: it reads neither the system store nor `SSL_CERT_FILE`, so with
 `NODE_EXTRA_CA_CERTS` the Anthropic API and npm fail while curl and git work. A Java keystore is not
 covered — add the certificate with `keytool` in your project's install script.
 
-## Not decrypting a host: the splice list
+## Not decrypting a host
 
-A client that pins certificates rejects a substituted one no matter what is in the trust store. List
-its host and the proxy tunnels it untouched, as it did before interception:
+`skip-decryption.txt` stops step 2 above for one host: Squid reads the handshake far enough to see
+the hostname, then relays the bytes untouched, so the container gets the origin's **real**
+certificate and one end-to-end TLS session. (Squid's own word for this is *splicing* — hence
+`ssl_bump splice` in `squid.conf`.)
+
+The two lists answer different questions about the same connection, so they layer rather than
+repeat:
+
+| File | Question | Default |
+| ---------------------- | ----------------------------------------------- | ------------ |
+| `allowed-domains.txt`  | may the container reach this host at all?        | no           |
+| `skip-decryption.txt`  | for a host it may reach, does Squid decrypt it?  | yes, decrypt |
+
+- in `allowed-domains.txt` only — reachable and decrypted; this is nearly every host
+- in **both** — reachable, not decrypted
+- in `skip-decryption.txt` only — **still blocked**. Not decrypting is a treatment, not a grant,
+  so the entry does nothing on its own
+
+There is one reason to use it, and you will know when: a tool fails with a certificate error while
+`curl https://thathost/` in the same container succeeds. That tool **pins certificates** — it
+compares what it got against a key compiled into it, ignores the trust store, and cannot be fixed
+from inside the container.
 
 ```bash
-cid splice add api.example.com          # this project
-cid splice add -g .example.com          # every project (baseline)
-cid splice rm  api.example.com
+cid skip-decryption add api.example.com     # this project
+cid skip-decryption add -g .example.com     # every project (baseline)
+cid skip-decryption rm  api.example.com     # decrypt it again
 ```
 
 Same grammar and the same ~2s propagation as the egress allowlist (baseline
-`<config-dir>/splice-domains.txt` plus `projects/<key>/splice-domains.txt`, one host per line, a
-leading `.` matching the apex and every subdomain). Splicing does **not** grant access: the host
-must still be in `allowed-domains.txt`. What it costs is visibility — a spliced host is filtered
-by hostname only.
+`<config-dir>/skip-decryption.txt` plus `projects/<key>/skip-decryption.txt`, one host per line, a
+leading `.` matching the apex and every subdomain).
+
+Keep the list short: a listed host loses its URL log lines and its inner-host check, so domain
+fronting is open again there. It buys a working client at the price of visibility — not speed.
+Bumping costs one generated certificate per host, cached in the proxy's cert DB, plus a second
+handshake; that is noise next to network latency.
 
 ## What this buys, and what it does not
 
@@ -98,7 +131,7 @@ by hostname only.
 | ------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`, `SELF_SIGNED_CERT_IN_CHAIN` in Node | `NODE_EXTRA_CA_CERTS` missing — the image predates the CA; re-run `run.sh` to rebuild |
 | `SSL: CERTIFICATE_VERIFY_FAILED` in a Python tool                   | it ignores `SSL_CERT_FILE`; pass its own CA option, pointed at `$SSL_CERT_FILE` |
-| A client reports a pinning failure                                  | `cid splice add <host>`                                                    |
+| A client reports a pinning failure                                  | `cid skip-decryption add <host>`                                                    |
 | Every HTTPS request fails at once, in every project                 | expired or mismatched CA — `cid ca`, then rotate                           |
 | The proxy will not start after an edit                              | `proxy/up.sh` says so and prints the log; parse the config alone with `docker run --rm --entrypoint squid --volume "$PWD/proxy/squid.conf:/etc/squid/squid.conf:ro" claude-egress-squid:local -k parse` |
 
@@ -113,5 +146,5 @@ interception moved to the proxy.
 - [`proxy/Dockerfile`](../proxy/Dockerfile), [`proxy/entrypoint.sh`](../proxy/entrypoint.sh) — the
   `squid-openssl` image (Debian's plain `squid` rejects `ssl_bump`) and its CA/cert-DB setup
 - [`proxy/squid.conf`](../proxy/squid.conf) — `ssl_bump` policy
-- [`proxy/ext-allowlist.sh`](../proxy/ext-allowlist.sh) — `--splice` mode answers "do not decrypt this"
+- [`proxy/ext-allowlist.sh`](../proxy/ext-allowlist.sh) — `--skip-decryption` mode answers "do not decrypt this"
 - [Centralized Egress Proxy](egress-proxy.md) — the allowlist this sits on top of

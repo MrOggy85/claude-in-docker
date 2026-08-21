@@ -2,8 +2,8 @@
 # Squid external_acl helper, in two modes over one grammar:
 #
 #   (no argument)  may this project reach this host?  -> allowed-domains.txt
-#   --splice       should this host be tunnelled WITHOUT decryption, instead of
-#                  bumped?                            -> splice-domains.txt
+#   --skip-decryption       should this host be tunnelled WITHOUT decryption, instead of
+#                  bumped?                            -> skip-decryption.txt
 #
 # Per line on stdin Squid sends "<project-key> <host> -" (the format is
 # "%LOGIN %DST"; Squid appends a trailing "-"). Take the first two fields and
@@ -21,21 +21,21 @@ export LC_ALL=C   # locale-stable [a-z0-9] / [:space:] ranges
 # Overridable so the helper can be unit-tested against fixtures (see
 # test/ext-allowlist.bats). Squid never sets these; it uses the defaults.
 BASELINE="${BASELINE:-/etc/squid/baseline-domains.txt}"
-SPLICE_BASELINE="${SPLICE_BASELINE:-/etc/squid/baseline-splice.txt}"
+SKIP_DECRYPTION_BASELINE="${SKIP_DECRYPTION_BASELINE:-/etc/squid/baseline-skip-decryption.txt}"
 PROJECTS_DIR="${PROJECTS_DIR:-/etc/squid/projects}"
 
 # Mode: which baseline file and which per-project filename to consult. An unknown
 # argument is a squid.conf typo — refuse rather than silently answering with the
-# allowlist (which, in splice mode, would mean "never decrypt anything").
+# allowlist (which, in skip-decryption mode, would mean "never decrypt anything").
 PROJECT_FILENAME='allowed-domains.txt'
 case "${1:-}" in
   '') ;;
-  --splice)
-    BASELINE="${SPLICE_BASELINE}"
-    PROJECT_FILENAME='splice-domains.txt'
+  --skip-decryption)
+    BASELINE="${SKIP_DECRYPTION_BASELINE}"
+    PROJECT_FILENAME='skip-decryption.txt'
     ;;
   *)
-    echo "ext-allowlist.sh: unknown mode '$1' (expected --splice or no argument)" >&2
+    echo "ext-allowlist.sh: unknown mode '$1' (expected --skip-decryption or no argument)" >&2
     exit 2
     ;;
 esac

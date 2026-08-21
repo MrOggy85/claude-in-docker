@@ -401,7 +401,7 @@ PROXY_ENV_ARGS=(
   --env "NODE_EXTRA_CA_CERTS=${CONTAINER_CA_CRT}"
 )
 kv "egress via central proxy" "network ${EGRESS_NETWORK}, project key ${PROJECT_KEY}"
-kv "TLS intercepted by the proxy" "CA ${EGRESS_CA_CRT}" "splice a host: cid splice add <host>"
+kv "TLS intercepted by the proxy" "CA ${EGRESS_CA_CRT}" "exempt a host: cid skip-decryption add <host>"
 
 # 3g. Sandbox self-awareness, ON DEMAND: mount the `sandbox` skill so the session
 #     can look up the one thing it cannot derive — which host port maps to which
@@ -423,7 +423,7 @@ case "${CLAUDE_SANDBOX_INFO:-1}" in
       --env "CONTAINER_VOLUME_PATHS=$(IFS=,; printf '%s' "${VOLUME_PATH_LIST[*]+${VOLUME_PATH_LIST[*]}}")"
       --env "REPO_IN_CONTAINER=${REPO_IN_CONTAINER}"
       # So the session reads a proxy-signed certificate as policy, not as an
-      # attack, and knows `cid splice add` is the fix for a pinning client.
+      # attack, and knows `cid skip-decryption add` is the fix for a pinning client.
       --env "EGRESS_TLS_CA=${CONTAINER_CA_CRT}"
       # The host file to edit to add a system package (see 2d) — passed whether or
       # not it exists yet, since "create this file" is the answer either way.

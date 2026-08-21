@@ -3,7 +3,7 @@
 `cid` inspects and edits the claude-in-docker configuration, which lives outside the repo in the
 config dir (`~/.config/claude-in-docker/` by default — see [Environment
 Variables](environment-variables.md)). It finds those files, prints them, and edits the allowlists in
-place so you never open `allowed-domains.txt`, `splice-domains.txt` or `docker-containers.txt` by
+place so you never open `allowed-domains.txt`, `skip-decryption.txt` or `docker-containers.txt` by
 hand.
 
 ## Commands
@@ -17,8 +17,8 @@ hand.
 ./cid domains add --for <dur> <host>...   # add, but the entry auto-expires after <dur>
 ./cid domains rm  <host>...      # remove host(s) from the egress allowlist
 ./cid domains prune              # drop expired --for entries (hygiene only)
-./cid splice [dir]               # hosts the proxy tunnels without decrypting TLS
-./cid splice add|rm <host>...    # stop / resume decrypting a host
+./cid skip-decryption [dir]               # hosts the proxy tunnels without decrypting TLS
+./cid skip-decryption add|rm <host>...    # stop / resume decrypting a host
 ./cid ca                         # the egress CA: path, expiry, fingerprint, image copy status
 ./cid containers [dir]           # containers the docker bridge may inspect (baseline + project)
 ./cid containers add <name>...   # allow container(s) for the docker bridge
@@ -73,18 +73,18 @@ cid domains add --for 2h -g ci.example.com   # ...in the baseline, for 2 hours
 cid domains prune                            # drop expired --for entries (hygiene; not required)
 ```
 
-### `splice add` / `splice rm`
+### `skip-decryption add` / `skip-decryption rm`
 
-The same machinery against `splice-domains.txt`, the exception list to TLS interception: a host
+The same machinery against `skip-decryption.txt`, the exception list to TLS interception: a host
 listed there is tunnelled undecrypted, for clients that pin certificates. Identical grammar, `-g`/`-C`
-behaviour and ~2s propagation as `domains`; `--for` and `prune` are not accepted. Splicing grants no
-access — the host must still be on the egress allowlist. See [TLS Inspection](tls-inspection.md).
+behaviour and ~2s propagation as `domains`; `--for` and `prune` are not accepted. Listing a host
+grants no access — it must still be on the egress allowlist. See [TLS Inspection](tls-inspection.md).
 
 ```bash
-cid splice add api.example.com     # stop decrypting it, for THIS project
-cid splice add -g .example.com     # ...for every project (baseline)
-cid splice rm  api.example.com     # decrypt it again
-cid splice                         # show the effective list
+cid skip-decryption add api.example.com     # stop decrypting it, for THIS project
+cid skip-decryption add -g .example.com     # ...for every project (baseline)
+cid skip-decryption rm  api.example.com     # decrypt it again
+cid skip-decryption                         # show the effective list
 ```
 
 ### `ca`
@@ -192,7 +192,7 @@ ln -s "$PWD/cid" ~/.local/bin/cid    # or any dir already on $PATH
 ## Shell completion
 
 `cid` ships a zsh completion at `completions/_cid`. Tab after `cid ` gives subcommands; after
-`cid show ` config filenames; after `cid domains ` / `cid splice ` / `cid containers ` the `add` /
+`cid show ` config filenames; after `cid domains ` / `cid skip-decryption ` / `cid containers ` the `add` /
 `rm` / `ls` verbs; and after each `rm ` the entries already on that list.
 
 Install by putting the `completions` dir on your `fpath` before `compinit`:

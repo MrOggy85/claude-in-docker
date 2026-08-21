@@ -43,7 +43,7 @@ and DNS closed to everything but Docker's resolver (Squid resolves upstream name
    (`http_access deny all`).
 3. **TLS is decrypted.** Squid bumps each connection with a locally generated CA the containers
    trust, so it reads the full URL and validates the upstream certificate. Hosts on
-   `splice-domains.txt` are tunnelled undecrypted instead. See [TLS Inspection](tls-inspection.md).
+   `skip-decryption.txt` are tunnelled undecrypted instead. See [TLS Inspection](tls-inspection.md).
 4. **The container can't bypass it.** [`init-firewall.sh`](../init-firewall.sh) runs at container
    start (as root via a tightly-scoped `sudo` rule, before the entrypoint drops to your user). It
    permits egress **only** to the Squid host plus DNS to Docker's embedded resolver at
@@ -81,7 +81,7 @@ Tear down with `make proxy-down`. Rename the network and container via `CLAUDE_E
 | ------------------------------------------ | --------------------------------------------------------------- |
 | `<config-dir>/allowed-domains.txt`         | **baseline** — always allowed, every project (falls back to `templates/allowed-domains.txt` if absent) |
 | `<config-dir>/projects/<key>/allowed-domains.txt` | that project's full list (seeded by `run.sh` on first run) |
-| `<config-dir>/splice-domains.txt`, `projects/<key>/splice-domains.txt` | same grammar, different question: hosts **not** to decrypt ([TLS Inspection](tls-inspection.md)) |
+| `<config-dir>/skip-decryption.txt`, `projects/<key>/skip-decryption.txt` | same grammar, different question: hosts **not** to decrypt ([TLS Inspection](tls-inspection.md)) |
 
 All are bind-mounted read-only into the proxy and read live by the helper (2-second verdict cache),
 so **editing a list needs no proxy restart** — the change applies within ~2s.
@@ -119,8 +119,8 @@ CLI](config-cli.md#domains-add--domains-rm).
 - **The CA private key is a new secret.** It signs for any host, and lives on the host plus the Squid
   container — never in a Claude container. See
   [Known Attack Vectors](attack-vectors.md#the-egress-cas-private-key).
-- **A spliced host is filtered by hostname only.** Anything on `splice-domains.txt` gets the
-  pre-interception treatment: CONNECT target in, encrypted tunnel out.
+- **A host on `skip-decryption.txt` is filtered by hostname only** — the pre-interception
+  treatment: CONNECT target in, encrypted tunnel out.
 - **Cross-project borrowing.** The project key is a *self-asserted* proxy username — a process in
   project A's container can present project B's key and use B's allowlist. Accepted trade-off: every
   container belongs to the same user, and a borrowed list only names hosts that user already
@@ -133,8 +133,8 @@ CLI](config-cli.md#domains-add--domains-rm).
 ## Files
 
 - [`proxy/squid.conf`](../proxy/squid.conf) — proxy config (auth + external ACL + default-deny + `ssl_bump`)
-- [`proxy/ext-allowlist.sh`](../proxy/ext-allowlist.sh) — per-project allowlist decision helper; `--splice` answers the decrypt-or-not question
+- [`proxy/ext-allowlist.sh`](../proxy/ext-allowlist.sh) — per-project allowlist decision helper; `--skip-decryption` answers the decrypt-or-not question
 - [`proxy/auth-ok.sh`](../proxy/auth-ok.sh) — basic-auth helper accepting any credentials (username = project key)
 - [`proxy/Dockerfile`](../proxy/Dockerfile), [`proxy/entrypoint.sh`](../proxy/entrypoint.sh) — the `squid-openssl` image and its CA / cert-DB setup
 - [`proxy/up.sh`](../proxy/up.sh) — build the image, create the network, (re)start the proxy
-- [TLS Inspection](tls-inspection.md) — the CA, the trust stores, the splice list
+- [TLS Inspection](tls-inspection.md) — the CA, the trust stores, the skip-decryption list

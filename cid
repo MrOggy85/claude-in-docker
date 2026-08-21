@@ -29,11 +29,11 @@
 #                              (default) or, with -g, the shared baseline list.
 #   cid domains prune          Drop expired --for entries from the list (hygiene
 #                              only — the proxy already ignores them).
-#   cid splice [dir]           Show which hosts the proxy tunnels WITHOUT
+#   cid skip-decryption [dir]           Show which hosts the proxy tunnels WITHOUT
 #                              decrypting TLS (baseline + per-project).
-#   cid splice add <host>...   Stop decrypting a host — for a client that pins
+#   cid skip-decryption add <host>...   Stop decrypting a host — for a client that pins
 #                              certificates (-g: baseline).
-#   cid splice rm  <host>...   Decrypt it again (-g: baseline).
+#   cid skip-decryption rm  <host>...   Decrypt it again (-g: baseline).
 #   cid ca                     Show the egress CA the proxy signs intercepted TLS
 #                              with: path, expiry, fingerprint, image copy status.
 #   cid containers [dir]       Show which Docker containers the host docker bridge
@@ -51,7 +51,7 @@
 #                              filter). A terminal mirror of docs/environment-variables.md.
 #   cid help                   This help.
 #
-# domains|splice|containers add|rm flags:
+# domains|skip-decryption|containers add|rm flags:
 #   -g, --global               Target the shared baseline list instead of the
 #                              current project's per-project list.
 #   -C, --dir <dir>            Select the project by directory (default: PWD).
@@ -59,7 +59,8 @@
 #   --for <duration>           domains add only: expire the entry after
 #                              <duration> (digits + optional s/m/h/d suffix).
 #
-# The domain and splice lists are read live by the Squid proxy (2s cache), so
+# The domain and skip-decryption lists are read live by the Squid proxy (2s cache),
+# so
 # add/rm take effect within ~2s — no image rebuild or proxy restart. The container
 # allowlist is read per bridge call, so it applies immediately. See docs/config-cli.md.
 
@@ -92,7 +93,7 @@ GLOBAL_FILES=(
   ".gitignore_global|Global gitignore mounted at ~/.config/git/ignore"
   ".credentials.json|Claude auth token (secret; not printed by 'show')"
   "allowed-domains.txt|Baseline egress allowlist enforced by the Squid proxy"
-  "splice-domains.txt|Hosts the proxy tunnels WITHOUT decrypting TLS (bump exceptions)"
+  "skip-decryption.txt|Hosts the proxy tunnels WITHOUT decrypting TLS (bump exceptions)"
   "docker-containers.txt|Baseline container allowlist for the docker bridge (optional)"
   "trusted-settings-rules.txt|permissions.allow rules the settings guard should not flag (optional)"
   ".env|Arbitrary KEY=VALUE env vars injected via --env-file"
@@ -195,7 +196,7 @@ cmd_project() {
 
   head_ "Overrides (fall back to the global file when absent)"
   local f
-  for f in allowed-domains.txt splice-domains.txt docker-containers.txt .env container-CLAUDE.md mcp-servers.json claude.json install_additional_packages.sh; do
+  for f in allowed-domains.txt skip-decryption.txt docker-containers.txt .env container-CLAUDE.md mcp-servers.json claude.json install_additional_packages.sh; do
     if [[ -f "${pdir}/${f}" ]]; then
       printf '  [override] %s\n' "${f}"
     else
@@ -304,10 +305,10 @@ _resolve_target() {  # <global?0|1> <dir> <kind: domains|containers|rules>
       TARGET_APPLIES='applies within ~2s, no restart'
       TARGET_LOWER=1
       ;;
-    splice)
+    skipdecrypt)
       # Hosts the proxy must NOT decrypt. Same grammar and cache as domains, a
       # different question — see docs/tls-inspection.md.
-      name='splice-domains.txt'
+      name='skip-decryption.txt'
       TARGET_VALIDATOR='_valid_host'
       TARGET_HINT="not a valid hostname (letters, digits, '.', '-'; leading '.' = wildcard)"
       TARGET_APPLIES='applies within ~2s, no restart'
@@ -335,7 +336,7 @@ _resolve_target() {  # <global?0|1> <dir> <kind: domains|containers|rules>
   if [[ "${is_global}" == 1 ]]; then
     TARGET_FILE="${CONFIG_DIR}/${name}"
     TARGET_LABEL="baseline"
-    if [[ ( "${kind}" == domains || "${kind}" == splice ) && ! -f "${TARGET_FILE}" ]]; then
+    if [[ ( "${kind}" == domains || "${kind}" == skipdecrypt ) && ! -f "${TARGET_FILE}" ]]; then
       err "baseline list not found: ${TARGET_FILE}"
       err "run 'make init' first (the proxy mounts exactly this file)."
       return 1
@@ -516,14 +517,14 @@ cmd_domains_prune() {  # <global> <dir>
   fi
 }
 
-cmd_splice_add() {  # <global> <dir> <host>...
-  [[ $# -ge 3 ]] || { err "usage: cid splice add [-g] [-C dir] <host>..."; return 2; }
-  _entries_add splice "$@"
+cmd_skipdecrypt_add() {  # <global> <dir> <host>...
+  [[ $# -ge 3 ]] || { err "usage: cid skip-decryption add [-g] [-C dir] <host>..."; return 2; }
+  _entries_add skipdecrypt "$@"
 }
 
-cmd_splice_rm() {  # <global> <dir> <host>...
-  [[ $# -ge 3 ]] || { err "usage: cid splice rm [-g] [-C dir] <host>..."; return 2; }
-  _entries_rm splice "$@"
+cmd_skipdecrypt_rm() {  # <global> <dir> <host>...
+  [[ $# -ge 3 ]] || { err "usage: cid skip-decryption rm [-g] [-C dir] <host>..."; return 2; }
+  _entries_rm skipdecrypt "$@"
 }
 
 cmd_containers_add() {  # <global> <dir> <name>...
@@ -562,7 +563,7 @@ cmd_domains_show() {  # [dir]
   _dump_list "Per-project additions" "${pdir}/allowed-domains.txt"
 }
 
-cmd_splice_show() {  # [dir]
+cmd_skipdecrypt_show() {  # [dir]
   local dir; dir="$(cd "${1:-$PWD}" 2>/dev/null && pwd)" || { err "no such dir: ${1:-$PWD}"; return 1; }
   local key pdir
   key="$(project_key "${dir}")"
@@ -570,8 +571,8 @@ cmd_splice_show() {  # [dir]
   head_ "Hosts tunnelled without TLS decryption for ${key}"
   printf 'The proxy decrypts every host EXCEPT those matching a list below (it still\n'
   printf 'has to be in the egress allowlist to be reachable). See docs/tls-inspection.md.\n'
-  _dump_list "Baseline" "${CONFIG_DIR}/splice-domains.txt" "${TEMPLATES_DIR}/splice-domains.txt"
-  _dump_list "Per-project additions" "${pdir}/splice-domains.txt"
+  _dump_list "Baseline" "${CONFIG_DIR}/skip-decryption.txt" "${TEMPLATES_DIR}/skip-decryption.txt"
+  _dump_list "Per-project additions" "${pdir}/skip-decryption.txt"
 }
 
 cmd_containers_show() {  # [dir]
@@ -893,9 +894,9 @@ Commands:
   domains rm  <host>...   Remove host(s) from the per-project list (-g for the baseline)
   domains prune           Drop expired --for entries (hygiene only; the proxy already
                           ignores them)
-  splice [dir]            Hosts the proxy tunnels without decrypting TLS
-  splice add <host>...    Stop decrypting a host (-g for the baseline)
-  splice rm  <host>...    Decrypt it again (-g for the baseline)
+  skip-decryption [dir]   Hosts the proxy relays without decrypting TLS
+  skip-decryption add <host>...  Stop decrypting a host (-g for the baseline)
+  skip-decryption rm  <host>...  Decrypt it again (-g for the baseline)
   ca                      The egress CA: path, expiry, fingerprint, image copy status
   containers [dir]        Containers the docker bridge may inspect (baseline + per-project)
   containers add <name>...  Allow container(s) for this project (-g for the baseline)
@@ -908,7 +909,7 @@ Commands:
   env [filter]            List the env vars you can set (current value / default)
   help                    This help
 
-domains|splice|containers|settings sub-verb flags:
+domains|skip-decryption|containers|settings sub-verb flags:
   -g, --global            Target the shared baseline list (not the current project)
   -C, --dir <dir>         Select the project by directory (default: current dir)
 
@@ -919,7 +920,7 @@ Examples:
   cid domains add --for 15m github.com     # allow for 15 minutes, then auto-deny
   cid domains rm  example.com              # remove from this project's list
   cid domains prune                        # drop expired --for entries
-  cid splice add api.example.com           # stop decrypting it (a pinning client)
+  cid skip-decryption add api.example.com           # stop decrypting it (a pinning client)
   cid ca                                   # is the CA valid, and does the image have it
   cid containers add myapp-web             # let the bridge read this container
   cid containers add 'myapp-*'             # trailing '*' = prefix glob (quote it)
@@ -940,7 +941,7 @@ main() {
     show)        cmd_show "$@" ;;
     project)     cmd_project "$@" ;;
     domains)     _cmd_allowlist domains "$@" ;;
-    splice)      _cmd_allowlist splice "$@" ;;
+    skip-decryption) _cmd_allowlist skipdecrypt "$@" ;;
     containers)  _cmd_allowlist containers "$@" ;;
     ca)          cmd_ca ;;
     settings)    cmd_settings "$@" ;;

@@ -41,10 +41,11 @@ if [[ ! -f "${BASELINE_DOMAINS_FILE}" ]]; then
   fail "${BASELINE_DOMAINS_FILE} not found — run: make init"
   exit 1
 fi
-# Same for the splice list (hosts to tunnel undecrypted). Seeded comment-only.
-BASELINE_SPLICE_FILE="${CONFIG_DIR}/splice-domains.txt"
-if [[ ! -f "${BASELINE_SPLICE_FILE}" ]]; then
-  fail "${BASELINE_SPLICE_FILE} not found — run: make init"
+# Same for the skip-decryption list (hosts to relay undecrypted). Comment-only
+# when seeded.
+BASELINE_SKIP_DECRYPTION_FILE="${CONFIG_DIR}/skip-decryption.txt"
+if [[ ! -f "${BASELINE_SKIP_DECRYPTION_FILE}" ]]; then
+  fail "${BASELINE_SKIP_DECRYPTION_FILE} not found — run: make init"
   exit 1
 fi
 # The CA Squid signs bumped connections with. Only this container ever sees the
@@ -101,7 +102,7 @@ docker run -d \
   --volume "${SCRIPT_DIR}/ext-allowlist.sh:/etc/squid/ext-allowlist.sh:ro" \
   --volume "${SCRIPT_DIR}/auth-ok.sh:/etc/squid/auth-ok.sh:ro" \
   --volume "${BASELINE_DOMAINS_FILE}:/etc/squid/baseline-domains.txt:ro" \
-  --volume "${BASELINE_SPLICE_FILE}:/etc/squid/baseline-splice.txt:ro" \
+  --volume "${BASELINE_SKIP_DECRYPTION_FILE}:/etc/squid/baseline-skip-decryption.txt:ro" \
   --volume "${CA_DIR}:/etc/squid/ca-src:ro" \
   --volume "${PROJECTS_DIR}:/etc/squid/projects:ro" \
   "${IMAGE}" >/dev/null
@@ -132,4 +133,4 @@ fi
 
 ok "${PROXY_NAME} is up" "access log: docker exec ${PROXY_NAME} tail -f /var/log/squid/access.log"
 say "Claude containers join '${NETWORK}' and reach it as http://squid:3128"
-say "TLS is intercepted; hosts in splice-domains.txt are tunnelled undecrypted."
+say "TLS is intercepted; hosts in skip-decryption.txt are relayed undecrypted."

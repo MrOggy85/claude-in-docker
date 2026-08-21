@@ -208,9 +208,9 @@ Claude containers, so Claude running in them cannot see or edit it.
 The narrow exception is running Claude **on this repo itself** with the config dir mounted in. Then
 Claude can edit `allowed-domains.txt`, and because the proxy re-reads the lists live (≈2s verdict
 cache, no rebuild), a widened allowlist takes effect within ~2s. The blast radius is still bounded:
-a widened list only adds hostnames the proxy will then permit by CONNECT target. `splice-domains.txt`
-is editable the same way, and buys less — a spliced host still has to be allowlisted; it only stops
-being decrypted. Treat edits to these files as changes to a security boundary, and review the diffs.
+a widened list only adds hostnames the proxy will then permit by CONNECT target. `skip-decryption.txt`
+is editable the same way, and buys less — a host listed there still has to be allowlisted; it only
+stops being decrypted. Treat edits to these files as changes to a security boundary, and review the diffs.
 
 ## Egress Boundary Disclosure via Fast-Fail
 
@@ -234,7 +234,7 @@ regardless of where it resolves. The earlier IP-allowlist concern no longer appl
 
 The residual *domain-fronting* gap — CONNECT naming an allowed host while the encrypted SNI names
 another on the same frontable infrastructure — is closed for every bumped host, since the proxy now
-decrypts and sees the inner request's own host. It remains for hosts on `splice-domains.txt`, which
+decrypts and sees the inner request's own host. It remains for hosts on `skip-decryption.txt`, which
 are deliberately not decrypted. See [TLS Inspection](tls-inspection.md).
 
 ## The Egress CA's Private Key

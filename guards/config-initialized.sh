@@ -20,11 +20,11 @@ if [[ ! -f "${CONFIG_DIR}/.env" ]]; then
   exit 1
 fi
 
-# splice-domains.txt is newer than the .env marker, so a config dir seeded by an
+# skip-decryption.txt is newer than the .env marker, so a config dir seeded by an
 # older version passes the check above and would then fail deeper in, inside
 # proxy/up.sh (which bind-mounts exactly this path). Say it here instead.
-if [[ ! -f "${CONFIG_DIR}/splice-domains.txt" ]]; then
-  fail "no ${CONFIG_DIR}/splice-domains.txt" \
+if [[ ! -f "${CONFIG_DIR}/skip-decryption.txt" ]]; then
+  fail "no ${CONFIG_DIR}/skip-decryption.txt" \
        "The proxy mounts it to decide which hosts it must not decrypt. Run" \
        "\`make init\` to add it (existing files are left untouched), then re-run." \
        "See docs/tls-inspection.md."
