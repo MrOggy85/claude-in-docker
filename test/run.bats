@@ -62,6 +62,9 @@ setup() {
   # mcp-servers.json is likewise required by run.sh (part of the make-init
   # baseline), so seed a minimal one. MCP tests overwrite/remove it deliberately.
   printf '{"mcpServers":{}}\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/mcp-servers.json"
+  # The proxy mounts the splice list, so the same guard requires it (comment-only,
+  # as `make init` seeds it).
+  printf '# nothing spliced\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/splice-domains.txt"
   # The egress CA the guard requires (see setup_file). The CA test removes it.
   mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}/ca"
   cp "${FIXTURE_CA_DIR}/ca.crt" "${FIXTURE_CA_DIR}/ca.key" "${CLAUDE_DOCKER_CONFIG_DIR}/ca/"
@@ -537,6 +540,15 @@ refute_run_arg() {
   cd "${TEST_PROJECT_DIR}"
   run "${RUN_CMD[@]}"
   [ "$status" -eq 1 ]
+  [[ "$output" == *"make init"* ]]
+}
+
+@test "no baseline splice list: aborted early, not deep inside proxy/up.sh" {
+  rm -f "${CLAUDE_DOCKER_CONFIG_DIR}/splice-domains.txt"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"splice-domains.txt"* ]]
   [[ "$output" == *"make init"* ]]
 }
 

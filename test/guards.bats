@@ -49,6 +49,7 @@ setup() {
   mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}"
   : > "${CLAUDE_DOCKER_CONFIG_DIR}/.env"
   printf '{"mcpServers":{}}\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/mcp-servers.json"
+  printf '# nothing spliced\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/splice-domains.txt"
   # The egress CA the guard requires; the egress-CA tests break it deliberately.
   mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}/ca"
   cp "${FIXTURE_CA_DIR}/ca.crt" "${FIXTURE_CA_DIR}/ca.key" "${CLAUDE_DOCKER_CONFIG_DIR}/ca/"
