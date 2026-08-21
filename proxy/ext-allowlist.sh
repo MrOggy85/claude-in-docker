@@ -1,10 +1,16 @@
 #!/bin/sh
-# Squid external_acl helper: may this project reach this host?
+# Squid external_acl helper, in two modes over one grammar:
+#
+#   (no argument)  may this project reach this host?  -> allowed-domains.txt
+#   --splice       should this host be tunnelled WITHOUT decryption, instead of
+#                  bumped?                            -> splice-domains.txt
 #
 # Per line on stdin Squid sends "<project-key> <host> -" (the format is
 # "%LOGIN %DST"; Squid appends a trailing "-"). Take the first two fields and
-# print "OK"/"ERR" per line, in order. Allowed = host in the shared baseline
-# list OR in the project's own list.
+# print "OK"/"ERR" per line, in order. OK = host in the shared baseline list OR
+# in the project's own list — same matching, key guard and fail-closed behaviour
+# in both modes, only the two filenames differ. Both external_acl_type lines in
+# squid.conf point here; see docs/tls-inspection.md for what splicing means.
 #
 # POSIX sh, no bashisms: the ubuntu/squid base isn't guaranteed to ship bash, and
 # `#!/usr/bin/env bash` crash-loops the helper (exec ENOENT) at 100% CPU when it's
@@ -15,7 +21,24 @@ export LC_ALL=C   # locale-stable [a-z0-9] / [:space:] ranges
 # Overridable so the helper can be unit-tested against fixtures (see
 # test/ext-allowlist.bats). Squid never sets these; it uses the defaults.
 BASELINE="${BASELINE:-/etc/squid/baseline-domains.txt}"
+SPLICE_BASELINE="${SPLICE_BASELINE:-/etc/squid/baseline-splice.txt}"
 PROJECTS_DIR="${PROJECTS_DIR:-/etc/squid/projects}"
+
+# Mode: which baseline file and which per-project filename to consult. An unknown
+# argument is a squid.conf typo — refuse rather than silently answering with the
+# allowlist (which, in splice mode, would mean "never decrypt anything").
+PROJECT_FILENAME='allowed-domains.txt'
+case "${1:-}" in
+  '') ;;
+  --splice)
+    BASELINE="${SPLICE_BASELINE}"
+    PROJECT_FILENAME='splice-domains.txt'
+    ;;
+  *)
+    echo "ext-allowlist.sh: unknown mode '$1' (expected --splice or no argument)" >&2
+    exit 2
+    ;;
+esac
 
 # Is $1 (host) allowed by $2 (file)? One hostname per line, '#' starts a comment.
 # A leading '.' (".example.com") matches the apex and any subdomain; else exact.
@@ -66,7 +89,7 @@ while read -r key host _; do
   case "$key" in
     [a-z0-9]*)
       if [ -z "$(printf '%s' "$key" | tr -d 'a-z0-9-')" ]; then
-        project_file="${PROJECTS_DIR}/${key}/allowed-domains.txt"
+        project_file="${PROJECTS_DIR}/${key}/${PROJECT_FILENAME}"
       else
         project_file="/nonexistent"
       fi

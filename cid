@@ -29,6 +29,13 @@
 #                              (default) or, with -g, the shared baseline list.
 #   cid domains prune          Drop expired --for entries from the list (hygiene
 #                              only — the proxy already ignores them).
+#   cid splice [dir]           Show which hosts the proxy tunnels WITHOUT
+#                              decrypting TLS (baseline + per-project).
+#   cid splice add <host>...   Stop decrypting a host — for a client that pins
+#                              certificates (-g: baseline).
+#   cid splice rm  <host>...   Decrypt it again (-g: baseline).
+#   cid ca                     Show the egress CA the proxy signs intercepted TLS
+#                              with: path, expiry, fingerprint, image copy status.
 #   cid containers [dir]       Show which Docker containers the host docker bridge
 #                              may inspect for a project (baseline + per-project).
 #   cid containers add <name>… Allow container(s) for this project (-g: baseline).
@@ -44,7 +51,7 @@
 #                              filter). A terminal mirror of docs/environment-variables.md.
 #   cid help                   This help.
 #
-# domains|containers add|rm flags:
+# domains|splice|containers add|rm flags:
 #   -g, --global               Target the shared baseline list instead of the
 #                              current project's per-project list.
 #   -C, --dir <dir>            Select the project by directory (default: PWD).
@@ -52,9 +59,9 @@
 #   --for <duration>           domains add only: expire the entry after
 #                              <duration> (digits + optional s/m/h/d suffix).
 #
-# The domain allowlist is read live by the Squid proxy (2s cache), so add/rm take
-# effect within ~2s — no image rebuild or proxy restart. The container allowlist
-# is read per bridge call, so it applies immediately. See docs/config-cli.md.
+# The domain and splice lists are read live by the Squid proxy (2s cache), so
+# add/rm take effect within ~2s — no image rebuild or proxy restart. The container
+# allowlist is read per bridge call, so it applies immediately. See docs/config-cli.md.
 
 set -euo pipefail
 
@@ -85,6 +92,7 @@ GLOBAL_FILES=(
   ".gitignore_global|Global gitignore mounted at ~/.config/git/ignore"
   ".credentials.json|Claude auth token (secret; not printed by 'show')"
   "allowed-domains.txt|Baseline egress allowlist enforced by the Squid proxy"
+  "splice-domains.txt|Hosts the proxy tunnels WITHOUT decrypting TLS (bump exceptions)"
   "docker-containers.txt|Baseline container allowlist for the docker bridge (optional)"
   "trusted-settings-rules.txt|permissions.allow rules the settings guard should not flag (optional)"
   ".env|Arbitrary KEY=VALUE env vars injected via --env-file"
@@ -114,11 +122,20 @@ cmd_list() {
     printf '  [%-7s] %-28s %s\n' "${status}" "${fname}" "${desc}"
   done
 
+  head_ "Egress CA (signs intercepted TLS; inspect with 'cid ca')"
+  if [[ -f "${CONFIG_DIR}/ca/ca.crt" ]]; then status="present"; else status="missing"; fi
+  printf '  [%-7s] %-28s %s\n' "${status}" "ca/ca.crt + ca.key" \
+    "Created by 'make ca'; the key never enters a Claude container"
+
   head_ "Build-time config (stays in the repo)"
   local ipath="${SCRIPT_DIR}/install_additional_packages.sh"
   if [[ -f "${ipath}" ]]; then status="present"; else status="missing"; fi
   printf '  [%-7s] %-28s %s\n' "${status}" "install_additional_packages.sh" \
     "Baked into the base image; lives at ${ipath}"
+  local capath="${SCRIPT_DIR}/egress-ca.crt"
+  if [[ -f "${capath}" ]]; then status="present"; else status="missing"; fi
+  printf '  [%-7s] %-28s %s\n' "${status}" "egress-ca.crt" \
+    "Public CA copy run.sh syncs into the image trust store"
 
   head_ "Per-project config"
   printf '  projects dir: %s\n' "${PROJECTS_DIR}"
@@ -178,7 +195,7 @@ cmd_project() {
 
   head_ "Overrides (fall back to the global file when absent)"
   local f
-  for f in allowed-domains.txt docker-containers.txt .env container-CLAUDE.md mcp-servers.json claude.json install_additional_packages.sh; do
+  for f in allowed-domains.txt splice-domains.txt docker-containers.txt .env container-CLAUDE.md mcp-servers.json claude.json install_additional_packages.sh; do
     if [[ -f "${pdir}/${f}" ]]; then
       printf '  [override] %s\n' "${f}"
     else
@@ -287,6 +304,15 @@ _resolve_target() {  # <global?0|1> <dir> <kind: domains|containers|rules>
       TARGET_APPLIES='applies within ~2s, no restart'
       TARGET_LOWER=1
       ;;
+    splice)
+      # Hosts the proxy must NOT decrypt. Same grammar and cache as domains, a
+      # different question — see docs/tls-inspection.md.
+      name='splice-domains.txt'
+      TARGET_VALIDATOR='_valid_host'
+      TARGET_HINT="not a valid hostname (letters, digits, '.', '-'; leading '.' = wildcard)"
+      TARGET_APPLIES='applies within ~2s, no restart'
+      TARGET_LOWER=1
+      ;;
     containers)
       name='docker-containers.txt'
       TARGET_VALIDATOR='_valid_container'
@@ -309,8 +335,8 @@ _resolve_target() {  # <global?0|1> <dir> <kind: domains|containers|rules>
   if [[ "${is_global}" == 1 ]]; then
     TARGET_FILE="${CONFIG_DIR}/${name}"
     TARGET_LABEL="baseline"
-    if [[ "${kind}" == domains && ! -f "${TARGET_FILE}" ]]; then
-      err "baseline allowlist not found: ${TARGET_FILE}"
+    if [[ ( "${kind}" == domains || "${kind}" == splice ) && ! -f "${TARGET_FILE}" ]]; then
+      err "baseline list not found: ${TARGET_FILE}"
       err "run 'make init' first (the proxy mounts exactly this file)."
       return 1
     fi
@@ -490,6 +516,16 @@ cmd_domains_prune() {  # <global> <dir>
   fi
 }
 
+cmd_splice_add() {  # <global> <dir> <host>...
+  [[ $# -ge 3 ]] || { err "usage: cid splice add [-g] [-C dir] <host>..."; return 2; }
+  _entries_add splice "$@"
+}
+
+cmd_splice_rm() {  # <global> <dir> <host>...
+  [[ $# -ge 3 ]] || { err "usage: cid splice rm [-g] [-C dir] <host>..."; return 2; }
+  _entries_rm splice "$@"
+}
+
 cmd_containers_add() {  # <global> <dir> <name>...
   [[ $# -ge 3 ]] || { err "usage: cid containers add [-g] [-C dir] <name>..."; return 2; }
   _entries_add containers "$@"
@@ -524,6 +560,18 @@ cmd_domains_show() {  # [dir]
   printf 'The proxy allows a host if it matches EITHER list below.\n'
   _dump_list "Baseline" "${CONFIG_DIR}/allowed-domains.txt" "${TEMPLATES_DIR}/allowed-domains.txt"
   _dump_list "Per-project additions" "${pdir}/allowed-domains.txt"
+}
+
+cmd_splice_show() {  # [dir]
+  local dir; dir="$(cd "${1:-$PWD}" 2>/dev/null && pwd)" || { err "no such dir: ${1:-$PWD}"; return 1; }
+  local key pdir
+  key="$(project_key "${dir}")"
+  pdir="${PROJECTS_DIR}/${key}"
+  head_ "Hosts tunnelled without TLS decryption for ${key}"
+  printf 'The proxy decrypts every host EXCEPT those matching a list below (it still\n'
+  printf 'has to be in the egress allowlist to be reachable). See docs/tls-inspection.md.\n'
+  _dump_list "Baseline" "${CONFIG_DIR}/splice-domains.txt" "${TEMPLATES_DIR}/splice-domains.txt"
+  _dump_list "Per-project additions" "${pdir}/splice-domains.txt"
 }
 
 cmd_containers_show() {  # [dir]
@@ -704,6 +752,49 @@ _cmd_allowlist() {  # <kind: domains|containers> [args...]
   esac
 }
 
+# ---- egress CA -------------------------------------------------------------
+
+# Read-only view of the CA the proxy signs intercepted TLS with. Answers the two
+# questions a certificate error raises: is there a valid CA, and is the copy the
+# image trusts the same one the proxy signs with. Prints the certificate only —
+# never ca.key. See docs/tls-inspection.md.
+cmd_ca() {
+  local dir="${CONFIG_DIR}/ca" crt="${CONFIG_DIR}/ca/ca.crt" key="${CONFIG_DIR}/ca/ca.key"
+  local ctx="${SCRIPT_DIR}/egress-ca.crt"
+
+  head_ "Egress CA"
+  printf '  dir: %s\n' "${dir}"
+  if [[ ! -f "${crt}" || ! -f "${key}" ]]; then
+    printf '  MISSING — TLS interception cannot work. Create it with: make ca\n\n'
+    return 1
+  fi
+  printf '  key: %s   (mode %s; mounted only into the proxy container)\n' \
+    "${key}" "$(stat -c '%a' "${key}" 2>/dev/null || stat -f '%A' "${key}" 2>/dev/null)"
+  printf '  crt: %s\n' "${crt}"
+
+  if command -v openssl >/dev/null 2>&1; then
+    printf '  subject:     %s\n' "$(openssl x509 -in "${crt}" -noout -subject 2>/dev/null | sed 's/^subject=//')"
+    printf '  expires:     %s\n' "$(openssl x509 -in "${crt}" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')"
+    printf '  fingerprint: %s\n' "$(openssl x509 -in "${crt}" -noout -fingerprint -sha256 2>/dev/null | sed 's/^.*=//')"
+    if ! openssl x509 -in "${crt}" -noout -checkend 0 >/dev/null 2>&1; then
+      printf '  EXPIRED — every TLS request in the container will fail.\n'
+      printf '  Rotate: rm -rf %s && make ca && make proxy-up\n' "${dir}"
+    fi
+  else
+    printf '  (install openssl to see subject/expiry/fingerprint)\n'
+  fi
+
+  head_ "Copy baked into the image (build context)"
+  printf '  %s\n' "${ctx}"
+  if [[ ! -f "${ctx}" ]]; then
+    printf '  not synced yet — the next run.sh writes it and rebuilds the image\n\n'
+  elif cmp -s "${crt}" "${ctx}"; then
+    printf '  in sync with the CA above\n\n'
+  else
+    printf '  STALE — the next run.sh re-syncs it and rebuilds the image\n\n'
+  fi
+}
+
 # ---- environment variables -------------------------------------------------
 
 # The host env vars a user may set before `run.sh`. A terse mirror of
@@ -733,7 +824,7 @@ ENV_VARS=(
   "Configuration|CLAUDE_CONTAINER_NAME|claude-<project>-<random>|Pin the container name instead of the random default"
   "Egress proxy|CLAUDE_EGRESS_NETWORK|claude-egress|Docker network shared by the proxy and containers"
   "Egress proxy|CLAUDE_EGRESS_PROXY_NAME|claude-egress-proxy|Name of the long-running Squid container"
-  "Egress proxy|CLAUDE_EGRESS_IMAGE|ubuntu/squid:latest|Squid image proxy/up.sh runs (pin a digest)"
+  "Egress proxy|CLAUDE_EGRESS_IMAGE|claude-egress-squid:local|Squid image proxy/up.sh runs (set to skip building proxy/Dockerfile)"
   "Usage tracking|CLAUDE_AUTO_USAGE|1|Set 0 to skip the automatic usage sync after each run"
   "Usage tracking|CLAUDE_USAGE_DIR|~/.claude-docker-usage|Where the cost-only usage logs are kept"
   "Usage tracking|CLAUDE_USAGE_ONLINE|(unset)|Fetch live LiteLLM pricing instead of offline"
@@ -799,6 +890,10 @@ Commands:
   domains rm  <host>...   Remove host(s) from the per-project list (-g for the baseline)
   domains prune           Drop expired --for entries (hygiene only; the proxy already
                           ignores them)
+  splice [dir]            Hosts the proxy tunnels without decrypting TLS
+  splice add <host>...    Stop decrypting a host (-g for the baseline)
+  splice rm  <host>...    Decrypt it again (-g for the baseline)
+  ca                      The egress CA: path, expiry, fingerprint, image copy status
   containers [dir]        Containers the docker bridge may inspect (baseline + per-project)
   containers add <name>...  Allow container(s) for this project (-g for the baseline)
   containers rm  <name>...  Disallow container(s) (-g for the baseline)
@@ -810,7 +905,7 @@ Commands:
   env [filter]            List the env vars you can set (current value / default)
   help                    This help
 
-domains|containers|settings sub-verb flags:
+domains|splice|containers|settings sub-verb flags:
   -g, --global            Target the shared baseline list (not the current project)
   -C, --dir <dir>         Select the project by directory (default: current dir)
 
@@ -821,6 +916,8 @@ Examples:
   cid domains add --for 15m github.com     # allow for 15 minutes, then auto-deny
   cid domains rm  example.com              # remove from this project's list
   cid domains prune                        # drop expired --for entries
+  cid splice add api.example.com           # stop decrypting it (a pinning client)
+  cid ca                                   # is the CA valid, and does the image have it
   cid containers add myapp-web             # let the bridge read this container
   cid containers add 'myapp-*'             # trailing '*' = prefix glob (quote it)
   cid settings                             # what this project's settings grant
@@ -840,7 +937,9 @@ main() {
     show)        cmd_show "$@" ;;
     project)     cmd_project "$@" ;;
     domains)     _cmd_allowlist domains "$@" ;;
+    splice)      _cmd_allowlist splice "$@" ;;
     containers)  _cmd_allowlist containers "$@" ;;
+    ca)          cmd_ca ;;
     settings)    cmd_settings "$@" ;;
     env)         cmd_env "$@" ;;
     help|-h|--help) cmd_help ;;

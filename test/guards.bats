@@ -11,6 +11,30 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME}")/.." && pwd)"
 RUN_SH="${SCRIPT_DIR}/run.sh"
+CA_IN_CONTEXT="${SCRIPT_DIR}/egress-ca.crt"
+
+# The egress-CA guard makes a valid CA mandatory, so every test here needs one:
+# generate a single 2048-bit fixture for the file and copy it in per test. The
+# developer's build-context copy is set aside and restored (see test/run.bats).
+setup_file() {
+  FIXTURE_CA_DIR="${BATS_FILE_TMPDIR}/ca"
+  CLAUDE_DOCKER_CONFIG_DIR="${BATS_FILE_TMPDIR}/gen" CA_KEY_BITS=2048 \
+    "${SCRIPT_DIR}/scripts/gen-ca.sh" >/dev/null
+  mkdir -p "${FIXTURE_CA_DIR}"
+  cp "${BATS_FILE_TMPDIR}/gen/ca/ca.crt" "${BATS_FILE_TMPDIR}/gen/ca/ca.key" "${FIXTURE_CA_DIR}/"
+  export FIXTURE_CA_DIR
+  if [[ -f "${CA_IN_CONTEXT}" ]]; then
+    cp "${CA_IN_CONTEXT}" "${BATS_FILE_TMPDIR}/egress-ca.crt.orig"
+  fi
+}
+
+teardown_file() {
+  if [[ -f "${BATS_FILE_TMPDIR}/egress-ca.crt.orig" ]]; then
+    cp "${BATS_FILE_TMPDIR}/egress-ca.crt.orig" "${CA_IN_CONTEXT}"
+  else
+    rm -f "${CA_IN_CONTEXT}"
+  fi
+}
 
 setup() {
   TEST_PROJECT_DIR="$(mktemp -d)"
@@ -25,6 +49,9 @@ setup() {
   mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}"
   : > "${CLAUDE_DOCKER_CONFIG_DIR}/.env"
   printf '{"mcpServers":{}}\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/mcp-servers.json"
+  # The egress CA the guard requires; the egress-CA tests break it deliberately.
+  mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}/ca"
+  cp "${FIXTURE_CA_DIR}/ca.crt" "${FIXTURE_CA_DIR}/ca.key" "${CLAUDE_DOCKER_CONFIG_DIR}/ca/"
 
   # Minimal docker stub: succeed at everything so a clean run reaches (a no-op)
   # `docker run` and exits 0. Guards that abort exit before any docker call.
@@ -399,4 +426,54 @@ _containers_file() {
   cd "${TEST_PROJECT_DIR}"
   run env "${COMMON_ENV[@]}" CLAUDE_DOCKER_BRIDGE=1 bash "${RUN_SH}" </dev/null
   [ "$status" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# guards/egress-ca.sh
+# ---------------------------------------------------------------------------
+
+@test "egress-CA guard: a valid CA proceeds" {
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 0 ]
+}
+
+@test "egress-CA guard: no CA at all aborts with a make-ca hint" {
+  rm -rf "${CLAUDE_DOCKER_CONFIG_DIR}/ca"
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no egress CA"* ]]
+  [[ "$output" == *"make ca"* ]]
+}
+
+@test "egress-CA guard: a certificate with no key aborts (half a CA is unusable)" {
+  rm -f "${CLAUDE_DOCKER_CONFIG_DIR}/ca/ca.key"
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"make ca"* ]]
+}
+
+@test "egress-CA guard: an unparseable certificate aborts with the rotation recipe" {
+  command -v openssl >/dev/null 2>&1 || skip "no openssl: the guard cannot judge the cert"
+  printf 'not a certificate\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/ca/ca.crt"
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"expired or unreadable"* ]]
+  [[ "$output" == *"make ca"* ]]
+}
+
+# The expired case shares the guard's `-checkend` call with the warning below;
+# a genuinely expired fixture would need a backdated cert (no portable openssl
+# flag for that), and the unparseable case above already covers the abort path.
+@test "egress-CA guard: a CA expiring soon warns but still runs" {
+  command -v openssl >/dev/null 2>&1 || skip "openssl not installed"
+  rm -f "${CLAUDE_DOCKER_CONFIG_DIR}/ca/ca.crt" "${CLAUDE_DOCKER_CONFIG_DIR}/ca/ca.key"
+  CA_DAYS=5 CA_KEY_BITS=2048 "${SCRIPT_DIR}/scripts/gen-ca.sh" >/dev/null
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"expires within 30 days"* ]]
 }

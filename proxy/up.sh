@@ -3,8 +3,9 @@
 # Bring up the shared egress proxy: a bridge network plus one long-running Squid
 # container that every Claude container egresses through. See docs/egress-proxy.md.
 #
-# Idempotent — recreates the container so squid.conf / helper edits take effect.
-# Per-project allowlists are read live, so editing those needs no re-run.
+# Idempotent — builds the proxy image on context change and recreates the
+# container so squid.conf / helper edits take effect. Per-project allowlists are
+# read live, so editing those needs no re-run.
 #
 # Run on the host (no Docker inside the container):  ./proxy/up.sh  (make proxy-up)
 # Env overrides: CLAUDE_EGRESS_NETWORK, CLAUDE_EGRESS_PROXY_NAME, CLAUDE_EGRESS_IMAGE.
@@ -26,11 +27,9 @@ PROJECTS_DIR="$(projects_dir)"
 
 NETWORK="${CLAUDE_EGRESS_NETWORK:-claude-egress}"
 PROXY_NAME="${CLAUDE_EGRESS_PROXY_NAME:-claude-egress-proxy}"
-# Pinned by digest, not floating :latest — a silent :latest re-pull to a
-# bash-less base once crash-looped the Squid helper at 100% CPU. Override with
-# CLAUDE_EGRESS_IMAGE; bump via `docker manifest inspect ubuntu/squid:latest`.
-# Digest = ubuntu/squid:latest (squid 6.x) as of 2025-11-24.
-IMAGE="${CLAUDE_EGRESS_IMAGE:-ubuntu/squid@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029}"
+# Built here rather than pulled: TLS interception needs the squid-openssl build
+# (see proxy/Dockerfile). Override with CLAUDE_EGRESS_IMAGE to run your own.
+IMAGE="${CLAUDE_EGRESS_IMAGE:-claude-egress-squid:local}"
 
 # Mounting preserves host perms, so make the helpers executable first.
 chmod +x "${SCRIPT_DIR}/ext-allowlist.sh" "${SCRIPT_DIR}/auth-ok.sh"
@@ -42,10 +41,47 @@ if [[ ! -f "${BASELINE_DOMAINS_FILE}" ]]; then
   fail "${BASELINE_DOMAINS_FILE} not found — run: make init"
   exit 1
 fi
+# Same for the splice list (hosts to tunnel undecrypted). Seeded comment-only.
+BASELINE_SPLICE_FILE="${CONFIG_DIR}/splice-domains.txt"
+if [[ ! -f "${BASELINE_SPLICE_FILE}" ]]; then
+  fail "${BASELINE_SPLICE_FILE} not found — run: make init"
+  exit 1
+fi
+# The CA Squid signs bumped connections with. Only this container ever sees the
+# private key. See docs/tls-inspection.md.
+CA_DIR="${CONFIG_DIR}/ca"
+if [[ ! -f "${CA_DIR}/ca.crt" || ! -f "${CA_DIR}/ca.key" ]]; then
+  fail "no egress CA in ${CA_DIR}" \
+       "Squid decrypts TLS and needs a CA to sign with. Create it once with:" \
+       "  make ca" \
+       "See docs/tls-inspection.md."
+  exit 1
+fi
 
 # Ensure the base dir exists so the read-only mount below is a directory, not a
 # root-owned placeholder Docker would create.
 mkdir -p "${PROJECTS_DIR}"
+
+# Build on context change, the same label-hash gate run.sh uses for the base
+# image: the hash of the build context is stored as an image label and compared
+# on every run. Skipped when CLAUDE_EGRESS_IMAGE names someone else's image.
+if [[ -z "${CLAUDE_EGRESS_IMAGE:-}" ]]; then
+  proxy_context_hash() {
+    { sha256_ "${SCRIPT_DIR}/Dockerfile" "${SCRIPT_DIR}/entrypoint.sh"; } \
+      | sha256_ - | cut -c1-16
+  }
+  CURRENT_HASH="$(proxy_context_hash)"
+  IMAGE_HASH="$(docker image inspect "${IMAGE}" --format '{{index .Config.Labels "build.context-hash"}}' 2>/dev/null || true)"
+  if [[ "${IMAGE_HASH}" != "${CURRENT_HASH}" ]]; then
+    if [[ -n "${IMAGE_HASH}" ]]; then kv "rebuilding proxy image — context changed" "${IMAGE}"
+    else                              kv "building proxy image" "${IMAGE}"
+    fi
+    docker build \
+      --tag "${IMAGE}" \
+      --label "build.context-hash=${CURRENT_HASH}" \
+      "${SCRIPT_DIR}"
+  fi
+fi
 
 if ! docker network inspect "${NETWORK}" >/dev/null 2>&1; then
   kv "creating network" "${NETWORK}"
@@ -65,8 +101,29 @@ docker run -d \
   --volume "${SCRIPT_DIR}/ext-allowlist.sh:/etc/squid/ext-allowlist.sh:ro" \
   --volume "${SCRIPT_DIR}/auth-ok.sh:/etc/squid/auth-ok.sh:ro" \
   --volume "${BASELINE_DOMAINS_FILE}:/etc/squid/baseline-domains.txt:ro" \
+  --volume "${BASELINE_SPLICE_FILE}:/etc/squid/baseline-splice.txt:ro" \
+  --volume "${CA_DIR}:/etc/squid/ca-src:ro" \
   --volume "${PROJECTS_DIR}:/etc/squid/projects:ro" \
   "${IMAGE}" >/dev/null
 
+# Confirm it stayed up. A rejected squid.conf directive (or an unreadable CA)
+# exits Squid within a second, and `--restart unless-stopped` would otherwise
+# hide that as a silent crash-loop with every container's egress dead. Three
+# one-second looks, leaving early on the first dead reading.
+RUNNING=""
+for _ in 1 2 3; do
+  sleep 1
+  RUNNING="$(docker container inspect -f '{{.State.Running}}' "${PROXY_NAME}" 2>/dev/null || true)"
+  [[ "${RUNNING}" == "true" ]] || break
+done
+if [[ "${RUNNING}" != "true" ]]; then
+  fail "${PROXY_NAME} did not stay up — Squid rejected its config or the CA."
+  cont "Last log lines:"
+  docker logs --tail 20 "${PROXY_NAME}" 2>&1 | while IFS= read -r l; do cont "  ${l}"; done
+  cont "Check the config with: docker run --rm ${IMAGE} squid -k parse"
+  exit 1
+fi
+
 ok "${PROXY_NAME} is up" "access log: docker exec ${PROXY_NAME} tail -f /var/log/squid/access.log"
 say "Claude containers join '${NETWORK}' and reach it as http://squid:3128"
+say "TLS is intercepted; hosts in splice-domains.txt are tunnelled undecrypted."

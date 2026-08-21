@@ -33,9 +33,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Dockerfile:135 COPYs it, but it is gitignored (it is the user's own file).
-      # The make target is the one copy of "seed it from templates/".
+      # The Dockerfile COPYs both, but both are gitignored: one is the user's own
+      # file, the other is derived from their config dir. The make targets are the
+      # one copy of "seed it". An empty egress-ca.crt is the no-config-dir case —
+      # the trust-store layer skips itself (see the Dockerfile).
       - run: make install_additional_packages.sh
+      - run: make egress-ca.crt
 
       # Same build args run.sh passes, so the /etc/passwd injection layer is
       # exercised with a real non-default UID/GID rather than the ARG defaults.

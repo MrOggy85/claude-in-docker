@@ -1,0 +1,15 @@
+# Hosts to tunnel WITHOUT decrypting — the exception list to TLS interception.
+# Everything not listed here is bumped: Squid terminates the TLS session with a
+# certificate signed by your local CA and sees the request URL.
+#
+# List a host here when its client pins certificates and therefore rejects that
+# substituted certificate. Splicing restores the end-to-end session, at the cost
+# of the proxy seeing only the CONNECT hostname for it (the pre-interception
+# behaviour). It does NOT widen the allowlist — a spliced host still has to be in
+# allowed-domains.txt to be reachable at all.
+#
+# Same grammar as allowed-domains.txt: one host per line, a leading '.' matches
+# the apex and every subdomain, '#' comments. Edits apply within ~2s.
+# Add entries with: cid splice add <host>            (see docs/tls-inspection.md)
+
+# (empty — nothing is spliced by default)

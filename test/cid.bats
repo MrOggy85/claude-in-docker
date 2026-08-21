@@ -21,6 +21,9 @@ setup() {
   export CLAUDE_PROJECTS_DIR="${BATS_TEST_TMPDIR}/cfg/projects"
   mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}"
   printf '# baseline\napi.anthropic.com\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/allowed-domains.txt"
+  # The splice list is the second proxy-mounted baseline (`make init` seeds it
+  # comment-only, like this).
+  printf '# hosts never decrypted\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/splice-domains.txt"
 
   # A stable project dir to target with -C. Its per-project list starts absent.
   PROJ="${BATS_TEST_TMPDIR}/proj"
@@ -222,6 +225,105 @@ proj_file() { echo "${CLAUDE_PROJECTS_DIR}"/*/allowed-domains.txt; }
   [ "$status" -eq 0 ]
   [[ "$output" == *"api.anthropic.com"* ]]     # baseline
   [[ "$output" == *"example.com"* ]]           # per-project
+}
+
+# ---------------------------------------------------------------------------
+# splice add|rm|show — the TLS-interception exception list. Same machinery and
+# grammar as domains, a different file and a different question.
+# ---------------------------------------------------------------------------
+
+# Path to the (single) per-project splice list.
+proj_splice() { echo "${CLAUDE_PROJECTS_DIR}"/*/splice-domains.txt; }
+
+@test "splice add: creates the per-project list and lowercases the host" {
+  run "${CID}" splice add API.Example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_splice)"
+  [ "$output" = "api.example.com" ]
+}
+
+@test "splice add: a wildcard entry is accepted, an invalid host is not" {
+  run "${CID}" splice add .example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run "${CID}" splice add 'not a host' -C "${PROJ}"
+  [[ "$output" == *"not a valid hostname"* ]]
+  run cat "$(proj_splice)"
+  [ "$output" = ".example.com" ]
+}
+
+@test "splice add -g: appends to the baseline splice list" {
+  run "${CID}" splice add -g pinned.example.org
+  [ "$status" -eq 0 ]
+  run grep -c '^pinned.example.org$' "${CLAUDE_DOCKER_CONFIG_DIR}/splice-domains.txt"
+  [ "$output" -eq 1 ]
+}
+
+@test "splice add -g: fails when the baseline file is absent (the proxy mounts it)" {
+  rm -f "${CLAUDE_DOCKER_CONFIG_DIR}/splice-domains.txt"
+  run "${CID}" splice add -g pinned.example.org
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"make init"* ]]
+}
+
+@test "splice rm: removes the entry and keeps comments" {
+  "${CID}" splice add pinned.example.org -C "${PROJ}"
+  printf '# keep me\n' >> "$(proj_splice)"
+  run "${CID}" splice rm pinned.example.org -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_splice)"
+  [ "$output" = "# keep me" ]
+}
+
+@test "splice: shows baseline and per-project entries" {
+  "${CID}" splice add -g pinned.example.org
+  "${CID}" splice add pinned.aaa.test -C "${PROJ}"
+  run "${CID}" splice "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pinned.example.org"* ]]
+  [[ "$output" == *"pinned.aaa.test"* ]]
+}
+
+@test "splice editing does not touch the egress allowlist" {
+  "${CID}" splice add pinned.example.org -C "${PROJ}"
+  run cat "${CLAUDE_DOCKER_CONFIG_DIR}/allowed-domains.txt"
+  [[ "$output" != *"pinned.example.org"* ]]
+  [ ! -f "$(proj_file)" ]
+}
+
+@test "splice: --for and prune are rejected (they are domains-only)" {
+  run "${CID}" splice add --for 15m pinned.example.org -C "${PROJ}"
+  [ "$status" -eq 2 ]
+  run "${CID}" splice prune -C "${PROJ}"
+  [ "$status" -eq 2 ]
+}
+
+# ---------------------------------------------------------------------------
+# ca — read-only view of the egress CA
+# ---------------------------------------------------------------------------
+
+@test "ca: reports a missing CA as an error pointing at make ca" {
+  run "${CID}" ca
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"MISSING"* ]]
+  [[ "$output" == *"make ca"* ]]
+}
+
+@test "ca: prints path, expiry and fingerprint for a real CA" {
+  command -v openssl >/dev/null 2>&1 || skip "openssl not installed"
+  CA_KEY_BITS=2048 "${SCRIPT_DIR}/scripts/gen-ca.sh" >/dev/null
+  run "${CID}" ca
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude-in-docker egress CA"* ]]
+  [[ "$output" == *"expires:"* ]]
+  [[ "$output" == *"fingerprint:"* ]]
+}
+
+@test "ca: never prints the private key's contents" {
+  command -v openssl >/dev/null 2>&1 || skip "openssl not installed"
+  CA_KEY_BITS=2048 "${SCRIPT_DIR}/scripts/gen-ca.sh" >/dev/null
+  run "${CID}" ca
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"PRIVATE KEY"* ]]
 }
 
 # ---------------------------------------------------------------------------

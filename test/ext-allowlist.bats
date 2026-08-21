@@ -18,6 +18,7 @@ HELPER="${SCRIPT_DIR}/proxy/ext-allowlist.sh"
 # BATS_TEST_TMPDIR is unique per test, so tests never share state.
 setup() {
   export BASELINE="${BATS_TEST_TMPDIR}/baseline-domains.txt"
+  export SPLICE_BASELINE="${BATS_TEST_TMPDIR}/baseline-splice.txt"
   export PROJECTS_DIR="${BATS_TEST_TMPDIR}/projects"
 
   cat > "${BASELINE}" <<'EOF'
@@ -38,6 +39,17 @@ EOF
   cat > "${PROJECTS_DIR}/proj-bbb222/allowed-domains.txt" <<'EOF'
 internal.bbb.test
 EOF
+
+  # Splice lists (--splice mode): hosts the proxy must NOT decrypt. Deliberately
+  # disjoint from the allowlists above, so a mode reading the wrong file shows up.
+  cat > "${SPLICE_BASELINE}" <<'EOF'
+# Baseline — never decrypted, for every project
+pinned.example.org
+.pinnedwild.example.org
+EOF
+  cat > "${PROJECTS_DIR}/proj-aaa111/splice-domains.txt" <<'EOF'
+pinned.aaa.test
+EOF
 }
 
 # Feed the helper one Squid-format request line and capture status/output.
@@ -48,6 +60,11 @@ ask() {  # <project-key> <host>
   # it with whatever /bin/sh the base image provides. This guards the shebang
   # contract — a stray bashism would fail here.
   run sh "${HELPER}" <<< "$1 $2 -"
+}
+
+# Same, in --splice mode: "should this host be tunnelled without decryption?"
+ask_splice() {  # <project-key> <host>
+  run sh "${HELPER}" --splice <<< "$1 $2 -"
 }
 
 # ---------------------------------------------------------------------------
@@ -251,4 +268,58 @@ EOF
   ask proj-aaa111 api.anthropic.com
   [ "$status" -eq 0 ]
   [ "$output" = "ERR" ]
+}
+
+# ---------------------------------------------------------------------------
+# --splice mode: the same grammar answering "do NOT decrypt this host"
+# ---------------------------------------------------------------------------
+
+@test "splice: baseline entry matches" {
+  ask_splice proj-aaa111 pinned.example.org
+  [ "$output" = "OK" ]
+}
+
+@test "splice: wildcard entry matches a subdomain" {
+  ask_splice proj-bbb222 api.pinnedwild.example.org
+  [ "$output" = "OK" ]
+}
+
+@test "splice: project entry matches only in that project" {
+  ask_splice proj-aaa111 pinned.aaa.test
+  [ "$output" = "OK" ]
+  ask_splice proj-bbb222 pinned.aaa.test
+  [ "$output" = "ERR" ]
+}
+
+@test "splice: an unlisted host is not spliced, so it gets bumped" {
+  ask_splice proj-aaa111 api.anthropic.com
+  [ "$output" = "ERR" ]
+}
+
+@test "splice mode does not read the egress allowlist (and vice versa)" {
+  # internal.aaa.test is allowed but not spliced; pinned.aaa.test the reverse.
+  ask_splice proj-aaa111 internal.aaa.test
+  [ "$output" = "ERR" ]
+  ask proj-aaa111 pinned.aaa.test
+  [ "$output" = "ERR" ]
+}
+
+@test "splice: missing lists mean nothing is spliced (everything is decrypted)" {
+  rm -f "${SPLICE_BASELINE}" "${PROJECTS_DIR}/proj-aaa111/splice-domains.txt"
+  ask_splice proj-aaa111 pinned.example.org
+  [ "$status" -eq 0 ]
+  [ "$output" = "ERR" ]
+}
+
+@test "splice: expiry annotations work here too (cid writes the same grammar)" {
+  local past=$(( $(date +%s) - 60 ))
+  printf 'temp.pinned.test  # expires=%s\n' "${past}" >> "${SPLICE_BASELINE}"
+  ask_splice proj-aaa111 temp.pinned.test
+  [ "$output" = "ERR" ]
+}
+
+@test "unknown mode argument is refused instead of guessed" {
+  run sh "${HELPER}" --bogus <<< "proj-aaa111 api.anthropic.com -"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown mode"* ]]
 }
