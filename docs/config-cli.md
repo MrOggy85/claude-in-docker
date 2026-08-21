@@ -3,7 +3,8 @@
 `cid` inspects and edits the claude-in-docker configuration, which lives outside the repo in the
 config dir (`~/.config/claude-in-docker/` by default — see [Environment
 Variables](environment-variables.md)). It finds those files, prints them, and edits the allowlists in
-place so you never open `allowed-domains.txt` or `docker-containers.txt` by hand.
+place so you never open `allowed-domains.txt`, `splice-domains.txt` or `docker-containers.txt` by
+hand.
 
 ## Commands
 
@@ -16,6 +17,9 @@ place so you never open `allowed-domains.txt` or `docker-containers.txt` by hand
 ./cid domains add --for <dur> <host>...   # add, but the entry auto-expires after <dur>
 ./cid domains rm  <host>...      # remove host(s) from the egress allowlist
 ./cid domains prune              # drop expired --for entries (hygiene only)
+./cid splice [dir]               # hosts the proxy tunnels without decrypting TLS
+./cid splice add|rm <host>...    # stop / resume decrypting a host
+./cid ca                         # the egress CA: path, expiry, fingerprint, image copy status
 ./cid containers [dir]           # containers the docker bridge may inspect (baseline + project)
 ./cid containers add <name>...   # allow container(s) for the docker bridge
 ./cid containers rm  <name>...   # remove container(s) from that allowlist
@@ -68,6 +72,28 @@ cid domains add --for 15m github.com         # allow for 15 minutes, then auto-d
 cid domains add --for 2h -g ci.example.com   # ...in the baseline, for 2 hours
 cid domains prune                            # drop expired --for entries (hygiene; not required)
 ```
+
+### `splice add` / `splice rm`
+
+The same machinery against `splice-domains.txt`, the exception list to TLS interception: a host
+listed there is tunnelled undecrypted, for clients that pin certificates. Identical grammar, `-g`/`-C`
+behaviour and ~2s propagation as `domains`; `--for` and `prune` are not accepted. Splicing grants no
+access — the host must still be on the egress allowlist. See [TLS Inspection](tls-inspection.md).
+
+```bash
+cid splice add api.example.com     # stop decrypting it, for THIS project
+cid splice add -g .example.com     # ...for every project (baseline)
+cid splice rm  api.example.com     # decrypt it again
+cid splice                         # show the effective list
+```
+
+### `ca`
+
+Read-only view of the CA the proxy signs decrypted TLS with: its path, mode, subject, expiry and
+SHA-256 fingerprint, plus whether the copy baked into the image still matches (a mismatch means the
+next `run.sh` rebuilds). Exits non-zero when there is no CA or it has expired — the first thing to
+check when every HTTPS request in a session fails. The private key's contents are never printed.
+Create or rotate with `make ca`.
 
 ### `containers add` / `containers rm`
 
@@ -166,8 +192,8 @@ ln -s "$PWD/cid" ~/.local/bin/cid    # or any dir already on $PATH
 ## Shell completion
 
 `cid` ships a zsh completion at `completions/_cid`. Tab after `cid ` gives subcommands; after
-`cid show ` config filenames; after `cid domains ` / `cid containers ` the `add` / `rm` / `ls` verbs;
-and after `cid domains rm ` / `cid containers rm ` the entries already on that allowlist.
+`cid show ` config filenames; after `cid domains ` / `cid splice ` / `cid containers ` the `add` /
+`rm` / `ls` verbs; and after each `rm ` the entries already on that list.
 
 Install by putting the `completions` dir on your `fpath` before `compinit`:
 

@@ -41,8 +41,9 @@ and DNS closed to everything but Docker's resolver (Squid resolves upstream name
    receives `<project-key> <host>` and returns `OK` when `<host>` is in the baseline list **or** in
    `<config-dir>/projects/<project-key>/allowed-domains.txt`. Everything else is denied
    (`http_access deny all`).
-3. **No TLS interception.** Filtering is on the CONNECT target host only — no `ssl_bump`, no MITM,
-   no CA certificate anywhere, so certificate pinning in Claude/MCP clients is unaffected.
+3. **TLS is decrypted.** Squid bumps each connection with a locally generated CA the containers
+   trust, so it reads the full URL and validates the upstream certificate. Hosts on
+   `splice-domains.txt` are tunnelled undecrypted instead. See [TLS Inspection](tls-inspection.md).
 4. **The container can't bypass it.** [`init-firewall.sh`](../init-firewall.sh) runs at container
    start (as root via a tightly-scoped `sudo` rule, before the entrypoint drops to your user). It
    permits egress **only** to the Squid host plus DNS to Docker's embedded resolver at
@@ -61,15 +62,18 @@ The proxy is mandatory infrastructure — `run.sh` auto-starts it if it isn't ru
 nothing to enable per session:
 
 ```bash
+make ca                  # once: the CA the proxy signs decrypted TLS with
+
 # Optional: start the shared proxy explicitly (Docker is not available inside the
-# Claude container). Idempotent — re-run it to apply squid.conf/helper edits.
+# Claude container). Idempotent — re-run it to apply squid.conf/helper edits, and
+# it builds proxy/Dockerfile when that changes.
 make proxy-up            # or: ./proxy/up.sh
 
 ./run.sh
 ```
 
 Tear down with `make proxy-down`. Rename the network and container via `CLAUDE_EGRESS_NETWORK`,
-`CLAUDE_EGRESS_PROXY_NAME`, and `CLAUDE_EGRESS_IMAGE`.
+`CLAUDE_EGRESS_PROXY_NAME`, and `CLAUDE_EGRESS_IMAGE` (which also skips the build).
 
 ## Allowlists
 
@@ -77,8 +81,9 @@ Tear down with `make proxy-down`. Rename the network and container via `CLAUDE_E
 | ------------------------------------------ | --------------------------------------------------------------- |
 | `<config-dir>/allowed-domains.txt`         | **baseline** — always allowed, every project (falls back to `templates/allowed-domains.txt` if absent) |
 | `<config-dir>/projects/<key>/allowed-domains.txt` | that project's full list (seeded by `run.sh` on first run) |
+| `<config-dir>/splice-domains.txt`, `projects/<key>/splice-domains.txt` | same grammar, different question: hosts **not** to decrypt ([TLS Inspection](tls-inspection.md)) |
 
-Both are bind-mounted read-only into the proxy and read live by the helper (2-second verdict cache),
+All are bind-mounted read-only into the proxy and read live by the helper (2-second verdict cache),
 so **editing a list needs no proxy restart** — the change applies within ~2s.
 
 ### Entry syntax
@@ -107,20 +112,19 @@ CLI](config-cli.md#domains-add--domains-rm).
 
 ## Trust model / limitations
 
-- **Host-level only — no path/URL filtering.** Claude's traffic is HTTPS, so Squid sees only
-  `CONNECT <host>:443` and relays the encrypted tunnel; path, headers, and body are never visible.
-  You can allow or deny a *host*, not "this host, only this path." Filtering on path would require
-  TLS interception (`ssl_bump bump` + a Squid CA trusted in every container), which breaks
-  certificate pinning and is a deliberate non-goal. Plain HTTP would expose the URL, but nothing in
-  the allowlist uses it.
+- **Host-level rules, though the plaintext is now visible.** Since the proxy decrypts, the request
+  URL *is* available to it — but the allowlist grammar still matches hostnames only. You can allow
+  or deny a *host*, not "this host, only this path"; path-level rules are a follow-up on top of
+  [TLS Inspection](tls-inspection.md).
+- **The CA private key is a new secret.** It signs for any host, and lives on the host plus the Squid
+  container — never in a Claude container. See
+  [Known Attack Vectors](attack-vectors.md#the-egress-cas-private-key).
+- **A spliced host is filtered by hostname only.** Anything on `splice-domains.txt` gets the
+  pre-interception treatment: CONNECT target in, encrypted tunnel out.
 - **Cross-project borrowing.** The project key is a *self-asserted* proxy username — a process in
   project A's container can present project B's key and use B's allowlist. Accepted trade-off: every
   container belongs to the same user, and a borrowed list only names hosts that user already
   allowlisted. Closing it means binding the username to a per-project source IP (not implemented).
-- **Domain fronting.** Filtering on the CONNECT host does not inspect the TLS SNI, so a host that
-  permits fronting could in principle be reached under an allowed CONNECT name. Optional hardening:
-  Squid `ssl_bump peek` + a `splice` rule asserting SNI matches the CONNECT host (no decryption).
-  Not enabled by default.
 - **Proxy-unaware traffic breaks rather than leaks.** Tools that don't honor `HTTP(S)_PROXY` (e.g.
   git over SSH) cannot reach the network. All currently allowlisted hosts are HTTPS and honor it.
 - **Single point of failure.** One proxy serves all sessions; if it is down, containers have no
@@ -128,7 +132,9 @@ CLI](config-cli.md#domains-add--domains-rm).
 
 ## Files
 
-- [`proxy/squid.conf`](../proxy/squid.conf) — proxy config (auth + external ACL + default-deny)
-- [`proxy/ext-allowlist.sh`](../proxy/ext-allowlist.sh) — per-project allowlist decision helper
+- [`proxy/squid.conf`](../proxy/squid.conf) — proxy config (auth + external ACL + default-deny + `ssl_bump`)
+- [`proxy/ext-allowlist.sh`](../proxy/ext-allowlist.sh) — per-project allowlist decision helper; `--splice` answers the decrypt-or-not question
 - [`proxy/auth-ok.sh`](../proxy/auth-ok.sh) — basic-auth helper accepting any credentials (username = project key)
-- [`proxy/up.sh`](../proxy/up.sh) — create the network and (re)start the proxy
+- [`proxy/Dockerfile`](../proxy/Dockerfile), [`proxy/entrypoint.sh`](../proxy/entrypoint.sh) — the `squid-openssl` image and its CA / cert-DB setup
+- [`proxy/up.sh`](../proxy/up.sh) — build the image, create the network, (re)start the proxy
+- [TLS Inspection](tls-inspection.md) — the CA, the trust stores, the splice list

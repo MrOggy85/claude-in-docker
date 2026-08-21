@@ -208,8 +208,9 @@ Claude containers, so Claude running in them cannot see or edit it.
 The narrow exception is running Claude **on this repo itself** with the config dir mounted in. Then
 Claude can edit `allowed-domains.txt`, and because the proxy re-reads the lists live (≈2s verdict
 cache, no rebuild), a widened allowlist takes effect within ~2s. The blast radius is still bounded:
-a widened list only adds hostnames the proxy will then permit by CONNECT target. Treat edits to these
-files as changes to a security boundary, and review the diffs.
+a widened list only adds hostnames the proxy will then permit by CONNECT target. `splice-domains.txt`
+is editable the same way, and buys less — a spliced host still has to be allowlisted; it only stops
+being decrypted. Treat edits to these files as changes to a security boundary, and review the diffs.
 
 ## Egress Boundary Disclosure via Fast-Fail
 
@@ -224,20 +225,43 @@ This does not let a process *reach* a blocked destination; it only reveals which
 The allowlist is not secret (it is a host-side file you maintain), so the disclosure is low impact.
 It is noted because silent-drop behavior would make such probing slow and impractical.
 
-## Allowlist Is Hostname-Based, but Filters on the CONNECT Host (not SNI)
+## Allowlist Is Hostname-Based, not IP-Based (mitigated)
 
 This is the threat the Squid egress proxy **resolves**: filtering is on the **CONNECT target
 hostname**, not destination IP. A host sharing a CDN IP block with an allowlisted host is no longer
 implicitly reachable — the proxy permits a tunnel only when the requested host is on the list,
 regardless of where it resolves. The earlier IP-allowlist concern no longer applies.
 
-One residual gap remains, lower-impact than the IP version it replaces: Squid matches on the
-**CONNECT host string**, and for an HTTPS tunnel it does not verify that the TLS **SNI** inside the
-tunnel matches. A host permitting *domain fronting* could therefore be reached under an allowed
-CONNECT name while the encrypted SNI names a different host on the same frontable infrastructure.
-Closing this is optional hardening — Squid `ssl_bump peek` + a `splice` rule asserting SNI == CONNECT
-host (no decryption, so cert pinning is unaffected); not enabled by default. See the [Centralized
-Egress Proxy](egress-proxy.md#trust-model--limitations) trust model.
+The residual *domain-fronting* gap — CONNECT naming an allowed host while the encrypted SNI names
+another on the same frontable infrastructure — is closed for every bumped host, since the proxy now
+decrypts and sees the inner request's own host. It remains for hosts on `splice-domains.txt`, which
+are deliberately not decrypted. See [TLS Inspection](tls-inspection.md).
+
+## The Egress CA's Private Key
+
+TLS interception adds one secret with a wide blast radius: `<config-dir>/ca/ca.key` can sign a
+trusted certificate for **any** host, toward any container whose image trusts it. Whoever holds it
+can impersonate `api.anthropic.com` to a session.
+
+What bounds it:
+
+- It is mounted **only** into the Squid container, whose workload is fixed and never runs
+  agent-directed code. No Claude container receives it, so a compromised session cannot read it.
+- Only the public certificate reaches a Claude image (via the gitignored `egress-ca.crt` in the build
+  context), and `cid` never prints either half.
+- On the host it is mode 0600 in the config dir — the same trust boundary as
+  `.credentials.json`. Host compromise gets both; nothing here defends that.
+
+The narrow exception is the same one below: running Claude **on this repo** with the config dir
+mounted in. Then the session can read `ca.key`. Treat that as handing over a signing key.
+
+## Decrypted Traffic in the Proxy Log
+
+Bumping puts the full request URL of every allowlisted host into the proxy's `access.log` (query
+strings excluded — `strip_query_terms` defaults to on). The log lives inside the proxy container
+and dies with it, but while it runs, `docker logs` / `docker exec` on that container exposes a record of
+what every session fetched. The [docker bridge guard](docker-bridge.md) refuses to allowlist the
+proxy container for exactly this reason.
 
 ## DNS Exfiltration (Partially Mitigated)
 

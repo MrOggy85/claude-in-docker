@@ -12,9 +12,11 @@ All user-managed config lives OUTSIDE the repo, in a dedicated XDG-style dir
 (`~/.config/claude-in-docker/` by default; override with `CLAUDE_DOCKER_CONFIG_DIR`
 or `XDG_CONFIG_HOME`). `scripts/paths.sh` is the single source of truth for that
 location and for the per-project key, shared by `run.sh`, `proxy/up.sh`, and
-`cid`. Per-project overrides live under `<config-dir>/projects/<key>/`. The
-one exception is `install_additional_packages.sh`, which stays in the repo because
-it is baked into the image at build time (Docker build context = repo dir).
+`cid`. Per-project overrides live under `<config-dir>/projects/<key>/`. Two
+files are exceptions, both because they are baked into the image at build time
+and the Docker build context is the repo dir: `install_additional_packages.sh`
+(the user's own) and `egress-ca.crt` (derived — `run.sh` copies the public half
+of `<config-dir>/ca/ca.crt` there every run). Both are gitignored.
 
 ## Comments
 In general keep any comments very breif while still informative
@@ -63,11 +65,11 @@ wrapped bullets.
   message looks here, never at the call site. `init-firewall.sh` carries the one
   deliberate copy — it runs inside the image, where this file does not exist.
 - `cid` — the config CLI. Read-only viewers (`list` / `show` / `project` /
-  `domains` / `containers` / `settings` / `env`) plus in-place allowlist editing
-  (`domains add|rm <host>`, `containers add|rm <name>`,
-  `settings trust|untrust <rule>`, `-g` for the shared baseline, `-C dir` to pick
-  the project; all three share `_resolve_target` + `_entries_add`/`_entries_rm`,
-  so add a kind there rather than duplicating).
+  `domains` / `splice` / `containers` / `settings` / `ca` / `env`) plus in-place
+  allowlist editing (`domains add|rm <host>`, `splice add|rm <host>`,
+  `containers add|rm <name>`, `settings trust|untrust <rule>`, `-g` for the
+  shared baseline, `-C dir` to pick the project; all four share `_resolve_target` +
+  `_entries_add`/`_entries_rm`, so add a kind there rather than duplicating).
   `env` lists the settable host env vars (terminal mirror of
   docs/environment-variables.md — keep the ENV_VARS list in sync). Meant to go on
   `$PATH`; ships a zsh completion in `completions/_cid`. See docs/config-cli.md.
@@ -80,16 +82,27 @@ wrapped bullets.
   image's npm manifest). Never pushes: the tag push is what fires `release.yml`.
   Operates on the git repo containing `$PWD`, not on its own location, so it is
   testable and can be pointed at a scratch clone. See docs/releasing.md.
-- `Dockerfile`, `entrypoint.sh`, `init-firewall.sh` — image build context; their
-  hash gates rebuilds (`run.sh` `context_hash`). `init-firewall.sh` is the thin
-  in-container egress-lock: it confines outbound traffic to the Squid proxy and
-  nothing else (all allowlist policy lives in Squid, see `proxy/`).
+- `Dockerfile`, `entrypoint.sh`, `init-firewall.sh`, `egress-ca.crt` — image
+  build context; their hash gates rebuilds (`run.sh` `context_hash`), so rotating
+  the CA rebuilds. `init-firewall.sh` is the thin in-container egress-lock: it
+  confines outbound traffic to the Squid proxy and nothing else (all allowlist
+  policy lives in Squid, see `proxy/`).
 - `proxy/` — the shared Squid egress proxy: the sole path out for every
-  container. `up.sh` brings it up; `squid.conf` + `ext-allowlist.sh` enforce each
-  project's `allowed-domains.txt` by CONNECT hostname. See `docs/egress-proxy.md`.
+  container. `up.sh` builds the image (`Dockerfile` + `entrypoint.sh`: Debian's
+  plain `squid` rejects `ssl_bump`, so `squid-openssl` it is) and brings it up;
+  `squid.conf` + `ext-allowlist.sh` enforce each project's `allowed-domains.txt`
+  by hostname and decide bump-vs-splice. See `docs/egress-proxy.md` and
+  `docs/tls-inspection.md`.
+- `scripts/gen-ca.sh` — `make ca`: the CA Squid signs intercepted TLS with, in
+  `<config-dir>/ca/`. `ca.key` goes only to the proxy container; `ca.crt` also
+  goes into the image trust store. Interception is mandatory —
+  `guards/egress-ca.sh` aborts the run without a valid CA. See
+  `docs/tls-inspection.md`.
 - `allowed-domains.txt` — the egress allowlist, read live by Squid (not baked
   into the image). The baseline copy lives at `<config-dir>/allowed-domains.txt`;
   `<config-dir>/projects/<key>/allowed-domains.txt` is the per-project list.
+  `splice-domains.txt` has the same layout, TTL and grammar, and answers a
+  different question: which hosts Squid must NOT decrypt.
   `docker-containers.txt` follows the same baseline+per-project layout for the
   docker bridge, read per call instead of on a TTL, and so does
   `trusted-settings-rules.txt` (permission rules the settings guard must not
@@ -119,7 +132,8 @@ wrapped bullets.
   the grouped output both callers print. See docs/attack-vectors.md.
 - `guards/` — pre-flight security gates, each `source`d by `run.sh` so it can
   `exit` the run before any build/container work (home-dir, project-settings,
-  MCP token no-code-push check). Add new guards here, not inline in `run.sh`.
+  MCP token no-code-push check, egress CA). Add new guards here, not inline in
+  `run.sh`.
   `project-settings.sh` prompts only about what the scanner flags and remembers
   the approved risk digest per project, so an unchanged profile never re-asks.
 - `sync-volume.sh` / `usage.sh` — copy per-session usage records out of the
