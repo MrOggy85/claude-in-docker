@@ -98,7 +98,7 @@ compared against the hostname and never matches. List the host and every path on
 
 `cid domains add --for <duration> <host>` (`15m`, `2h`, `1d`, …) appends the host with an
 `# expires=<epoch>` annotation instead of a bare line. [`ext-allowlist.sh`](../proxy/ext-allowlist.sh)
-checks that timestamp on every lookup — past it, the line stops matching, on the same ~30s
+checks that timestamp on every lookup — past it, the line stops matching, on the same ~2s
 propagation window as any other allowlist edit. No daemon sweeps it; enforcement is just "is this
 still in the future" at read time. `cid domains prune` drops stale expired lines for hygiene only —
 an unpruned expired line is already ignored. Re-running `add --for` on the same host replaces its
