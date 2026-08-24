@@ -1,10 +1,11 @@
 # How This Compares to Alternatives
 
 Ways to run Claude Code in Docker cluster at two poles: **lightweight recipes** (a Dockerfile and a
-`docker run` line) and **heavy frameworks** that own your per-project workflow. `claude-in-docker`
-sits between them, optimizing for *host parity* — it should feel like bare-host Claude — plus a
-small set of sharp security guarantees, and stays a readable `run.sh` wrapper rather than a
-framework.
+`docker run` line) and **heavy frameworks** — some owning your per-project workflow (claudebox), some
+enforcing fleet-wide policy (OpenShell, agentsh). `claude-in-docker` sits between them, optimizing for
+*host parity* — it should feel like bare-host Claude, with the host integrations containerizing would
+normally lose (ports, mounts, credentials, MCP bridges) restored — plus a small set of sharp security
+guarantees, and stays a readable `run.sh` wrapper rather than a framework.
 
 For the deep-dive on Dev Containers (including the Codespaces / Squid-sidecar path), see
 [Devcontainers Alternative](devcontainers.md).
@@ -56,6 +57,33 @@ allowlists, layer caching. The difference is philosophical:
 | Owns your workflow | Yes — its own command surface | No — you just run `claude` |
 | Primary goal | A great per-project dev environment | Bare-host parity + sharp guards |
 
+## vs. policy-enforcement platforms (NVIDIA OpenShell, agentsh)
+
+[OpenShell](https://github.com/NVIDIA/OpenShell) and [agentsh](https://www.agentsh.org/) solve a
+different problem: fleet-wide audit and policy enforcement, not per-developer ergonomics. Both are
+also younger and less proven than their star counts suggest — worth knowing before treating either
+as the safe, established choice.
+
+- **OpenShell** — Rust control plane + gateway daemon, syscall interception, a YAML policy engine,
+  SIEM export, fleet management. Created 2026-02-24; latest release v0.0.73; its own README calls it
+  alpha "single-player mode" with 465 open issues. The 8.3k stars are NVIDIA's name recognition, not
+  adoption depth.
+- **agentsh** — created 2025-12-16, 375 stars / 14 forks: the open-source funnel for Canyon Road's
+  commercial "Watchtower" product. Same category as OpenShell (syscall interception, policy gateway),
+  smaller project.
+
+| | OpenShell / agentsh | claude-in-docker |
+|---|---|---|
+| Category | Enterprise security & audit platform | Dev ergonomics wrapper |
+| Enforcement | Syscall interception + policy gateway | Container boundary + egress allowlist |
+| Setup | Control-plane / gateway daemon install | One `run.sh`, no daemon |
+| Target user | Security/platform team, fleet-wide | Individual developer, single host |
+| Maturity | Alpha, both <9 months old | — |
+
+Adopting either to get claude-in-docker's host-integration features (ports, mounts, Keychain
+injection, MCP bridges, cross-project usage tracking) would mean running a Rust control plane for a
+problem it doesn't solve.
+
 ## What's genuinely differentiated here
 
 Uncommon-to-absent in the alternatives above:
@@ -79,4 +107,5 @@ Uncommon-to-absent in the alternatives above:
 | **A devcontainer** | You're IDE- or Codespaces-first and want colleagues to open a repo with `claude` ready — and you accept a weaker (or sidecar-based) network boundary. See [Devcontainers Alternative](devcontainers.md). |
 | **A lightweight recipe** | You want quick isolation and don't need egress control, package isolation, the guards, or usage accounting. |
 | **claudebox** | You want a batteries-included per-project framework with profiles, menus, and a rich in-container shell. |
-| **claude-in-docker** | You want terminal-first bare-host parity (one login, host identity, run from anywhere) plus practical hardening — egress firewall, off-host packages, credential/settings guards. |
+| **OpenShell or agentsh** | You need fleet-wide, syscall-level policy enforcement and SIEM/audit export — and can accept an alpha-stage control-plane dependency. |
+| **claude-in-docker** | You want terminal-first bare-host parity (one login, host identity, host-integration bridges, run from anywhere) plus practical hardening — egress firewall, off-host packages, credential/settings guards. |
