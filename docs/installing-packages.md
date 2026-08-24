@@ -65,8 +65,8 @@ It rebuilds only when the base image or the project script changes. While the sc
 comments and blank lines it counts as empty and the project runs the shared base image directly.
 
 If a project needs a domain the baseline allowlist omits, edit
-`<config-dir>/projects/<key>/allowed-domains.txt` — Squid reads the allowlist live (≈30s verdict
-cache, no rebuild), so changes apply within ~30s (see [Centralized Egress Proxy](egress-proxy.md)).
+`<config-dir>/projects/<key>/allowed-domains.txt` — Squid reads the allowlist live (≈2s verdict
+cache, no rebuild), so changes apply within ~2s (see [Centralized Egress Proxy](egress-proxy.md)).
 
 To promote a per-project script to the global default, copy it to the repo-root
 `install_additional_packages.sh`.

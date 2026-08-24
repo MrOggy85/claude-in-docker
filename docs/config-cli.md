@@ -3,7 +3,8 @@
 `cid` inspects and edits the claude-in-docker configuration, which lives outside the repo in the
 config dir (`~/.config/claude-in-docker/` by default — see [Environment
 Variables](environment-variables.md)). It finds those files, prints them, and edits the allowlists in
-place so you never open `allowed-domains.txt` or `docker-containers.txt` by hand.
+place so you never open `allowed-domains.txt`, `skip-decryption.txt` or `docker-containers.txt` by
+hand.
 
 ## Commands
 
@@ -13,7 +14,12 @@ place so you never open `allowed-domains.txt` or `docker-containers.txt` by hand
 ./cid project [dir]              # per-project key, config dir, and which overrides exist
 ./cid domains [dir]              # effective allowlist = baseline + this project's additions
 ./cid domains add <host>...      # add host(s) to the egress allowlist
+./cid domains add --for <dur> <host>...   # add, but the entry auto-expires after <dur>
 ./cid domains rm  <host>...      # remove host(s) from the egress allowlist
+./cid domains prune              # drop expired --for entries (hygiene only)
+./cid skip-decryption [dir]               # hosts the proxy tunnels without decrypting TLS
+./cid skip-decryption add|rm <host>...    # stop / resume decrypting a host
+./cid ca                         # the egress CA: path, expiry, fingerprint, image copy status
 ./cid containers [dir]           # containers the docker bridge may inspect (baseline + project)
 ./cid containers add <name>...   # allow container(s) for the docker bridge
 ./cid containers rm  <name>...   # remove container(s) from that allowlist
@@ -48,9 +54,46 @@ cid domains rm  -g sentry.io             # remove from the baseline
 cid domains add -C ~/code/other foo.com  # edit a different project's list
 ```
 
-Edits take effect **within ~30s**: Squid re-reads both lists on each request and caches verdicts for
-30 seconds (`ttl=30` in `proxy/squid.conf`). No rebuild, no proxy restart. (Creating the baseline
+Edits take effect **within ~2s**: Squid re-reads both lists on each request and caches verdicts for
+2 seconds (`ttl=2` in `proxy/squid.conf`). No rebuild, no proxy restart. (Creating the baseline
 file for the first time still needs `make init`, since the proxy mounts it.)
+
+#### `domains add --for <duration>`
+
+Adds the host with an expiry instead of permanently: `<duration>` is digits plus an optional
+`s`/`m`/`h`/`d` suffix (bare digits = seconds). The proxy stops honoring the entry once the
+duration elapses — see [Temporary entries](egress-proxy.md#temporary-entries) for how enforcement
+works. Re-running `add --for` on the same host replaces its expiry; a later plain `add` (no
+`--for`) promotes it to permanent. `--for` is only valid with `domains add` (not `containers` or
+`settings`).
+
+```bash
+cid domains add --for 15m github.com         # allow for 15 minutes, then auto-deny
+cid domains add --for 2h -g ci.example.com   # ...in the baseline, for 2 hours
+cid domains prune                            # drop expired --for entries (hygiene; not required)
+```
+
+### `skip-decryption add` / `skip-decryption rm`
+
+The same machinery against `skip-decryption.txt`: a host listed there is relayed undecrypted, for
+clients that pin certificates. Identical grammar, `-g`/`-C` behaviour and ~2s propagation as
+`domains`; `--for` and `prune` are not accepted. It grants no access — the host must still be on the
+egress allowlist. See [TLS Inspection](tls-inspection.md).
+
+```bash
+cid skip-decryption add api.example.com     # stop decrypting it, for THIS project
+cid skip-decryption add -g .example.com     # ...for every project (baseline)
+cid skip-decryption rm  api.example.com     # decrypt it again
+cid skip-decryption                         # show the effective list
+```
+
+### `ca`
+
+Read-only view of the CA the proxy signs decrypted TLS with: path, mode, subject, expiry, SHA-256
+fingerprint, and whether the copy baked into the image still matches (a mismatch means the next
+`run.sh` rebuilds). Exits non-zero when there is no CA or it has expired — check it first when every
+HTTPS request in a session fails. The private key is never printed. Create or rotate with
+`make ca`.
 
 ### `containers add` / `containers rm`
 
@@ -149,8 +192,8 @@ ln -s "$PWD/cid" ~/.local/bin/cid    # or any dir already on $PATH
 ## Shell completion
 
 `cid` ships a zsh completion at `completions/_cid`. Tab after `cid ` gives subcommands; after
-`cid show ` config filenames; after `cid domains ` / `cid containers ` the `add` / `rm` / `ls` verbs;
-and after `cid domains rm ` / `cid containers rm ` the entries already on that allowlist.
+`cid show ` config filenames; after `cid domains ` / `cid skip-decryption ` / `cid containers ` the `add` /
+`rm` / `ls` verbs; and after each `rm ` the entries already on that list.
 
 Install by putting the `completions` dir on your `fpath` before `compinit`:
 

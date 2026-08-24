@@ -19,8 +19,23 @@
 #                              the baseline plus any per-project additions.
 #   cid domains add <host>...  Add host(s) to the per-project allowlist (default)
 #                              or, with -g, the shared baseline list.
+#   cid domains add --for <dur> <host>...
+#                              Same, but the entry expires after <dur> (e.g. 15m,
+#                              2h, 1d) — the proxy stops honoring it once it's
+#                              passed. Re-adding refreshes the expiry; a plain
+#                              add (no --for) on a temporary entry makes it
+#                              permanent.
 #   cid domains rm  <host>...  Remove host(s) from the per-project allowlist
 #                              (default) or, with -g, the shared baseline list.
+#   cid domains prune          Drop expired --for entries from the list (hygiene
+#                              only — the proxy already ignores them).
+#   cid skip-decryption [dir]           Show which hosts the proxy tunnels WITHOUT
+#                              decrypting TLS (baseline + per-project).
+#   cid skip-decryption add <host>...   Stop decrypting a host — for a client that pins
+#                              certificates (-g: baseline).
+#   cid skip-decryption rm  <host>...   Decrypt it again (-g: baseline).
+#   cid ca                     Show the egress CA the proxy signs intercepted TLS
+#                              with: path, expiry, fingerprint, image copy status.
 #   cid containers [dir]       Show which Docker containers the host docker bridge
 #                              may inspect for a project (baseline + per-project).
 #   cid containers add <name>… Allow container(s) for this project (-g: baseline).
@@ -36,15 +51,18 @@
 #                              filter). A terminal mirror of docs/environment-variables.md.
 #   cid help                   This help.
 #
-# domains|containers add|rm flags:
+# domains|skip-decryption|containers add|rm flags:
 #   -g, --global               Target the shared baseline list instead of the
 #                              current project's per-project list.
 #   -C, --dir <dir>            Select the project by directory (default: PWD).
 #                              Ignored with -g (the baseline is not per-project).
+#   --for <duration>           domains add only: expire the entry after
+#                              <duration> (digits + optional s/m/h/d suffix).
 #
-# The domain allowlist is read live by the Squid proxy (30s cache), so add/rm take
-# effect within ~30s — no image rebuild or proxy restart. The container allowlist
-# is read per bridge call, so it applies immediately. See docs/config-cli.md.
+# The domain and skip-decryption lists are read live by the Squid proxy (2s cache),
+# so
+# add/rm take effect within ~2s — no image rebuild or proxy restart. The container
+# allowlist is read per bridge call, so it applies immediately. See docs/config-cli.md.
 
 set -euo pipefail
 
@@ -75,6 +93,7 @@ GLOBAL_FILES=(
   ".gitignore_global|Global gitignore mounted at ~/.config/git/ignore"
   ".credentials.json|Claude auth token (secret; not printed by 'show')"
   "allowed-domains.txt|Baseline egress allowlist enforced by the Squid proxy"
+  "skip-decryption.txt|Hosts the proxy tunnels WITHOUT decrypting TLS (bump exceptions)"
   "docker-containers.txt|Baseline container allowlist for the docker bridge (optional)"
   "trusted-settings-rules.txt|permissions.allow rules the settings guard should not flag (optional)"
   ".env|Arbitrary KEY=VALUE env vars injected via --env-file"
@@ -104,11 +123,20 @@ cmd_list() {
     printf '  [%-7s] %-28s %s\n' "${status}" "${fname}" "${desc}"
   done
 
+  head_ "Egress CA (signs intercepted TLS; inspect with 'cid ca')"
+  if [[ -f "${CONFIG_DIR}/ca/ca.crt" ]]; then status="present"; else status="missing"; fi
+  printf '  [%-7s] %-28s %s\n' "${status}" "ca/ca.crt + ca.key" \
+    "Created by 'make ca'; the key never enters a Claude container"
+
   head_ "Build-time config (stays in the repo)"
   local ipath="${SCRIPT_DIR}/install_additional_packages.sh"
   if [[ -f "${ipath}" ]]; then status="present"; else status="missing"; fi
   printf '  [%-7s] %-28s %s\n' "${status}" "install_additional_packages.sh" \
     "Baked into the base image; lives at ${ipath}"
+  local capath="${SCRIPT_DIR}/egress-ca.crt"
+  if [[ -f "${capath}" ]]; then status="present"; else status="missing"; fi
+  printf '  [%-7s] %-28s %s\n' "${status}" "egress-ca.crt" \
+    "Public CA copy run.sh syncs into the image trust store"
 
   head_ "Per-project config"
   printf '  projects dir: %s\n' "${PROJECTS_DIR}"
@@ -168,7 +196,7 @@ cmd_project() {
 
   head_ "Overrides (fall back to the global file when absent)"
   local f
-  for f in allowed-domains.txt docker-containers.txt .env container-CLAUDE.md mcp-servers.json claude.json install_additional_packages.sh; do
+  for f in allowed-domains.txt skip-decryption.txt docker-containers.txt .env container-CLAUDE.md mcp-servers.json claude.json install_additional_packages.sh; do
     if [[ -f "${pdir}/${f}" ]]; then
       printf '  [override] %s\n' "${f}"
     else
@@ -238,6 +266,29 @@ _entry_in_file() {  # <entry> <file>
   return 1
 }
 
+# The first raw line in <file> whose bare entry equals <entry>, verbatim
+# (comment/expiry annotation intact) — or nothing.
+_raw_line_for() {  # <entry> <file>
+  local entry="$1" file="$2" line
+  [[ -f "${file}" ]] || return 0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ "$(_entry_of "${line}")" == "${entry}" ]]; then printf '%s' "${line}"; return 0; fi
+  done < "${file}"
+}
+
+# Rewrite <file> dropping any line whose bare entry equals <entry>. No-op if absent.
+_drop_entry() {  # <entry> <file>
+  local entry="$1" file="$2"
+  [[ -f "${file}" ]] || return 0
+  local tmp line
+  tmp="$(mktemp "${file}.XXXXXX")"
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ "$(_entry_of "${line}")" == "${entry}" ]] && continue
+    printf '%s\n' "${line}"
+  done < "${file}" > "${tmp}"
+  mv "${tmp}" "${file}"
+}
+
 # Resolve the target allowlist for add/rm. Sets TARGET_FILE, TARGET_LABEL and the
 # per-kind TARGET_VALIDATOR / TARGET_PARSER / TARGET_HINT / TARGET_APPLIES /
 # TARGET_LOWER. The baseline allowed-domains.txt must already exist (the proxy
@@ -251,7 +302,16 @@ _resolve_target() {  # <global?0|1> <dir> <kind: domains|containers|rules>
       name='allowed-domains.txt'
       TARGET_VALIDATOR='_valid_host'
       TARGET_HINT="not a valid hostname (letters, digits, '.', '-'; leading '.' = wildcard)"
-      TARGET_APPLIES='applies within ~30s, no restart'
+      TARGET_APPLIES='applies within ~2s, no restart'
+      TARGET_LOWER=1
+      ;;
+    skipdecrypt)
+      # Hosts the proxy must NOT decrypt. Same grammar and cache as domains, a
+      # different question — see docs/tls-inspection.md.
+      name='skip-decryption.txt'
+      TARGET_VALIDATOR='_valid_host'
+      TARGET_HINT="not a valid hostname (letters, digits, '.', '-'; leading '.' = wildcard)"
+      TARGET_APPLIES='applies within ~2s, no restart'
       TARGET_LOWER=1
       ;;
     containers)
@@ -276,8 +336,8 @@ _resolve_target() {  # <global?0|1> <dir> <kind: domains|containers|rules>
   if [[ "${is_global}" == 1 ]]; then
     TARGET_FILE="${CONFIG_DIR}/${name}"
     TARGET_LABEL="baseline"
-    if [[ "${kind}" == domains && ! -f "${TARGET_FILE}" ]]; then
-      err "baseline allowlist not found: ${TARGET_FILE}"
+    if [[ ( "${kind}" == domains || "${kind}" == skipdecrypt ) && ! -f "${TARGET_FILE}" ]]; then
+      err "baseline list not found: ${TARGET_FILE}"
       err "run 'make init' first (the proxy mounts exactly this file)."
       return 1
     fi
@@ -302,6 +362,15 @@ _entries_add() {  # <kind> <global> <dir> <entry>...
       continue
     fi
     if _entry_in_file "${entry}" "${TARGET_FILE}"; then
+      # A domains entry with a "--for" expiry is promoted to permanent by a
+      # plain (non-expiring) add, rather than treated as a no-op duplicate.
+      if [[ "${kind}" == domains && "$(_raw_line_for "${entry}" "${TARGET_FILE}")" == *'# expires='* ]]; then
+        _drop_entry "${entry}" "${TARGET_FILE}"
+        printf '%s\n' "${entry}" >> "${TARGET_FILE}"
+        note "promoted to permanent in ${TARGET_LABEL}: ${entry}"
+        added=$((added + 1))
+        continue
+      fi
       note "already in ${TARGET_LABEL}: ${entry}"
       continue
     fi
@@ -348,14 +417,114 @@ _entries_rm() {  # <kind> <global> <dir> <entry>...
   return 0
 }
 
-cmd_domains_add() {  # <global> <dir> <host>...
-  [[ $# -ge 3 ]] || { err "usage: cid domains add [-g] [-C dir] <host>..."; return 2; }
-  _entries_add domains "$@"
+# Seconds for a duration like "30s"/"15m"/"2h"/"1d" (bare digits = seconds).
+_parse_duration() {  # <duration>
+  local d="$1"
+  [[ "${d}" =~ ^([0-9]+)([smhd]?)$ ]] || return 1
+  local n="${BASH_REMATCH[1]}" unit="${BASH_REMATCH[2]}"
+  n=$((10#${n}))   # force base-10: a leading zero (e.g. "018") would otherwise read as octal
+  case "${unit}" in
+    s|"") printf '%s' "${n}" ;;
+    m)    printf '%s' "$((n * 60))" ;;
+    h)    printf '%s' "$((n * 3600))" ;;
+    d)    printf '%s' "$((n * 86400))" ;;
+  esac
+}
+
+# Human-readable local time for an epoch: GNU date, then BSD/macOS date, then
+# the bare epoch (matches the stat -c/-f fallback pattern used elsewhere here).
+_fmt_epoch() {  # <epoch>
+  date -d "@${1}" '+%Y-%m-%d %H:%M' 2>/dev/null \
+    || date -r "${1}" '+%Y-%m-%d %H:%M' 2>/dev/null \
+    || printf 'epoch %s' "${1}"
+}
+
+# `cid domains add --for <dur> <host>...`: (re)write each host with a fresh
+# expiry, replacing any prior line (temporary or permanent) for that host. The
+# proxy (proxy/ext-allowlist.sh) is what actually enforces the expiry; this
+# only writes it.
+_domains_add_temp() {  # <global> <dir> <for_dur> <host>...
+  local is_global="$1" dir="$2" for_dur="$3"; shift 3
+  local secs
+  secs="$(_parse_duration "${for_dur}")" || {
+    err "bad --for duration '${for_dur}' (want e.g. 30s, 15m, 2h, 1d)"; return 2
+  }
+  local expiry=$(( $(date +%s) + secs ))
+
+  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_PARSER TARGET_HINT TARGET_APPLIES TARGET_LOWER
+  _resolve_target "${is_global}" "${dir}" domains || return 1
+
+  local entry added=0
+  for entry in "$@"; do
+    entry="$(printf '%s' "${entry}" | tr '[:upper:]' '[:lower:]')"
+    if ! _valid_host "${entry}"; then
+      err "  skip '${entry}' — ${TARGET_HINT}"
+      continue
+    fi
+    _drop_entry "${entry}" "${TARGET_FILE}"
+    mkdir -p "$(dirname "${TARGET_FILE}")"
+    printf '%s  # expires=%s\n' "${entry}" "${expiry}" >> "${TARGET_FILE}"
+    note "added to ${TARGET_LABEL} until $(_fmt_epoch "${expiry}") (${for_dur}): ${entry}"
+    added=$((added + 1))
+  done
+  [[ "${added}" -gt 0 ]] && note "→ ${TARGET_FILE} (${TARGET_APPLIES}; auto-expires — hygiene-prune with: cid domains prune)"
+  return 0
+}
+
+cmd_domains_add() {  # <global> <dir> <for_dur> <host>...
+  local is_global="$1" dir="$2" for_dur="$3"; shift 3
+  [[ $# -ge 1 ]] || { err "usage: cid domains add [-g] [-C dir] [--for <dur>] <host>..."; return 2; }
+  if [[ -z "${for_dur}" ]]; then
+    _entries_add domains "${is_global}" "${dir}" "$@"
+  else
+    _domains_add_temp "${is_global}" "${dir}" "${for_dur}" "$@"
+  fi
 }
 
 cmd_domains_rm() {  # <global> <dir> <host>...
   [[ $# -ge 3 ]] || { err "usage: cid domains rm [-g] [-C dir] <host>..."; return 2; }
   _entries_rm domains "$@"
+}
+
+cmd_domains_prune() {  # <global> <dir>
+  local is_global="$1" dir="$2"
+  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_PARSER TARGET_HINT TARGET_APPLIES TARGET_LOWER
+  _resolve_target "${is_global}" "${dir}" domains || return 1
+  if [[ ! -f "${TARGET_FILE}" ]]; then
+    note "no ${TARGET_LABEL} allowlist yet (${TARGET_FILE}); nothing to prune"
+    return 0
+  fi
+
+  local now; now="$(date +%s)"
+  local tmp line expiry pruned=0
+  tmp="$(mktemp "${TARGET_FILE}.XXXXXX")"
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ "${line}" == *'# expires='* ]]; then
+      expiry="${line##*expires=}"
+      expiry="${expiry%%[![:digit:]]*}"
+      if [[ -n "${expiry}" && "${expiry}" -le "${now}" ]]; then
+        pruned=$((pruned + 1))
+        continue
+      fi
+    fi
+    printf '%s\n' "${line}"
+  done < "${TARGET_FILE}" > "${tmp}"
+  mv "${tmp}" "${TARGET_FILE}"
+  if [[ "${pruned}" -gt 0 ]]; then
+    note "pruned ${pruned} expired entrie(s) from ${TARGET_LABEL}"
+  else
+    note "nothing to prune in ${TARGET_LABEL}"
+  fi
+}
+
+cmd_skipdecrypt_add() {  # <global> <dir> <host>...
+  [[ $# -ge 3 ]] || { err "usage: cid skip-decryption add [-g] [-C dir] <host>..."; return 2; }
+  _entries_add skipdecrypt "$@"
+}
+
+cmd_skipdecrypt_rm() {  # <global> <dir> <host>...
+  [[ $# -ge 3 ]] || { err "usage: cid skip-decryption rm [-g] [-C dir] <host>..."; return 2; }
+  _entries_rm skipdecrypt "$@"
 }
 
 cmd_containers_add() {  # <global> <dir> <name>...
@@ -392,6 +561,18 @@ cmd_domains_show() {  # [dir]
   printf 'The proxy allows a host if it matches EITHER list below.\n'
   _dump_list "Baseline" "${CONFIG_DIR}/allowed-domains.txt" "${TEMPLATES_DIR}/allowed-domains.txt"
   _dump_list "Per-project additions" "${pdir}/allowed-domains.txt"
+}
+
+cmd_skipdecrypt_show() {  # [dir]
+  local dir; dir="$(cd "${1:-$PWD}" 2>/dev/null && pwd)" || { err "no such dir: ${1:-$PWD}"; return 1; }
+  local key pdir
+  key="$(project_key "${dir}")"
+  pdir="${PROJECTS_DIR}/${key}"
+  head_ "Hosts tunnelled without TLS decryption for ${key}"
+  printf 'The proxy decrypts every host EXCEPT those matching a list below (it still\n'
+  printf 'has to be in the egress allowlist to be reachable). See docs/tls-inspection.md.\n'
+  _dump_list "Baseline" "${CONFIG_DIR}/skip-decryption.txt" "${TEMPLATES_DIR}/skip-decryption.txt"
+  _dump_list "Per-project additions" "${pdir}/skip-decryption.txt"
 }
 
 cmd_containers_show() {  # [dir]
@@ -532,7 +713,7 @@ cmd_settings() {
 # shows the effective list.
 _cmd_allowlist() {  # <kind: domains|containers> [args...]
   local kind="$1"; shift
-  local sub="" is_global=0 dir="${PWD}"
+  local sub="" is_global=0 dir="${PWD}" for_dur=""
   local -a items=()
   local a
   while [[ $# -gt 0 ]]; do
@@ -540,20 +721,79 @@ _cmd_allowlist() {  # <kind: domains|containers> [args...]
     case "${a}" in
       -g|--global)        is_global=1 ;;
       -C|--dir|--project) dir="${1:?-C needs a directory}"; shift ;;
-      add)             if [[ -z "${sub}" ]]; then sub='add';  else items+=("${a}"); fi ;;
-      rm|remove)       if [[ -z "${sub}" ]]; then sub='rm';   else items+=("${a}"); fi ;;
-      ls|show|list)    if [[ -z "${sub}" ]]; then sub='show'; else items+=("${a}"); fi ;;
+      --for)              for_dur="${1:?--for needs a duration}"; shift ;;
+      add)             if [[ -z "${sub}" ]]; then sub='add';   else items+=("${a}"); fi ;;
+      rm|remove)       if [[ -z "${sub}" ]]; then sub='rm';    else items+=("${a}"); fi ;;
+      prune)           if [[ -z "${sub}" ]]; then sub='prune'; else items+=("${a}"); fi ;;
+      ls|show|list)    if [[ -z "${sub}" ]]; then sub='show';  else items+=("${a}"); fi ;;
       -h|--help)       cmd_help; return 0 ;;
       -*)              err "unknown flag: ${a}"; return 2 ;;
       *)               items+=("${a}") ;;
     esac
   done
 
+  if [[ -n "${for_dur}" && ( "${kind}" != domains || "${sub}" != add ) ]]; then
+    err "--for is only valid for 'cid domains add'"; return 2
+  fi
+  if [[ "${sub}" == prune && "${kind}" != domains ]]; then
+    err "'prune' is only valid for 'cid domains'"; return 2
+  fi
+
   case "${sub}" in
-    add)  "cmd_${kind}_add" "${is_global}" "${dir}" "${items[@]+"${items[@]}"}" ;;
+    add)
+      if [[ "${kind}" == domains ]]; then
+        cmd_domains_add "${is_global}" "${dir}" "${for_dur}" "${items[@]+"${items[@]}"}"
+      else
+        "cmd_${kind}_add" "${is_global}" "${dir}" "${items[@]+"${items[@]}"}"
+      fi
+      ;;
     rm)   "cmd_${kind}_rm"  "${is_global}" "${dir}" "${items[@]+"${items[@]}"}" ;;
+    prune) cmd_domains_prune "${is_global}" "${dir}" ;;
     show|"") "cmd_${kind}_show" "${items[0]:-${dir}}" ;;
   esac
+}
+
+# ---- egress CA -------------------------------------------------------------
+
+# Read-only view of the CA the proxy signs intercepted TLS with. Answers the two
+# questions a certificate error raises: is there a valid CA, and is the copy the
+# image trusts the same one the proxy signs with. Prints the certificate only —
+# never ca.key. See docs/tls-inspection.md.
+cmd_ca() {
+  local dir="${CONFIG_DIR}/ca" crt="${CONFIG_DIR}/ca/ca.crt" key="${CONFIG_DIR}/ca/ca.key"
+  local ctx="${SCRIPT_DIR}/egress-ca.crt"
+
+  head_ "Egress CA"
+  printf '  dir: %s\n' "${dir}"
+  if [[ ! -f "${crt}" || ! -f "${key}" ]]; then
+    printf '  MISSING — TLS interception cannot work. Create it with: make ca\n\n'
+    return 1
+  fi
+  printf '  key: %s   (mode %s; mounted only into the proxy container)\n' \
+    "${key}" "$(stat -c '%a' "${key}" 2>/dev/null || stat -f '%A' "${key}" 2>/dev/null)"
+  printf '  crt: %s\n' "${crt}"
+
+  if command -v openssl >/dev/null 2>&1; then
+    printf '  subject:     %s\n' "$(openssl x509 -in "${crt}" -noout -subject 2>/dev/null | sed 's/^subject=//')"
+    printf '  expires:     %s\n' "$(openssl x509 -in "${crt}" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')"
+    printf '  fingerprint: %s\n' "$(openssl x509 -in "${crt}" -noout -fingerprint -sha256 2>/dev/null | sed 's/^.*=//')"
+    if ! openssl x509 -in "${crt}" -noout -checkend 0 >/dev/null 2>&1; then
+      printf '  EXPIRED — every TLS request in the container will fail.\n'
+      printf '  Rotate: rm -rf %s && make ca && make proxy-up\n' "${dir}"
+    fi
+  else
+    printf '  (install openssl to see subject/expiry/fingerprint)\n'
+  fi
+
+  head_ "Copy baked into the image (build context)"
+  printf '  %s\n' "${ctx}"
+  if [[ ! -f "${ctx}" ]]; then
+    printf '  not synced yet — the next run.sh writes it and rebuilds the image\n\n'
+  elif cmp -s "${crt}" "${ctx}"; then
+    printf '  in sync with the CA above\n\n'
+  else
+    printf '  STALE — the next run.sh re-syncs it and rebuilds the image\n\n'
+  fi
 }
 
 # ---- environment variables -------------------------------------------------
@@ -585,7 +825,10 @@ ENV_VARS=(
   "Configuration|CLAUDE_CONTAINER_NAME|claude-<project>-<random>|Pin the container name instead of the random default"
   "Egress proxy|CLAUDE_EGRESS_NETWORK|claude-egress|Docker network shared by the proxy and containers"
   "Egress proxy|CLAUDE_EGRESS_PROXY_NAME|claude-egress-proxy|Name of the long-running Squid container"
-  "Egress proxy|CLAUDE_EGRESS_IMAGE|ubuntu/squid:latest|Squid image proxy/up.sh runs (pin a digest)"
+  "Egress proxy|CLAUDE_EGRESS_IMAGE|claude-egress-squid:local|Squid image proxy/up.sh runs (set to skip building proxy/Dockerfile)"
+  "Egress proxy|CA_DAYS|3650|Validity of the CA 'make ca' generates (read at generation time only)"
+  "Egress proxy|CA_KEY_BITS|4096|RSA key size for that CA"
+  "Egress proxy|CA_CN|claude-in-docker egress CA|Common name of that CA — the issuer a session sees"
   "Usage tracking|CLAUDE_AUTO_USAGE|1|Set 0 to skip the automatic usage sync after each run"
   "Usage tracking|CLAUDE_USAGE_DIR|~/.claude-docker-usage|Where the cost-only usage logs are kept"
   "Usage tracking|CLAUDE_USAGE_ONLINE|(unset)|Fetch live LiteLLM pricing instead of offline"
@@ -646,7 +889,15 @@ Commands:
   project [dir]           Per-project key, config dir, and which overrides exist
   domains [dir]           Effective egress allowlist (baseline + per-project) for a project
   domains add <host>...   Add host(s) to the per-project list (-g for the baseline)
+  domains add --for <dur> <host>...
+                          Same, but the entry expires after <dur> (15m, 2h, 1d, ...)
   domains rm  <host>...   Remove host(s) from the per-project list (-g for the baseline)
+  domains prune           Drop expired --for entries (hygiene only; the proxy already
+                          ignores them)
+  skip-decryption [dir]   Hosts the proxy relays without decrypting TLS
+  skip-decryption add <host>...  Stop decrypting a host (-g for the baseline)
+  skip-decryption rm  <host>...  Decrypt it again (-g for the baseline)
+  ca                      The egress CA: path, expiry, fingerprint, image copy status
   containers [dir]        Containers the docker bridge may inspect (baseline + per-project)
   containers add <name>...  Allow container(s) for this project (-g for the baseline)
   containers rm  <name>...  Disallow container(s) (-g for the baseline)
@@ -658,7 +909,7 @@ Commands:
   env [filter]            List the env vars you can set (current value / default)
   help                    This help
 
-domains|containers|settings sub-verb flags:
+domains|skip-decryption|containers|settings sub-verb flags:
   -g, --global            Target the shared baseline list (not the current project)
   -C, --dir <dir>         Select the project by directory (default: current dir)
 
@@ -666,14 +917,18 @@ Examples:
   cid domains add example.com              # allow example.com for THIS project
   cid domains add .githubusercontent.com   # wildcard: apex + all subdomains
   cid domains add -g registry.npmjs.org    # allow for EVERY project (baseline)
+  cid domains add --for 15m github.com     # allow for 15 minutes, then auto-deny
   cid domains rm  example.com              # remove from this project's list
+  cid domains prune                        # drop expired --for entries
+  cid skip-decryption add api.example.com           # stop decrypting it (a pinning client)
+  cid ca                                   # is the CA valid, and does the image have it
   cid containers add myapp-web             # let the bridge read this container
   cid containers add 'myapp-*'             # trailing '*' = prefix glob (quote it)
   cid settings                             # what this project's settings grant
   cid settings trust 'Bash(python3 *)'     # accept that rule here without a prompt
   cid settings trust -g 'Bash(npx *)'      # ...in every project
 
-Domain edits apply within ~30s (Squid re-reads the lists live — no rebuild/restart);
+Domain edits apply within ~2s (Squid re-reads the lists live — no rebuild/restart);
 container edits apply to the next bridge call.
 Seed the config dir with 'make init'; migrate an old repo-root config with 'make migrate'.
 EOF
@@ -686,7 +941,9 @@ main() {
     show)        cmd_show "$@" ;;
     project)     cmd_project "$@" ;;
     domains)     _cmd_allowlist domains "$@" ;;
+    skip-decryption) _cmd_allowlist skipdecrypt "$@" ;;
     containers)  _cmd_allowlist containers "$@" ;;
+    ca)          cmd_ca ;;
     settings)    cmd_settings "$@" ;;
     env)         cmd_env "$@" ;;
     help|-h|--help) cmd_help ;;

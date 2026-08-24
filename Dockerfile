@@ -143,6 +143,30 @@ RUN chmod +x /usr/local/bin/install_additional_packages.sh \
  && /usr/local/bin/install_additional_packages.sh \
  && chmod -R 777 /home/dev
 
+# Trust the egress proxy's CA, so the intercepted TLS it presents (see
+# docs/tls-inspection.md) validates. Only the PUBLIC certificate is here — the key
+# never leaves the host and the proxy container. run.sh syncs this file from
+# <config-dir>/ca/ca.crt into the build context on every run and includes it in
+# the context hash, so rotating the CA rebuilds from this layer down. Nothing
+# above needs it: `docker build` egresses directly, not through the proxy.
+#
+# The system store covers OpenSSL, GnuTLS, curl and git in one place. Guarded on
+# non-empty, so a build with no config dir (CI, see .github/workflows/image.yml)
+# takes the placeholder and leaves the bundle alone. NODE_EXTRA_CA_CERTS is NOT
+# set here — run.sh sets it, since Node warns on every process when it points at
+# a file that does not exist.
+COPY egress-ca.crt /tmp/egress-ca.crt
+RUN if [ -s /tmp/egress-ca.crt ]; then \
+      install -m 644 /tmp/egress-ca.crt /usr/local/share/ca-certificates/claude-egress-ca.crt \
+      && update-ca-certificates; \
+    fi; \
+    rm -f /tmp/egress-ca.crt
+# Runtimes carrying their own CA bundle instead of reading the system store: point
+# them at the merged system bundle (a superset — this never narrows trust). uv and
+# httpx read SSL_CERT_FILE, pip reads REQUESTS_CA_BUNDLE. Node reads neither.
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

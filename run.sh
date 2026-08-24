@@ -42,6 +42,20 @@ source "${SCRIPT_DIR}/guards/no-home-dir.sh"
 source "${SCRIPT_DIR}/guards/project-settings.sh"
 source "${SCRIPT_DIR}/guards/mcp-bearer-no-push.sh"
 source "${SCRIPT_DIR}/guards/docker-bridge.sh"
+# Sets EGRESS_CA_CRT, used just below and at step 4.
+source "${SCRIPT_DIR}/guards/egress-ca.sh"
+
+# 0. The container must trust the CA the proxy signs intercepted TLS with, and
+#    the only way into the image is the build context (= this repo dir), so the
+#    PUBLIC half is copied here — the same exception install_additional_packages.sh
+#    makes, for the same reason. Gitignored, derived, never edited by hand;
+#    context_hash below covers it, so rotating the CA rebuilds the image.
+#    See docs/tls-inspection.md.
+CA_IN_CONTEXT="${SCRIPT_DIR}/egress-ca.crt"
+if ! cmp -s "${EGRESS_CA_CRT}" "${CA_IN_CONTEXT}"; then
+  cp "${EGRESS_CA_CRT}" "${CA_IN_CONTEXT}"
+  kv "egress CA copied into the build context" "${CA_IN_CONTEXT}" "image will rebuild"
+fi
 
 # 1. Build the image when missing or when the build context changed. A SHA-256
 #    of the key files is stored as an image label at build time; each run
@@ -52,6 +66,7 @@ context_hash() {
     "${SCRIPT_DIR}/entrypoint.sh"
     "${SCRIPT_DIR}/init-firewall.sh"
     "${SCRIPT_DIR}/install_additional_packages.sh"
+    "${CA_IN_CONTEXT}"
     "${SCRIPT_DIR}/package.json"
     "${SCRIPT_DIR}/package-lock.json"
   )
@@ -371,14 +386,22 @@ if [[ "$(docker container inspect -f '{{.State.Running}}' "${EGRESS_PROXY_NAME}"
     "${SCRIPT_DIR}/proxy/up.sh"
 fi
 PROXY_NET_ARGS=(--network "${EGRESS_NETWORK}")
+# The proxy decrypts TLS, so the container has to trust its CA. The image bakes it
+# into the system store (see the Dockerfile); Node reads neither that nor
+# SSL_CERT_FILE, so it gets the file by name here — the one runtime that fails
+# silently otherwise, and the one `claude` itself runs on. Set at runtime, not as
+# an image ENV, so a config-less build never warns about a missing file.
+CONTAINER_CA_CRT="/usr/local/share/ca-certificates/claude-egress-ca.crt"
 PROXY_ENV_ARGS=(
   --env "HTTP_PROXY=${PROXY_URL}"   --env "http_proxy=${PROXY_URL}"
   --env "HTTPS_PROXY=${PROXY_URL}"  --env "https_proxy=${PROXY_URL}"
   --env "NO_PROXY=localhost,127.0.0.1,::1,host.docker.internal"
   --env "no_proxy=localhost,127.0.0.1,::1,host.docker.internal"
   --env "EGRESS_PROXY_HOST=squid"
+  --env "NODE_EXTRA_CA_CERTS=${CONTAINER_CA_CRT}"
 )
 kv "egress via central proxy" "network ${EGRESS_NETWORK}, project key ${PROJECT_KEY}"
+kv "TLS intercepted by the proxy" "CA ${EGRESS_CA_CRT}" "exempt a host: cid skip-decryption add <host>"
 
 # 3g. Sandbox self-awareness, ON DEMAND: mount the `sandbox` skill so the session
 #     can look up the one thing it cannot derive — which host port maps to which
@@ -399,6 +422,9 @@ case "${CLAUDE_SANDBOX_INFO:-1}" in
       --env "CONTAINER_EXTRA_MOUNTS=$(IFS=,; printf '%s' "${EXTRA_MOUNT_LIST[*]+${EXTRA_MOUNT_LIST[*]}}")"
       --env "CONTAINER_VOLUME_PATHS=$(IFS=,; printf '%s' "${VOLUME_PATH_LIST[*]+${VOLUME_PATH_LIST[*]}}")"
       --env "REPO_IN_CONTAINER=${REPO_IN_CONTAINER}"
+      # So the session reads a proxy-signed certificate as policy, not as an
+      # attack, and knows `cid skip-decryption add` is the fix for a pinning client.
+      --env "EGRESS_TLS_CA=${CONTAINER_CA_CRT}"
       # The host file to edit to add a system package (see 2d) — passed whether or
       # not it exists yet, since "create this file" is the answer either way.
       --env "CONTAINER_PROJECT_INSTALL_SCRIPT=${_PROJECT_INSTALL}"

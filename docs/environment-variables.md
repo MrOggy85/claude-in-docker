@@ -39,13 +39,23 @@ CLAUDE_MOUNTS="$HOME/data:/data" ./run.sh
 ### Egress proxy
 
 The Squid proxy is the sole egress path and is always on (`run.sh` auto-starts it) — there is no
-enable/disable flag. These only rename the shared network and container.
+enable/disable flag, and none for TLS interception either: `run.sh` aborts without a CA. These
+rename the shared network and container, or swap the image.
 
 | Variable | Default | Description | Reference |
 | --- | --- | --- | --- |
 | `CLAUDE_EGRESS_NETWORK` | `claude-egress` | Docker network shared by the proxy and the Claude containers. | [Centralized Egress Proxy](egress-proxy.md) |
 | `CLAUDE_EGRESS_PROXY_NAME` | `claude-egress-proxy` | Name of the long-running Squid container. | [Centralized Egress Proxy](egress-proxy.md) |
-| `CLAUDE_EGRESS_IMAGE` | `ubuntu/squid:latest` | Squid image `proxy/up.sh` runs; pin a digest for supply-chain safety. | [Centralized Egress Proxy](egress-proxy.md) |
+| `CLAUDE_EGRESS_IMAGE` | `claude-egress-squid:local` | Squid image `proxy/up.sh` runs. Set it to use your own image instead of building `proxy/Dockerfile` — it must be an `ssl_bump`-capable build. | [TLS Inspection](tls-inspection.md) |
+
+Read by `make ca` (`scripts/gen-ca.sh`) only, when generating the CA — changing one later has no
+effect until you rotate:
+
+| Variable | Default | Description | Reference |
+| --- | --- | --- | --- |
+| `CA_DAYS` | `3650` | Validity period of the generated CA. | [TLS Inspection](tls-inspection.md) |
+| `CA_KEY_BITS` | `4096` | RSA key size. The test suite uses `2048` for speed. | [TLS Inspection](tls-inspection.md) |
+| `CA_CN` | `claude-in-docker egress CA` | Common name, i.e. the issuer a session sees. | [TLS Inspection](tls-inspection.md) |
 
 ### Usage tracking (`ccusage`)
 

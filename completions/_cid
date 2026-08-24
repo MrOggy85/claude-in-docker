@@ -20,7 +20,7 @@ _cid_files() {
   files=(
     settings.json claude.json mcp-servers.json container-CLAUDE.md
     .gitconfig .gitignore_global .credentials.json allowed-domains.txt
-    docker-containers.txt trusted-settings-rules.txt .env
+    skip-decryption.txt docker-containers.txt trusted-settings-rules.txt .env
     install_additional_packages.sh
   )
   _describe -t files 'config file' files
@@ -39,7 +39,8 @@ _cid_envvars() {
     CLAUDE_DOCKER_BRIDGE DOCKER_BRIDGE_PORT DOCKER_BRIDGE_BIND
     DOCKER_BRIDGE_DOCKER_CMD CLAUDE_VOLUME
     CLAUDE_CONTAINER_NAME CLAUDE_EGRESS_NETWORK CLAUDE_EGRESS_PROXY_NAME
-    CLAUDE_EGRESS_IMAGE CLAUDE_AUTO_USAGE CLAUDE_USAGE_DIR CLAUDE_USAGE_ONLINE
+    CLAUDE_EGRESS_IMAGE CA_DAYS CA_KEY_BITS CA_CN
+    CLAUDE_AUTO_USAGE CLAUDE_USAGE_DIR CLAUDE_USAGE_ONLINE
     CCUSAGE_VERSION
   )
   _describe -t envvars 'environment variable' vars
@@ -60,6 +61,10 @@ _cid_entries() {  # <basename> <tag> <description>
 
 _cid_hosts() {
   _cid_entries allowed-domains.txt hosts 'allowed host'
+}
+
+_cid_skip_decryption() {
+  _cid_entries skip-decryption.txt hosts 'host that is not decrypted'
 }
 
 _cid_containers() {
@@ -87,6 +92,8 @@ _cid() {
     'show:print a global config file'
     'project:per-project key, config dir, and overrides'
     'domains:show or edit the egress allowlist'
+    'skip-decryption:show or edit the hosts whose TLS is not decrypted'
+    'ca:show the egress CA (path, expiry, fingerprint)'
     'containers:show or edit the docker-bridge container allowlist'
     'settings:what the project .claude/settings*.json grants'
     'env:list the environment variables you can set'
@@ -133,16 +140,19 @@ _cid() {
               ;;
           esac
           ;;
-        project|domains|containers)
-          # Second word: for domains/containers, the add/rm/ls verbs; then
+        project|domains|skip-decryption|containers)
+          # Second word: for the list commands, the add/rm/ls verbs; then
           # flags/entries. `project` just takes a directory.
           if [[ ${line[1]} == project ]]; then
             _files -/
           else
             local kind=${line[1]}
+            local -a for_flag=()
+            [[ $kind == domains ]] && for_flag=('--for[expire the entry after a duration, e.g. 15m/2h/1d]:duration:')
             _arguments \
               '(-g --global)'{-g,--global}'[target the shared baseline list]' \
               '(-C --dir --project)'{-C,--dir,--project}'[select project by directory]:dir:_files -/' \
+              "${for_flag[@]}" \
               '1: :->sub' \
               '*:: :->rest'
             case $state in
@@ -152,7 +162,14 @@ _cid() {
                   subs=(
                     'add:add host(s) to the allowlist'
                     'rm:remove host(s) from the allowlist'
+                    'prune:drop expired --for entries'
                     'ls:show the effective allowlist'
+                  )
+                elif [[ $kind == skip-decryption ]]; then
+                  subs=(
+                    'add:stop decrypting host(s)'
+                    'rm:decrypt host(s) again'
+                    'ls:show which hosts are not decrypted'
                   )
                 else
                   subs=(
@@ -166,7 +183,11 @@ _cid() {
                 ;;
               rest)
                 if [[ ${line[1]} == rm ]]; then
-                  if [[ $kind == domains ]]; then _cid_hosts; else _cid_containers; fi
+                  case $kind in
+                    domains) _cid_hosts ;;
+                    skip-decryption) _cid_skip_decryption ;;
+                    *)       _cid_containers ;;
+                  esac
                 fi
                 ;;
             esac

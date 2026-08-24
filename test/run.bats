@@ -11,6 +11,34 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME}")/.." && pwd)"
 RUN_SH="${SCRIPT_DIR}/run.sh"
+# run.sh syncs the egress CA's public half here (the Docker build context is the
+# repo dir); see setup_file.
+CA_IN_CONTEXT="${SCRIPT_DIR}/egress-ca.crt"
+
+# TLS interception is mandatory, so run.sh aborts without a CA: generate one real
+# CA for the whole file (2048-bit — this is a fixture, not a security boundary)
+# and hand each test a copy. The developer's own build-context copy is set aside
+# and restored, so a test run never leaves a foreign CA in the working tree (and
+# so never forces a rebuild of their image).
+setup_file() {
+  FIXTURE_CA_DIR="${BATS_FILE_TMPDIR}/ca"
+  CLAUDE_DOCKER_CONFIG_DIR="${BATS_FILE_TMPDIR}/gen" CA_KEY_BITS=2048 \
+    "${SCRIPT_DIR}/scripts/gen-ca.sh" >/dev/null
+  mkdir -p "${FIXTURE_CA_DIR}"
+  cp "${BATS_FILE_TMPDIR}/gen/ca/ca.crt" "${BATS_FILE_TMPDIR}/gen/ca/ca.key" "${FIXTURE_CA_DIR}/"
+  export FIXTURE_CA_DIR
+  if [[ -f "${CA_IN_CONTEXT}" ]]; then
+    cp "${CA_IN_CONTEXT}" "${BATS_FILE_TMPDIR}/egress-ca.crt.orig"
+  fi
+}
+
+teardown_file() {
+  if [[ -f "${BATS_FILE_TMPDIR}/egress-ca.crt.orig" ]]; then
+    cp "${BATS_FILE_TMPDIR}/egress-ca.crt.orig" "${CA_IN_CONTEXT}"
+  else
+    rm -f "${CA_IN_CONTEXT}"
+  fi
+}
 
 setup() {
   # Isolated working directory so PROJECT_DIR is clean per test
@@ -34,6 +62,12 @@ setup() {
   # mcp-servers.json is likewise required by run.sh (part of the make-init
   # baseline), so seed a minimal one. MCP tests overwrite/remove it deliberately.
   printf '{"mcpServers":{}}\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/mcp-servers.json"
+  # The proxy mounts the skip-decryption list, so the same guard requires it
+  # (comment-only, as `make init` seeds it).
+  printf '# nothing exempt\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/skip-decryption.txt"
+  # The egress CA the guard requires (see setup_file). The CA test removes it.
+  mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}/ca"
+  cp "${FIXTURE_CA_DIR}/ca.crt" "${FIXTURE_CA_DIR}/ca.key" "${CLAUDE_DOCKER_CONFIG_DIR}/ca/"
 
   # Create the docker stub. EOF is unquoted so ${STUB_DIR} vars expand now;
   # \$1, \$@, etc. are escaped and become real $ in the written script.
@@ -509,6 +543,15 @@ refute_run_arg() {
   [[ "$output" == *"make init"* ]]
 }
 
+@test "no baseline skip-decryption list: aborted early, not inside proxy/up.sh" {
+  rm -f "${CLAUDE_DOCKER_CONFIG_DIR}/skip-decryption.txt"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"skip-decryption.txt"* ]]
+  [[ "$output" == *"make init"* ]]
+}
+
 # ---------------------------------------------------------------------------
 # CLAUDE_VOLUME_PATHS guard: tilde-prefixed paths are rejected
 # ---------------------------------------------------------------------------
@@ -633,6 +676,45 @@ refute_run_arg() {
   [ "$status" -eq 0 ]
   assert_run_arg "HTTPS_PROXY=http://${_SAFE_NAME:-repo}-${_PATH_HASH}:x@squid:3128"
 }
+
+# ---------------------------------------------------------------------------
+# Egress CA / TLS interception
+# ---------------------------------------------------------------------------
+
+@test "docker run sets NODE_EXTRA_CA_CERTS (Node ignores the system trust store)" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/claude-egress-ca.crt"
+}
+
+@test "the CA's public half is synced into the build context, byte for byte" {
+  rm -f "${CA_IN_CONTEXT}"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  [ -f "${CA_IN_CONTEXT}" ]
+  cmp -s "${CLAUDE_DOCKER_CONFIG_DIR}/ca/ca.crt" "${CA_IN_CONTEXT}"
+}
+
+@test "the CA private key is NEVER copied into the build context or the container" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  [ ! -e "${SCRIPT_DIR}/egress-ca.key" ]
+  refute_run_arg "${CLAUDE_DOCKER_CONFIG_DIR}/ca/ca.key:/etc/squid/ca-src/ca.key:ro"
+  ! grep -q "ca.key" "${DOCKER_RUN_ARGS}"
+}
+
+@test "a stale build-context copy is refreshed from the config dir" {
+  printf 'not-a-ca\n' > "${CA_IN_CONTEXT}"
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  cmp -s "${CLAUDE_DOCKER_CONFIG_DIR}/ca/ca.crt" "${CA_IN_CONTEXT}"
+}
+
+# (The guard's own abort paths — missing, half, expired — live in guards.bats.)
 
 # ---------------------------------------------------------------------------
 # Per-project config directory

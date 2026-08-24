@@ -21,6 +21,9 @@ setup() {
   export CLAUDE_PROJECTS_DIR="${BATS_TEST_TMPDIR}/cfg/projects"
   mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}"
   printf '# baseline\napi.anthropic.com\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/allowed-domains.txt"
+  # The skip-decryption list is the second proxy-mounted baseline (`make init` seeds
+  # it comment-only, like this).
+  printf '# hosts never decrypted\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/skip-decryption.txt"
 
   # A stable project dir to target with -C. Its per-project list starts absent.
   PROJ="${BATS_TEST_TMPDIR}/proj"
@@ -127,6 +130,92 @@ proj_file() { echo "${CLAUDE_PROJECTS_DIR}"/*/allowed-domains.txt; }
 }
 
 # ---------------------------------------------------------------------------
+# domains add --for <duration> — temporary, auto-expiring entries
+# ---------------------------------------------------------------------------
+
+@test "add --for: writes an expires= annotation in the future" {
+  run "${CID}" domains add --for 15m example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_file)"
+  [[ "$output" == example.com*"# expires="* ]]
+  local exp; exp="${output##*expires=}"
+  [ "${exp}" -gt "$(date +%s)" ]
+}
+
+@test "add --for: rejects a malformed duration and writes nothing" {
+  run "${CID}" domains add --for potato example.com -C "${PROJ}"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"bad --for duration"* ]]
+  run bash -c "cat ${CLAUDE_PROJECTS_DIR}/*/allowed-domains.txt 2>/dev/null || true"
+  [ -z "$output" ]
+}
+
+@test "add --for: re-adding refreshes the expiry (one line, not two)" {
+  "${CID}" domains add --for 1s example.com -C "${PROJ}"
+  run "${CID}" domains add --for 1h example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run grep -c 'example.com' "$(proj_file)"
+  [ "$output" -eq 1 ]
+  run cat "$(proj_file)"
+  local exp; exp="${output##*expires=}"
+  [ "${exp}" -gt "$(( $(date +%s) + 1800 ))" ]
+}
+
+@test "add --for: a later plain add (no --for) promotes it to permanent" {
+  "${CID}" domains add --for 1h example.com -C "${PROJ}"
+  run "${CID}" domains add example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"promoted to permanent"* ]]
+  run cat "$(proj_file)"
+  [ "$output" = "example.com" ]
+}
+
+@test "add --for: a leading-zero duration is decimal, not octal" {
+  # "018" starts with a digit sequence that isn't valid octal (8) — a naive
+  # bash arithmetic expansion of the raw string would blow up or misparse.
+  run "${CID}" domains add --for 018s example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_file)"
+  local exp; exp="${output##*expires=}"
+  local now; now="$(date +%s)"
+  [ "${exp}" -ge "$(( now + 15 ))" ]
+  [ "${exp}" -le "$(( now + 25 ))" ]
+}
+
+@test "add --for: rejected for a non-domains kind (containers)" {
+  run "${CID}" containers add --for 15m myapp-web -C "${PROJ}"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"only valid for 'cid domains add'"* ]]
+}
+
+@test "prune: drops an expired entry, keeps a live one and a permanent one" {
+  "${CID}" domains add example.com -C "${PROJ}"
+  printf 'gone.com  # expires=1\n' >> "$(proj_file)"
+  local future=$(( $(date +%s) + 3600 ))
+  printf 'stays.com  # expires=%s\n' "${future}" >> "$(proj_file)"
+  run "${CID}" domains prune -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pruned 1"* ]]
+  run cat "$(proj_file)"
+  [[ "$output" == *"example.com"* ]]
+  [[ "$output" == *"stays.com"* ]]
+  [[ "$output" != *"gone.com"* ]]
+}
+
+@test "prune: no-op on a list with nothing expired" {
+  "${CID}" domains add example.com -C "${PROJ}"
+  run "${CID}" domains prune -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nothing to prune"* ]]
+}
+
+@test "prune: absent per-project list is a graceful no-op" {
+  run "${CID}" domains prune -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nothing to prune"* ]]
+}
+
+# ---------------------------------------------------------------------------
 # domains show + smoke tests for the read-only commands
 # ---------------------------------------------------------------------------
 
@@ -136,6 +225,105 @@ proj_file() { echo "${CLAUDE_PROJECTS_DIR}"/*/allowed-domains.txt; }
   [ "$status" -eq 0 ]
   [[ "$output" == *"api.anthropic.com"* ]]     # baseline
   [[ "$output" == *"example.com"* ]]           # per-project
+}
+
+# ---------------------------------------------------------------------------
+# skip-decryption add|rm|show — the TLS-interception exception list. Same machinery
+# and grammar as domains, a different file and a different question.
+# ---------------------------------------------------------------------------
+
+# Path to the (single) per-project skip-decryption list.
+proj_skip_decryption() { echo "${CLAUDE_PROJECTS_DIR}"/*/skip-decryption.txt; }
+
+@test "skip-decryption add: creates the per-project list and lowercases the host" {
+  run "${CID}" skip-decryption add API.Example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_skip_decryption)"
+  [ "$output" = "api.example.com" ]
+}
+
+@test "skip-decryption add: a wildcard entry is accepted, an invalid host is not" {
+  run "${CID}" skip-decryption add .example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run "${CID}" skip-decryption add 'not a host' -C "${PROJ}"
+  [[ "$output" == *"not a valid hostname"* ]]
+  run cat "$(proj_skip_decryption)"
+  [ "$output" = ".example.com" ]
+}
+
+@test "skip-decryption add -g: appends to the baseline skip-decryption list" {
+  run "${CID}" skip-decryption add -g pinned.example.org
+  [ "$status" -eq 0 ]
+  run grep -c '^pinned.example.org$' "${CLAUDE_DOCKER_CONFIG_DIR}/skip-decryption.txt"
+  [ "$output" -eq 1 ]
+}
+
+@test "skip-decryption add -g: fails when the baseline file is absent (the proxy mounts it)" {
+  rm -f "${CLAUDE_DOCKER_CONFIG_DIR}/skip-decryption.txt"
+  run "${CID}" skip-decryption add -g pinned.example.org
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"make init"* ]]
+}
+
+@test "skip-decryption rm: removes the entry and keeps comments" {
+  "${CID}" skip-decryption add pinned.example.org -C "${PROJ}"
+  printf '# keep me\n' >> "$(proj_skip_decryption)"
+  run "${CID}" skip-decryption rm pinned.example.org -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_skip_decryption)"
+  [ "$output" = "# keep me" ]
+}
+
+@test "skip-decryption: shows baseline and per-project entries" {
+  "${CID}" skip-decryption add -g pinned.example.org
+  "${CID}" skip-decryption add pinned.aaa.test -C "${PROJ}"
+  run "${CID}" skip-decryption "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pinned.example.org"* ]]
+  [[ "$output" == *"pinned.aaa.test"* ]]
+}
+
+@test "skip-decryption editing does not touch the egress allowlist" {
+  "${CID}" skip-decryption add pinned.example.org -C "${PROJ}"
+  run cat "${CLAUDE_DOCKER_CONFIG_DIR}/allowed-domains.txt"
+  [[ "$output" != *"pinned.example.org"* ]]
+  [ ! -f "$(proj_file)" ]
+}
+
+@test "skip-decryption: --for and prune are rejected (they are domains-only)" {
+  run "${CID}" skip-decryption add --for 15m pinned.example.org -C "${PROJ}"
+  [ "$status" -eq 2 ]
+  run "${CID}" skip-decryption prune -C "${PROJ}"
+  [ "$status" -eq 2 ]
+}
+
+# ---------------------------------------------------------------------------
+# ca — read-only view of the egress CA
+# ---------------------------------------------------------------------------
+
+@test "ca: reports a missing CA as an error pointing at make ca" {
+  run "${CID}" ca
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"MISSING"* ]]
+  [[ "$output" == *"make ca"* ]]
+}
+
+@test "ca: prints path, expiry and fingerprint for a real CA" {
+  command -v openssl >/dev/null 2>&1 || skip "openssl not installed"
+  CA_KEY_BITS=2048 "${SCRIPT_DIR}/scripts/gen-ca.sh" >/dev/null
+  run "${CID}" ca
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude-in-docker egress CA"* ]]
+  [[ "$output" == *"expires:"* ]]
+  [[ "$output" == *"fingerprint:"* ]]
+}
+
+@test "ca: never prints the private key's contents" {
+  command -v openssl >/dev/null 2>&1 || skip "openssl not installed"
+  CA_KEY_BITS=2048 "${SCRIPT_DIR}/scripts/gen-ca.sh" >/dev/null
+  run "${CID}" ca
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"PRIVATE KEY"* ]]
 }
 
 # ---------------------------------------------------------------------------

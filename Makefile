@@ -6,7 +6,7 @@ XDG_CONFIG_HOME ?= $(HOME)/.config
 CLAUDE_DOCKER_CONFIG_DIR ?= $(XDG_CONFIG_HOME)/claude-in-docker
 CONFIG_DIR := $(CLAUDE_DOCKER_CONFIG_DIR)
 
-GLOBAL_CONFIG := settings.json claude.json mcp-servers.json container-CLAUDE.md allowed-domains.txt .gitconfig .gitignore_global .env
+GLOBAL_CONFIG := settings.json claude.json mcp-servers.json container-CLAUDE.md allowed-domains.txt skip-decryption.txt .gitconfig .gitignore_global .env
 
 # Everything `make lint` shellchecks. Globbed per directory so a new script is
 # picked up automatically; extend the list when a new script *directory* appears.
@@ -20,12 +20,19 @@ SHELL_SOURCES := cid \
   $(wildcard sound-effects/*.sh) $(wildcard templates/*.sh) \
   $(wildcard skills/*/*.sh)
 
-.PHONY: init migrate bats test test-extra-mounts test-extra-ports test-path-volumes test-run test-e2e test-ext-allowlist test-chrome-devtools-mcp test-docker-bridge test-guards test-scan-settings test-cid test-colors test-sandbox-info test-release lint lockfile update-claude pin-digest proxy-up proxy-down release
+.PHONY: init ca migrate bats test test-extra-mounts test-extra-ports test-path-volumes test-run test-e2e test-ext-allowlist test-gen-ca test-chrome-devtools-mcp test-docker-bridge test-guards test-scan-settings test-cid test-colors test-sandbox-info test-release lint lockfile update-claude pin-digest proxy-up proxy-down release
 
-# install_additional_packages.sh stays in the repo: it is COPY'd into the base
-# image at build time (build context = repo dir), so it can't be mounted.
-init: $(addprefix $(CONFIG_DIR)/,$(GLOBAL_CONFIG)) $(CONFIG_DIR)/.credentials.json install_additional_packages.sh
+# install_additional_packages.sh and egress-ca.crt stay in the repo: both are
+# COPY'd into the base image at build time (build context = repo dir), so they
+# can't be mounted. TLS interception is mandatory, so `ca` is part of init.
+init: $(addprefix $(CONFIG_DIR)/,$(GLOBAL_CONFIG)) $(CONFIG_DIR)/.credentials.json install_additional_packages.sh ca
 	@echo ">> config ready in $(CONFIG_DIR)  (view it with ./cid list)"
+
+# Generate the CA the egress proxy signs intercepted TLS with (idempotent — an
+# existing CA is left alone). Rotate by deleting $(CONFIG_DIR)/ca and re-running,
+# then `make proxy-up`. See docs/tls-inspection.md.
+ca:
+	./scripts/gen-ca.sh
 
 # Move a pre-existing repo-root config (from older versions of this tool) into
 # the config dir. Non-destructive — never overwrites files already there.
@@ -79,6 +86,9 @@ test-e2e:
 test-ext-allowlist:
 	bats test/ext-allowlist.bats
 
+test-gen-ca:
+	bats test/gen-ca.bats
+
 test-chrome-devtools-mcp:
 	bats test/chrome-devtools-mcp.bats
 
@@ -126,17 +136,20 @@ lockfile:
 update-claude:
 	npm update @anthropic-ai/claude-code --package-lock-only
 
-# Fetch the current amd64 digest of debian:trixie-slim into the Dockerfile FROM
-# line. Run after upstream security patches, then rebuild. Requires docker (or
-# swap in `skopeo inspect --no-creds docker://debian:trixie-slim | jq -r '.Digest'`).
+# Fetch the current amd64 digest of debian:trixie-slim into the FROM line of BOTH
+# Dockerfiles (the base image and the egress proxy share the base). Run after
+# upstream security patches, then rebuild. Requires docker (or swap in
+# `skopeo inspect --no-creds docker://debian:trixie-slim | jq -r '.Digest'`).
 # sed to a temp file then mv: `sed -i` alone is GNU-only (BSD/macOS sed reads the
 # next argument as a mandatory backup suffix and would eat "s|FROM ...").
 pin-digest:
 	@DIGEST=$$(docker manifest inspect debian:trixie-slim \
 	  | jq -r '.manifests[] | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest') && \
-	  sed "s|FROM debian:trixie-slim.*|FROM debian:trixie-slim@$$DIGEST|" Dockerfile > Dockerfile.tmp && \
-	  mv Dockerfile.tmp Dockerfile && \
-	  echo "Pinned to $$DIGEST"
+	  for f in Dockerfile proxy/Dockerfile; do \
+	    sed "s|FROM debian:trixie-slim.*|FROM debian:trixie-slim@$$DIGEST|" $$f > $$f.tmp && \
+	    mv $$f.tmp $$f; \
+	  done && \
+	  echo "Pinned both Dockerfiles to $$DIGEST"
 
 # Cut a release: derive the next version from the Conventional Commits since the
 # last tag, prepend a CHANGELOG.md section, commit it and annotate the tag.
@@ -168,3 +181,10 @@ $(CONFIG_DIR)/.credentials.json:
 install_additional_packages.sh:
 	cp templates/install_additional_packages.sh install_additional_packages.sh
 	chmod +x install_additional_packages.sh
+
+# Public half of the egress CA, in the build context for the same reason (the
+# Dockerfile COPYs it into the container trust store). run.sh writes it from
+# $(CONFIG_DIR)/ca/ca.crt on every run; this target only creates the empty
+# placeholder a config-less build needs, so the COPY resolves in CI.
+egress-ca.crt:
+	touch egress-ca.crt

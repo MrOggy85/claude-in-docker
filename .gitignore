@@ -24,6 +24,11 @@
 # base image at build time, so it must stay in the Docker build context.
 /install_additional_packages.sh
 
+# Public half of the egress CA, in the build context for the same reason (the
+# image trusts it, see docs/tls-inspection.md). Derived — run.sh copies it from
+# <config-dir>/ca/ca.crt every run. The private key is never in the repo.
+/egress-ca.crt
+
 # Docker-bridge tokens live in the config dir, never here — ignored defensively
 # so a relocated CLAUDE_PROJECTS_DIR can't leak one into a commit.
 docker-bridge.token

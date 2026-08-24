@@ -18,6 +18,7 @@ HELPER="${SCRIPT_DIR}/proxy/ext-allowlist.sh"
 # BATS_TEST_TMPDIR is unique per test, so tests never share state.
 setup() {
   export BASELINE="${BATS_TEST_TMPDIR}/baseline-domains.txt"
+  export SKIP_DECRYPTION_BASELINE="${BATS_TEST_TMPDIR}/baseline-skip-decryption.txt"
   export PROJECTS_DIR="${BATS_TEST_TMPDIR}/projects"
 
   cat > "${BASELINE}" <<'EOF'
@@ -38,6 +39,18 @@ EOF
   cat > "${PROJECTS_DIR}/proj-bbb222/allowed-domains.txt" <<'EOF'
 internal.bbb.test
 EOF
+
+  # skip-decryption lists (--skip-decryption mode): hosts the proxy must NOT decrypt.
+  # Deliberately
+  # disjoint from the allowlists above, so a mode reading the wrong file shows up.
+  cat > "${SKIP_DECRYPTION_BASELINE}" <<'EOF'
+# Baseline — never decrypted, for every project
+pinned.example.org
+.pinnedwild.example.org
+EOF
+  cat > "${PROJECTS_DIR}/proj-aaa111/skip-decryption.txt" <<'EOF'
+pinned.aaa.test
+EOF
 }
 
 # Feed the helper one Squid-format request line and capture status/output.
@@ -48,6 +61,11 @@ ask() {  # <project-key> <host>
   # it with whatever /bin/sh the base image provides. This guards the shebang
   # contract — a stray bashism would fail here.
   run sh "${HELPER}" <<< "$1 $2 -"
+}
+
+# Same, in --skip-decryption mode: "should this host be tunnelled without decryption?"
+ask_skip_decryption() {  # <project-key> <host>
+  run sh "${HELPER}" --skip-decryption <<< "$1 $2 -"
 }
 
 # ---------------------------------------------------------------------------
@@ -200,6 +218,43 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# Temporary entries ("# expires=<epoch>", written by `cid domains add --for`)
+# ---------------------------------------------------------------------------
+
+@test "temp entry: not yet expired is allowed" {
+  local future=$(( $(date +%s) + 3600 ))
+  printf 'temp.aaa.test  # expires=%s\n' "${future}" >> "${PROJECTS_DIR}/proj-aaa111/allowed-domains.txt"
+  ask proj-aaa111 temp.aaa.test
+  [ "$output" = "OK" ]
+}
+
+@test "temp entry: expired in the past is denied" {
+  printf 'temp.aaa.test  # expires=1\n' >> "${PROJECTS_DIR}/proj-aaa111/allowed-domains.txt"
+  ask proj-aaa111 temp.aaa.test
+  [ "$output" = "ERR" ]
+}
+
+@test "temp entry: expiry does not leak to other projects" {
+  local future=$(( $(date +%s) + 3600 ))
+  printf 'temp.aaa.test  # expires=%s\n' "${future}" >> "${PROJECTS_DIR}/proj-aaa111/allowed-domains.txt"
+  ask proj-bbb222 temp.aaa.test
+  [ "$output" = "ERR" ]
+}
+
+@test "temp entry: malformed expires= value fails closed (denied)" {
+  printf 'temp.aaa.test  # expires=notanumber\n' >> "${PROJECTS_DIR}/proj-aaa111/allowed-domains.txt"
+  ask proj-aaa111 temp.aaa.test
+  [ "$output" = "ERR" ]
+}
+
+@test "temp entry: wildcard with a future expiry still matches subdomains" {
+  local future=$(( $(date +%s) + 3600 ))
+  printf '.temp.aaa.test  # expires=%s\n' "${future}" >> "${PROJECTS_DIR}/proj-aaa111/allowed-domains.txt"
+  ask proj-aaa111 sub.temp.aaa.test
+  [ "$output" = "OK" ]
+}
+
+# ---------------------------------------------------------------------------
 # Missing baseline file must not crash or fail open
 # ---------------------------------------------------------------------------
 
@@ -214,4 +269,58 @@ EOF
   ask proj-aaa111 api.anthropic.com
   [ "$status" -eq 0 ]
   [ "$output" = "ERR" ]
+}
+
+# ---------------------------------------------------------------------------
+# --skip-decryption mode: the same grammar answering "do NOT decrypt this host"
+# ---------------------------------------------------------------------------
+
+@test "skip-decryption: baseline entry matches" {
+  ask_skip_decryption proj-aaa111 pinned.example.org
+  [ "$output" = "OK" ]
+}
+
+@test "skip-decryption: wildcard entry matches a subdomain" {
+  ask_skip_decryption proj-bbb222 api.pinnedwild.example.org
+  [ "$output" = "OK" ]
+}
+
+@test "skip-decryption: project entry matches only in that project" {
+  ask_skip_decryption proj-aaa111 pinned.aaa.test
+  [ "$output" = "OK" ]
+  ask_skip_decryption proj-bbb222 pinned.aaa.test
+  [ "$output" = "ERR" ]
+}
+
+@test "skip-decryption: an unlisted host is decrypted (bumped)" {
+  ask_skip_decryption proj-aaa111 api.anthropic.com
+  [ "$output" = "ERR" ]
+}
+
+@test "skip-decryption mode does not read the egress allowlist (and vice versa)" {
+  # internal.aaa.test is allowed but decrypted; pinned.aaa.test the reverse.
+  ask_skip_decryption proj-aaa111 internal.aaa.test
+  [ "$output" = "ERR" ]
+  ask proj-aaa111 pinned.aaa.test
+  [ "$output" = "ERR" ]
+}
+
+@test "skip-decryption: missing lists mean everything is decrypted" {
+  rm -f "${SKIP_DECRYPTION_BASELINE}" "${PROJECTS_DIR}/proj-aaa111/skip-decryption.txt"
+  ask_skip_decryption proj-aaa111 pinned.example.org
+  [ "$status" -eq 0 ]
+  [ "$output" = "ERR" ]
+}
+
+@test "skip-decryption: expiry annotations work here too (same grammar)" {
+  local past=$(( $(date +%s) - 60 ))
+  printf 'temp.pinned.test  # expires=%s\n' "${past}" >> "${SKIP_DECRYPTION_BASELINE}"
+  ask_skip_decryption proj-aaa111 temp.pinned.test
+  [ "$output" = "ERR" ]
+}
+
+@test "unknown mode argument is refused instead of guessed" {
+  run sh "${HELPER}" --bogus <<< "proj-aaa111 api.anthropic.com -"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown mode"* ]]
 }

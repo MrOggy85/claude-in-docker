@@ -17,6 +17,30 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME}")/.." && pwd)"
 RUN_SH="${SCRIPT_DIR}/run.sh"
+CA_IN_CONTEXT="${SCRIPT_DIR}/egress-ca.crt"
+
+# run.sh requires an egress CA (TLS interception is mandatory): one fixture for
+# the file, and the developer's build-context copy set aside meanwhile. Same
+# shape as test/run.bats.
+setup_file() {
+  FIXTURE_CA_DIR="${BATS_FILE_TMPDIR}/ca"
+  CLAUDE_DOCKER_CONFIG_DIR="${BATS_FILE_TMPDIR}/gen" CA_KEY_BITS=2048 \
+    "${SCRIPT_DIR}/scripts/gen-ca.sh" >/dev/null
+  mkdir -p "${FIXTURE_CA_DIR}"
+  cp "${BATS_FILE_TMPDIR}/gen/ca/ca.crt" "${BATS_FILE_TMPDIR}/gen/ca/ca.key" "${FIXTURE_CA_DIR}/"
+  export FIXTURE_CA_DIR
+  if [[ -f "${CA_IN_CONTEXT}" ]]; then
+    cp "${CA_IN_CONTEXT}" "${BATS_FILE_TMPDIR}/egress-ca.crt.orig"
+  fi
+}
+
+teardown_file() {
+  if [[ -f "${BATS_FILE_TMPDIR}/egress-ca.crt.orig" ]]; then
+    cp "${BATS_FILE_TMPDIR}/egress-ca.crt.orig" "${CA_IN_CONTEXT}"
+  else
+    rm -f "${CA_IN_CONTEXT}"
+  fi
+}
 
 setup() {
   TEST_PROJECT_DIR="$(mktemp -d)"
@@ -34,6 +58,10 @@ setup() {
   mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}"
   : > "${CLAUDE_DOCKER_CONFIG_DIR}/.env"
   printf '{"mcpServers":{}}\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/mcp-servers.json"
+  printf '# nothing exempt\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/skip-decryption.txt"
+  # ...plus the egress CA the guard requires (see setup_file).
+  mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}/ca"
+  cp "${FIXTURE_CA_DIR}/ca.crt" "${FIXTURE_CA_DIR}/ca.key" "${CLAUDE_DOCKER_CONFIG_DIR}/ca/"
 
   mkdir -p "${STUB_DIR}/bin" "${STUB_DIR}/no-curl-bin"
 
@@ -134,7 +162,7 @@ teardown() {
   # absolute path so env can find it even though /usr/bin (where curl also
   # lives) is absent from PATH.
   local _cmd _bin
-  for _cmd in bash dirname basename tr sed cut id sha256sum shasum mkdir cat touch grep; do
+  for _cmd in bash dirname basename tr sed cut id sha256sum shasum mkdir cat touch grep cmp cp openssl; do
     _bin="$(command -v "$_cmd" 2>/dev/null)" || true
     [[ -n "$_bin" && ! -e "${STUB_DIR}/no-curl-bin/${_cmd}" ]] && \
       ln -sf "$_bin" "${STUB_DIR}/no-curl-bin/${_cmd}"

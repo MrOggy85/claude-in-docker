@@ -37,6 +37,13 @@ nothing to clean up. Re-run it any time; it is cheap.
   only allowlisted domains. Treat a blocked request as policy: report the exact
   hostname and tell the user to run `cid domains add <host>` on the host. Do not
   try another host, port, mirror, registry or proxy to get around it.
+- **TLS.** That proxy terminates HTTPS with its own CA, which this image trusts, so
+  certificates here are issued by `claude-in-docker egress CA` **by design** — not an
+  attack, and not a reason to reach for `--insecure`,
+  `NODE_TLS_REJECT_UNAUTHORIZED=0` or `verify=False`. A certificate error means one of
+  two things, both worth reporting verbatim: a client that pins certificates (the
+  user's fix is `cid skip-decryption add <host>`), or a runtime shipping its own CA
+  bundle that needs pointing at `$SSL_CERT_FILE`.
 - **Files.** The repo's host path (use it when telling the user which folder to
   open) plus extra mounts, and the volume-backed paths — those exist only inside
   the container, so a `node_modules` you install is invisible to host tooling.

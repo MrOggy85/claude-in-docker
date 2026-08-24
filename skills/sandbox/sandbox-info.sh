@@ -22,6 +22,8 @@
 #   CONTAINER_EXTRA_MOUNTS          "<target>=<host-path>:<mode>" list (CLAUDE_MOUNTS)
 #   CONTAINER_VOLUME_PATHS          container paths backed by named volumes
 #   EGRESS_PROXY_HOST               Squid host when egress is locked to the proxy
+#   EGRESS_TLS_CA                   in-container path of the proxy's CA certificate
+#                                   (set only when the proxy decrypts TLS)
 #   DOCKER_BRIDGE_TOKEN             presence only — the value is never printed
 #   CONTAINER_PROJECT_INSTALL_SCRIPT  host path of the project's install script
 #   CONTAINER_PROJECT_IMAGE         per-project image tag, set only when one is used
@@ -167,6 +169,16 @@ if [[ -n "${EGRESS_PROXY_HOST:-}" ]]; then
   echo "  not a broken network or a bad URL."
   echo "- Never route around it (no alternate host, port, mirror, or proxy). Report the"
   echo "  blocked hostname and tell the user to run \`cid domains add <host>\` on the host."
+  if [[ -n "${EGRESS_TLS_CA:-}" ]]; then
+    echo "- That proxy DECRYPTS TLS: it presents its own certificate, signed by the CA at"
+    echo "  \`${EGRESS_TLS_CA}\`, which this image trusts (system store, plus"
+    echo "  \`NODE_EXTRA_CA_CERTS\` for Node and \`SSL_CERT_FILE\` for bundles like certifi)."
+    echo "  An issuer of \"claude-in-docker egress CA\" is expected, not an attack."
+    echo "- So never disable verification to get past a certificate error (no"
+    echo "  \`--insecure\`, no \`NODE_TLS_REJECT_UNAUTHORIZED=0\`, no \`verify=False\`). Report"
+    echo "  the error and the host: the user either exempts that host from decryption"
+    echo "  (\`cid skip-decryption add <host>\`) or points the runtime at \$SSL_CERT_FILE."
+  fi
 else
   echo "- No egress proxy is configured for this session."
 fi
