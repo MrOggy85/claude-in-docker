@@ -41,9 +41,9 @@ and DNS closed to everything but Docker's resolver (Squid resolves upstream name
    receives `<project-key> <host>` and returns `OK` when `<host>` is in the baseline list **or** in
    `<config-dir>/projects/<project-key>/allowed-domains.txt`. Everything else is denied
    (`http_access deny all`).
-3. **TLS is decrypted.** Squid bumps each connection with a locally generated CA the containers
-   trust, so it reads the full URL and validates the upstream certificate. Hosts on
-   `skip-decryption.txt` are tunnelled undecrypted instead. See [TLS Inspection](tls-inspection.md).
+3. **TLS is decrypted**, with a locally generated CA the containers trust, so Squid reads the full
+   URL and validates the upstream certificate. Hosts on `skip-decryption.txt` are relayed
+   undecrypted instead. See [TLS Inspection](tls-inspection.md).
 4. **The container can't bypass it.** [`init-firewall.sh`](../init-firewall.sh) runs at container
    start (as root via a tightly-scoped `sudo` rule, before the entrypoint drops to your user). It
    permits egress **only** to the Squid host plus DNS to Docker's embedded resolver at
@@ -112,12 +112,12 @@ CLI](config-cli.md#domains-add--domains-rm).
 
 ## Trust model / limitations
 
-- **Host-level rules, though the plaintext is now visible.** Since the proxy decrypts, the request
-  URL *is* available to it — but the allowlist grammar still matches hostnames only. You can allow
-  or deny a *host*, not "this host, only this path"; path-level rules are a follow-up on top of
+- **Host-level rules, though the plaintext is now visible.** The request URL *is* available to the
+  proxy, but the allowlist grammar still matches hostnames only: you can allow or deny a *host*, not
+  "this host, only this path". Path-level rules are a follow-up on top of
   [TLS Inspection](tls-inspection.md).
-- **The CA private key is a new secret.** It signs for any host, and lives on the host plus the Squid
-  container — never in a Claude container. See
+- **The CA private key is a new secret.** It signs for any host and lives on the host plus the Squid
+  container, never in a Claude container. See
   [Known Attack Vectors](attack-vectors.md#the-egress-cas-private-key).
 - **A host on `skip-decryption.txt` is filtered by hostname only** — the pre-interception
   treatment: CONNECT target in, encrypted tunnel out.

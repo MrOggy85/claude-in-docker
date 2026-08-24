@@ -75,10 +75,10 @@ cid domains prune                            # drop expired --for entries (hygie
 
 ### `skip-decryption add` / `skip-decryption rm`
 
-The same machinery against `skip-decryption.txt`, the exception list to TLS interception: a host
-listed there is tunnelled undecrypted, for clients that pin certificates. Identical grammar, `-g`/`-C`
-behaviour and ~2s propagation as `domains`; `--for` and `prune` are not accepted. Listing a host
-grants no access — it must still be on the egress allowlist. See [TLS Inspection](tls-inspection.md).
+The same machinery against `skip-decryption.txt`: a host listed there is relayed undecrypted, for
+clients that pin certificates. Identical grammar, `-g`/`-C` behaviour and ~2s propagation as
+`domains`; `--for` and `prune` are not accepted. It grants no access — the host must still be on the
+egress allowlist. See [TLS Inspection](tls-inspection.md).
 
 ```bash
 cid skip-decryption add api.example.com     # stop decrypting it, for THIS project
@@ -89,11 +89,11 @@ cid skip-decryption                         # show the effective list
 
 ### `ca`
 
-Read-only view of the CA the proxy signs decrypted TLS with: its path, mode, subject, expiry and
-SHA-256 fingerprint, plus whether the copy baked into the image still matches (a mismatch means the
-next `run.sh` rebuilds). Exits non-zero when there is no CA or it has expired — the first thing to
-check when every HTTPS request in a session fails. The private key's contents are never printed.
-Create or rotate with `make ca`.
+Read-only view of the CA the proxy signs decrypted TLS with: path, mode, subject, expiry, SHA-256
+fingerprint, and whether the copy baked into the image still matches (a mismatch means the next
+`run.sh` rebuilds). Exits non-zero when there is no CA or it has expired — check it first when every
+HTTPS request in a session fails. The private key is never printed. Create or rotate with
+`make ca`.
 
 ### `containers add` / `containers rm`
 

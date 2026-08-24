@@ -39,7 +39,7 @@ CLAUDE_MOUNTS="$HOME/data:/data" ./run.sh
 ### Egress proxy
 
 The Squid proxy is the sole egress path and is always on (`run.sh` auto-starts it) — there is no
-enable/disable flag, and none for TLS interception either: `run.sh` aborts without a CA. These only
+enable/disable flag, and none for TLS interception either: `run.sh` aborts without a CA. These
 rename the shared network and container, or swap the image.
 
 | Variable | Default | Description | Reference |

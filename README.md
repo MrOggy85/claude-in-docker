@@ -71,8 +71,8 @@ All of the following files live in the config directory and are your personal fi
 - `claude.json` contains onboarding state and your user-level MCP server config
 - `container-CLAUDE.md` add your personal instructions for Claude Code here; mounted into the container as `~/.claude/CLAUDE.md` (user-global). Distinct from the repo's own `CLAUDE.md`, which holds project instructions for working on this tool.
 - `allowed-domains.txt` domains listed here are the only outbound destinations the container can reach. It is the allowlist enforced by the shared Squid egress proxy (read live — edits apply within ~2s, no image rebuild). See [Centralized Egress Proxy](docs/egress-proxy.md) for how egress filtering works.
-- `skip-decryption.txt` hosts the proxy tunnels **without** decrypting. Everything else is decrypted and logged by URL; list a host here when its client pins certificates. Edit with `./cid skip-decryption add|rm <host>`. See [TLS Inspection](docs/tls-inspection.md).
-- `ca/ca.key` + `ca/ca.crt` the CA the proxy signs decrypted TLS with, created by `make ca` (part of `make init`). The key is mounted only into the proxy container, never into a Claude container; the certificate is baked into the image's trust store. `run.sh` refuses to start without it. Inspect with `./cid ca`.
+- `skip-decryption.txt` hosts the proxy relays **without** decrypting. Everything else is decrypted and logged by URL; list a host here when its client pins certificates. Edit with `./cid skip-decryption add|rm <host>`. See [TLS Inspection](docs/tls-inspection.md).
+- `ca/ca.key` + `ca/ca.crt` the CA the proxy signs decrypted TLS with, from `make ca` (part of `make init`). The key is mounted only into the proxy container, never a Claude container; the certificate is baked into the image's trust store. `run.sh` refuses to start without it. Inspect with `./cid ca`.
 - `.gitconfig` set your git `user.name` / `user.email` here.
 - `.gitignore_global` optional global (user-level) gitignore; mounted read-only at `~/.config/git/ignore`, which git reads automatically (no `.gitconfig` entry needed). Patterns apply to every repo you work in inside the container.
 - `.env` arbitrary `KEY=VALUE` environment variables injected into the container via `docker --env-file`. Created (comment-only) by `make init` and required — `run.sh` aborts with a `make init` pointer if it is missing — but may safely stay empty. See [Passing environment variables](docs/passing-env-vars.md).
@@ -81,7 +81,7 @@ Two files stay **in the repo** (not the config dir), because Docker's build cont
 the repo directory and both are `COPY`'d into the image: `install_additional_packages.sh`,
 which runs as root at build time — add commands here to install extra tools a workflow
 needs (e.g. Deno), then rebuild — and `egress-ca.crt`, the public half of the CA above,
-which `run.sh` copies in for you on every run.
+which `run.sh` copies in on every run.
 
 Per-project overrides (a per-repo `allowed-domains.txt`, `.env`, `container-CLAUDE.md`,
 `mcp-servers.json`, or `install_additional_packages.sh`) live under

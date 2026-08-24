@@ -208,9 +208,10 @@ Claude containers, so Claude running in them cannot see or edit it.
 The narrow exception is running Claude **on this repo itself** with the config dir mounted in. Then
 Claude can edit `allowed-domains.txt`, and because the proxy re-reads the lists live (≈2s verdict
 cache, no rebuild), a widened allowlist takes effect within ~2s. The blast radius is still bounded:
-a widened list only adds hostnames the proxy will then permit by CONNECT target. `skip-decryption.txt`
-is editable the same way, and buys less — a host listed there still has to be allowlisted; it only
-stops being decrypted. Treat edits to these files as changes to a security boundary, and review the diffs.
+a widened list only adds hostnames the proxy will then permit by CONNECT target.
+`skip-decryption.txt` is editable the same way and buys less: a host listed there still has to be
+allowlisted, it only stops being decrypted. Treat edits to these files as changes to a security
+boundary, and review the diffs.
 
 ## Egress Boundary Disclosure via Fast-Fail
 
@@ -233,15 +234,15 @@ implicitly reachable — the proxy permits a tunnel only when the requested host
 regardless of where it resolves. The earlier IP-allowlist concern no longer applies.
 
 The residual *domain-fronting* gap — CONNECT naming an allowed host while the encrypted SNI names
-another on the same frontable infrastructure — is closed for every bumped host, since the proxy now
-decrypts and sees the inner request's own host. It remains for hosts on `skip-decryption.txt`, which
-are deliberately not decrypted. See [TLS Inspection](tls-inspection.md).
+another on the same frontable infrastructure — is now closed wherever the proxy decrypts, since it
+sees the inner request's own host. It remains for hosts on `skip-decryption.txt`. See
+[TLS Inspection](tls-inspection.md).
 
 ## The Egress CA's Private Key
 
-TLS interception adds one secret with a wide blast radius: `<config-dir>/ca/ca.key` can sign a
-trusted certificate for **any** host, toward any container whose image trusts it. Whoever holds it
-can impersonate `api.anthropic.com` to a session.
+TLS interception adds one secret with a wide blast radius: `<config-dir>/ca/ca.key` signs a trusted
+certificate for **any** host, toward any container whose image trusts it. Whoever holds it can
+impersonate `api.anthropic.com` to a session.
 
 What bounds it:
 
@@ -257,11 +258,10 @@ mounted in. Then the session can read `ca.key`. Treat that as handing over a sig
 
 ## Decrypted Traffic in the Proxy Log
 
-Bumping puts the full request URL of every allowlisted host into the proxy's `access.log` (query
-strings excluded — `strip_query_terms` defaults to on). The log lives inside the proxy container
-and dies with it, but while it runs, `docker logs` / `docker exec` on that container exposes a record of
-what every session fetched. The [docker bridge guard](docker-bridge.md) refuses to allowlist the
-proxy container for exactly this reason.
+Decryption puts the full request URL of every allowlisted host into the proxy's `access.log` (query
+strings excluded — `strip_query_terms` defaults to on). The log dies with the container, but while
+that runs, `docker logs` / `docker exec` on it expose a record of what every session fetched — which
+is why the [docker bridge guard](docker-bridge.md) refuses to allowlist the proxy container.
 
 ## DNS Exfiltration (Partially Mitigated)
 
