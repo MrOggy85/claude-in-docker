@@ -128,7 +128,7 @@ latency.
 | `SSL: CERTIFICATE_VERIFY_FAILED` in a Python tool                   | it ignores `SSL_CERT_FILE`; pass its own CA option, pointed at `$SSL_CERT_FILE` |
 | A client reports a pinning failure                                  | `cid skip-decryption add <host>`                                                    |
 | Every HTTPS request fails at once, in every project                 | expired or mismatched CA — `cid ca`, then rotate                           |
-| The proxy will not start after an edit                              | `proxy/up.sh` says so and prints the log; parse the config alone with `docker run --rm --entrypoint squid --volume "$PWD/proxy/squid.conf:/etc/squid/squid.conf:ro" claude-egress-squid:local -k parse` |
+| The proxy will not start after an edit                              | `proxy/up.sh` says so and prints the log; parse the config alone with `docker run --rm --entrypoint squid --volume "$PWD/proxy:/etc/squid/src:ro" claude-egress-squid:local -f /etc/squid/src/squid.conf -k parse` |
 
 Never work around a certificate error with `--insecure`, `NODE_TLS_REJECT_UNAUTHORIZED=0` or
 `verify=False`: that also disables verification of the *upstream* certificate, the check this moved

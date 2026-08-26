@@ -34,6 +34,12 @@ IMAGE="${CLAUDE_EGRESS_IMAGE:-claude-egress-squid:local}"
 # Mounting preserves host perms, so make the helpers executable first.
 chmod +x "${SCRIPT_DIR}/ext-allowlist.sh" "${SCRIPT_DIR}/auth-ok.sh"
 
+# This directory is mounted whole (see the docker run below), so a commit that
+# rewrites squid.conf or a helper is picked up by the next proxy-up rather than
+# dangling the mount. Nothing secret lives here; the Dockerfile and up.sh ride
+# along into the container harmlessly.
+SRC_MOUNT=/etc/squid/src
+
 # Baseline allowlist: the active config-dir copy only. Bail if absent (else
 # Docker would mount a dir at the missing source); run `make init` to seed it.
 BASELINE_DOMAINS_FILE="${CONFIG_DIR}/allowed-domains.txt"
@@ -98,9 +104,7 @@ docker run -d \
   --network "${NETWORK}" \
   --network-alias squid \
   --restart unless-stopped \
-  --volume "${SCRIPT_DIR}/squid.conf:/etc/squid/squid.conf:ro" \
-  --volume "${SCRIPT_DIR}/ext-allowlist.sh:/etc/squid/ext-allowlist.sh:ro" \
-  --volume "${SCRIPT_DIR}/auth-ok.sh:/etc/squid/auth-ok.sh:ro" \
+  --volume "${SCRIPT_DIR}:${SRC_MOUNT}:ro" \
   --volume "${BASELINE_DOMAINS_FILE}:/etc/squid/baseline-domains.txt:ro" \
   --volume "${BASELINE_SKIP_DECRYPTION_FILE}:/etc/squid/baseline-skip-decryption.txt:ro" \
   --volume "${CA_DIR}:/etc/squid/ca-src:ro" \
@@ -127,7 +131,19 @@ if [[ "${RUNNING}" != "true" ]]; then
   cont "Full log: docker logs ${PROXY_NAME}" \
        "Re-check the config alone:" \
        "  docker run --rm --entrypoint squid \\" \
-       "    --volume ${SCRIPT_DIR}/squid.conf:/etc/squid/squid.conf:ro ${IMAGE} -k parse"
+       "    --volume ${SCRIPT_DIR}:${SRC_MOUNT}:ro ${IMAGE} -f ${SRC_MOUNT}/squid.conf -k parse"
+  exit 1
+fi
+
+# Squid being alive is not the same as egress working: a helper that cannot exec
+# leaves Squid up, respawning it forever, with every allowlist lookup failing.
+# Probe it directly rather than waiting for the HEALTHCHECK's first interval.
+if ! printf 'healthcheck healthcheck.invalid -\n' \
+     | docker exec -i "${PROXY_NAME}" "${SRC_MOUNT}/ext-allowlist.sh" 2>/dev/null \
+     | grep -q '^ERR$'; then
+  fail "${PROXY_NAME} is up but its allowlist helper is not answering." \
+       "Egress would be denied for every project. Check:" \
+       "  docker logs --tail 50 ${PROXY_NAME}"
   exit 1
 fi
 

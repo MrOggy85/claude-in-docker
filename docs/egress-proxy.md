@@ -75,6 +75,23 @@ make proxy-up            # or: ./proxy/up.sh
 Tear down with `make proxy-down`. Rename the network and container via `CLAUDE_EGRESS_NETWORK`,
 `CLAUDE_EGRESS_PROXY_NAME`, and `CLAUDE_EGRESS_IMAGE` (which also skips the build).
 
+### Health
+
+Squid outlives a helper that cannot start — it respawns it forever while every allowlist lookup
+fails, so "container is running" does not mean "egress works". Two checks close that gap: `up.sh`
+execs the helper once before declaring success, and the image's `HEALTHCHECK` repeats that probe
+every 60s. Docker acts on neither, so `run.sh` reads the status and recreates an `unhealthy` proxy
+at startup. To look yourself:
+
+```bash
+docker inspect -f '{{.State.Health.Status}}' claude-egress-proxy
+printf 'k example.com -\n' | docker exec -i claude-egress-proxy /etc/squid/src/ext-allowlist.sh
+```
+
+`proxy/` is mounted whole at `/etc/squid/src` rather than file by file: a single-file bind mount
+follows the inode, so a commit that rewrites `squid.conf` or a helper would otherwise leave the
+running container pointed at a deleted file.
+
 ## Allowlists
 
 | File                                       | Role                                                            |
@@ -84,7 +101,10 @@ Tear down with `make proxy-down`. Rename the network and container via `CLAUDE_E
 | `<config-dir>/skip-decryption.txt`, `projects/<key>/skip-decryption.txt` | same grammar, different question: hosts **not** to decrypt ([TLS Inspection](tls-inspection.md)) |
 
 All are bind-mounted read-only into the proxy and read live by the helper (2-second verdict cache),
-so **editing a list needs no proxy restart** — the change applies within ~2s.
+so **editing a list needs no proxy restart** — the change applies within ~2s. The two baseline
+files are mounted individually, so `cid` rewrites them in place (`_rewrite_in_place`) rather than
+renaming a temp file over them: a new inode would strand the proxy's mount and silently drop the
+baseline from every verdict.
 
 ### Entry syntax
 

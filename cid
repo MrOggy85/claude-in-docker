@@ -276,6 +276,18 @@ _raw_line_for() {  # <entry> <file>
   done < "${file}"
 }
 
+# Replace <file>'s contents with <tmp>'s, KEEPING <file>'s inode, then drop <tmp>.
+# Every rewrite below goes through this rather than `mv`: the two baseline lists
+# are bind-mounted into the proxy as individual files, and a rename leaves that
+# mount dangling — the helper's `[ -f ]` guard then fails and the whole baseline
+# silently stops matching until `make proxy-up`. The cost is rename-atomicity: a
+# helper reading mid-write sees a short file for an instant and fails closed.
+# See docs/egress-proxy.md.
+_rewrite_in_place() {  # <tmp> <file>
+  cat "$1" > "$2"
+  rm -f "$1"
+}
+
 # Rewrite <file> dropping any line whose bare entry equals <entry>. No-op if absent.
 _drop_entry() {  # <entry> <file>
   local entry="$1" file="$2"
@@ -286,7 +298,7 @@ _drop_entry() {  # <entry> <file>
     [[ "$(_entry_of "${line}")" == "${entry}" ]] && continue
     printf '%s\n' "${line}"
   done < "${file}" > "${tmp}"
-  mv "${tmp}" "${file}"
+  _rewrite_in_place "${tmp}" "${file}"
 }
 
 # Resolve the target allowlist for add/rm. Sets TARGET_FILE, TARGET_LABEL and the
@@ -409,7 +421,7 @@ _entries_rm() {  # <kind> <global> <dir> <entry>...
       [[ "$(_entry_of "${line}")" == "${entry}" ]] && continue
       printf '%s\n' "${line}"
     done < "${TARGET_FILE}" > "${tmp}"
-    mv "${tmp}" "${TARGET_FILE}"
+    _rewrite_in_place "${tmp}" "${TARGET_FILE}"
     note "removed from ${TARGET_LABEL}: ${entry}"
     removed=$((removed + 1))
   done
@@ -509,7 +521,7 @@ cmd_domains_prune() {  # <global> <dir>
     fi
     printf '%s\n' "${line}"
   done < "${TARGET_FILE}" > "${tmp}"
-  mv "${tmp}" "${TARGET_FILE}"
+  _rewrite_in_place "${tmp}" "${TARGET_FILE}"
   if [[ "${pruned}" -gt 0 ]]; then
     note "pruned ${pruned} expired entrie(s) from ${TARGET_LABEL}"
   else
