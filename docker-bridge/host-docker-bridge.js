@@ -67,23 +67,30 @@ const log = (msg) => console.log(`[docker-bridge] ${msg}`);
 // Token -> project key -> allowlist
 // ---------------------------------------------------------------------------
 
-// Cached scan of <projects-dir>/*/docker-bridge.token, invalidated when the
-// projects dir changes (a new project's first run writes a token there).
-let tokenCache = { mtimeMs: -1, entries: [] };
+// Cached scan of <projects-dir>/*/docker-bridge.token, re-read on a short TTL.
+// Deliberately NOT keyed on the projects dir's mtime: that only moves when a
+// project dir is added, and enabling this bridge on a project that already has
+// one mints the token INSIDE it, leaving the parent untouched. Keying on mtime
+// makes such a token invisible until the bridge restarts — a 401 with no
+// explanation. A readdir per second, only while requests arrive, is cheaper than
+// that failure mode.
+const TOKEN_TTL_MS = 1000;
+let tokenCache = { at: -Infinity, entries: [] };
 
 function loadTokens() {
-  let st;
-  try { st = fs.statSync(PROJECTS_DIR); } catch { return []; }
-  if (st.mtimeMs === tokenCache.mtimeMs) return tokenCache.entries;
+  const now = Date.now();
+  if (now - tokenCache.at < TOKEN_TTL_MS) return tokenCache.entries;
 
   const entries = [];
-  for (const key of fs.readdirSync(PROJECTS_DIR)) {
+  let keys;
+  try { keys = fs.readdirSync(PROJECTS_DIR); } catch { keys = []; }
+  for (const key of keys) {
     let token;
     try { token = fs.readFileSync(path.join(PROJECTS_DIR, key, 'docker-bridge.token'), 'utf8').trim(); }
     catch { continue; }
     if (token) entries.push({ key, token });
   }
-  tokenCache = { mtimeMs: st.mtimeMs, entries };
+  tokenCache = { at: now, entries };
   return entries;
 }
 
