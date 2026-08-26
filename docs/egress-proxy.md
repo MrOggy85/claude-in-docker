@@ -75,6 +75,16 @@ make proxy-up            # or: ./proxy/up.sh
 Tear down with `make proxy-down`. Rename the network and container via `CLAUDE_EGRESS_NETWORK`,
 `CLAUDE_EGRESS_PROXY_NAME`, and `CLAUDE_EGRESS_IMAGE` (which also skips the build).
 
+### Logs
+
+`docker logs -f claude-egress-proxy` carries both streams: Squid's own errors on stderr, and one
+allow/deny line per request relayed from `/var/log/squid/access.log` by `entrypoint.sh` (Squid
+cannot write PID 1's root-owned stdout itself — it drops to the `proxy` user first). The file lives
+in the container's writable layer, so `make proxy-up` starts it empty. Treat it as sensitive: on
+decrypted hosts it is the full URL of every request every session made — which is why
+[`guards/docker-bridge.sh`](../guards/docker-bridge.sh) refuses to expose this container to the
+read-only docker bridge.
+
 ### Health
 
 Squid outlives a helper that cannot start — it respawns it forever while every allowlist lookup

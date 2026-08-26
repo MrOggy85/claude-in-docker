@@ -110,8 +110,8 @@ latency.
 
 ## What this buys, and what it does not
 
-- **Full URLs in the log**, one line per request:
-  `docker exec claude-egress-proxy tail -f /var/log/squid/access.log`. Query strings are dropped
+- **Full URLs in the log**, one line per request: `docker logs -f claude-egress-proxy`, which
+  `entrypoint.sh` relays from `/var/log/squid/access.log`. Query strings are dropped
   (`strip_query_terms` defaults to on), so tokens in URLs stay out. The log lives in the container
   and dies with it.
 - **Upstream certificates are validated by the proxy** (`sslproxy_cert_error deny all`), so a bad

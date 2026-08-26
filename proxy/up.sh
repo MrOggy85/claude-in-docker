@@ -147,6 +147,6 @@ if ! printf 'healthcheck healthcheck.invalid -\n' \
   exit 1
 fi
 
-ok "${PROXY_NAME} is up" "access log: docker exec ${PROXY_NAME} tail -f /var/log/squid/access.log"
+ok "${PROXY_NAME} is up" "access log: docker logs -f ${PROXY_NAME}"
 say "Claude containers join '${NETWORK}' and reach it as http://squid:3128"
 say "TLS is intercepted; hosts in skip-decryption.txt are relayed undecrypted."

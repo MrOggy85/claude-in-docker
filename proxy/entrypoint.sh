@@ -22,6 +22,8 @@ CA_SRC="${CA_SRC:-/etc/squid/ca-src}"
 SQUID_CONF="${SQUID_CONF:-/etc/squid/src/squid.conf}"
 CA_DIR="${CA_DIR:-/var/lib/squid/ca}"
 SSL_DB="${SSL_DB:-/var/lib/squid/ssl_db}"
+# Must match access_log in squid.conf; relayed to stdout just before the exec.
+ACCESS_LOG="${ACCESS_LOG:-/var/log/squid/access.log}"
 CERTGEN="${CERTGEN:-/usr/lib/squid/security_file_certgen}"
 
 if [ ! -f "${CA_SRC}/ca.crt" ] || [ ! -f "${CA_SRC}/ca.key" ]; then
@@ -48,7 +50,16 @@ chown -R proxy:proxy "${SSL_DB}"
 # Squid needs these to exist before it drops privileges (see the access_log note
 # in squid.conf).
 mkdir -p /var/log/squid /var/spool/squid
+touch "${ACCESS_LOG}"
 chown -R proxy:proxy /var/log/squid /var/spool/squid
+
+# Relay the access log to the container's stdout, so `docker logs` carries the
+# per-request allow/deny stream and not just Squid's own errors. Squid cannot do
+# this itself: it opens the log AFTER dropping to 'proxy', and PID 1's stdout
+# pipe is root-owned (see the access_log note in squid.conf). tail keeps root's
+# stdout and, once the exec below replaces this shell, runs on as a child of
+# squid — so it dies with the container. -F re-opens the file if it is replaced.
+tail -F -n0 "${ACCESS_LOG}" &
 
 # -N foreground, -d1 log level 1 to stderr so `docker logs` shows startup errors
 # (a bad ssl_bump line, an unreadable key) instead of the container just dying.
