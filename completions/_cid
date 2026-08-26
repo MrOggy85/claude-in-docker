@@ -52,19 +52,23 @@ _cid_envvars() {
 
 # Entries already on any allowlist of the given basename (baseline + every
 # project) — completion hints for `domains rm` / `containers rm`. Only a hint; rm
-# still resolves the right file itself.
-_cid_entries() {  # <basename> <tag> <description>
+# still resolves the right file itself. Whitespace is collapsed rather than
+# deleted, since a domains entry may carry a leading method list; <extra-sed> is
+# an optional expression applied after that.
+_cid_entries() {  # <basename> <tag> <description> [extra-sed]
   local cfg; cfg=$(_cid_config_dir)
   local -a entries=() f
   for f in "$cfg/$1" "$cfg"/projects/*/"$1"(N); do
     [[ -f $f ]] || continue
-    entries+=(${(f)"$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' -e 's/[[:space:]]//g' "$f" 2>/dev/null)"})
+    entries+=(${(f)"$(sed -e 's/#.*//' -e 's/[[:space:]]\{1,\}/ /g' -e 's/^ //' -e 's/ $//' \
+      -e "${4:-b}" -e '/^$/d' "$f" 2>/dev/null)"})
   done
   (( ${#entries} )) && _describe -t "$2" "$3" entries
 }
 
+# The method list is offered by --method, so complete the host[/path] half only.
 _cid_hosts() {
-  _cid_entries allowed-domains.txt hosts 'allowed host'
+  _cid_entries allowed-domains.txt hosts 'allowed host' 's/^[A-Za-z][A-Za-z,]* //'
 }
 
 _cid_skip_decryption() {
@@ -179,12 +183,17 @@ _cid() {
             _files -/
           else
             local kind=${line[1]}
-            local -a for_flag=()
-            [[ $kind == domains ]] && for_flag=('--for[expire the entry after a duration, e.g. 15m/2h/1d]:duration:')
+            local -a domains_flags=()
+            if [[ $kind == domains ]]; then
+              domains_flags=(
+                '--for[expire the entry after a duration, e.g. 15m/2h/1d]:duration:'
+                '--method[restrict the entry to these HTTP methods]:methods:(GET HEAD POST PUT PATCH DELETE OPTIONS GET,HEAD)'
+              )
+            fi
             _arguments \
               '(-g --global)'{-g,--global}'[target the shared baseline list]' \
               '(-C --dir --project)'{-C,--dir,--project}'[select project by directory]:dir:_files -/' \
-              "${for_flag[@]}" \
+              "${domains_flags[@]}" \
               '1: :->sub' \
               '*:: :->rest'
             case $state in
@@ -192,8 +201,8 @@ _cid() {
                 local -a subs
                 if [[ $kind == domains ]]; then
                   subs=(
-                    'add:add host(s) to the allowlist'
-                    'rm:remove host(s) from the allowlist'
+                    'add:add entries (host, optionally /path and --method) to the allowlist'
+                    'rm:remove entries from the allowlist'
                     'prune:drop expired --for entries'
                     'ls:show the effective allowlist'
                   )

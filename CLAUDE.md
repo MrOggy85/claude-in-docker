@@ -103,7 +103,8 @@ wrapped bullets.
   container. `up.sh` builds the image (`Dockerfile` + `entrypoint.sh`: Debian's
   plain `squid` rejects `ssl_bump`, so `squid-openssl` it is) and brings it up;
   `squid.conf` + `ext-allowlist.sh` enforce each project's `allowed-domains.txt`
-  by hostname and decide whether to decrypt. `watch.sh` is the detection half and
+  by hostname — and, for a decrypted request, by path and method too — and decide
+  whether to decrypt. `watch.sh` is the detection half and
   the only host-side file here: `run.sh` starts it per run, it tails
   `docker logs -f` on the proxy and notifies on a first-time or denied host. Its
   `process` verb is the whole classifier — access-log lines in, alert lines out,
@@ -117,9 +118,13 @@ wrapped bullets.
   `docs/tls-inspection.md`.
 - `allowed-domains.txt` — the egress allowlist, read live by Squid (not baked
   into the image). The baseline copy lives at `<config-dir>/allowed-domains.txt`;
-  `<config-dir>/projects/<key>/allowed-domains.txt` is the per-project list.
-  `skip-decryption.txt` has the same layout, TTL and grammar, and answers a
-  different question: which hosts Squid must NOT decrypt.
+  `<config-dir>/projects/<key>/allowed-domains.txt` is the per-project list. An
+  entry is `[METHOD[,METHOD] ]<host>[/path]`; the grammar's one authoritative
+  description is `docs/egress-proxy.md#entry-syntax`, mirrored in
+  `ext-allowlist.sh`'s `match_in_file` and `cid`'s `_valid_domain_entry` — change
+  all three together. `skip-decryption.txt` has the same layout and TTL but only
+  the hostname half of the grammar, and answers a different question: which hosts
+  Squid must NOT decrypt.
   `docker-containers.txt` follows the same baseline+per-project layout for the
   docker bridge, read per call instead of on a TTL, and so does
   `trusted-settings-rules.txt` (permission rules the settings guard must not

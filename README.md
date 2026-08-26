@@ -31,7 +31,7 @@ here won't be trivially reachable to a non-determined attacker.
 | Per-project setup | None — `cd` and run | Add `.devcontainer/` to every repo | None |
 | Works from | Any terminal | IDE / Codespaces-first | Any terminal |
 | Host integrations lost by containerizing | Restored — ports, mounts, Keychain-injected tokens, browser/docker/sound MCP bridges, cross-project usage tracking | Partial — `forwardPorts` / bind mounts only | N/A — native |
-| Outbound egress | Hostname allowlist, on by default | Firewall reference exists, but opt-in and VS Code/Codespaces-bound | Unrestricted |
+| Outbound egress | Host/path/method allowlist, on by default | Firewall reference exists, but opt-in and VS Code/Codespaces-bound | Unrestricted |
 | HTTPS visibility | Decrypted and logged by URL at the proxy | No — CONNECT hostname only | None |
 | `node_modules` on host disk | No — volume-backed by default | Yes | Yes |
 | Credential / hook guards | Yes (settings, MCP token) | No | No |
@@ -163,7 +163,7 @@ function claude {
 ## Additional Features
 
 - [The `cid` config CLI](docs/config-cli.md) — inspect config and edit the allowlists (`cid domains add|rm`, `cid containers add|rm`, per-project or `-g` baseline) without hand-editing files; put it on `$PATH` and ships zsh completion
-- [Centralized Egress Proxy](docs/egress-proxy.md) — the network boundary: every container egresses through one shared Squid proxy that filters by hostname per project
+- [Centralized Egress Proxy](docs/egress-proxy.md) — the network boundary: every container egresses through one shared Squid proxy that filters by hostname, path and method per project
 - [TLS Inspection](docs/tls-inspection.md) — the proxy decrypts HTTPS with a local CA: setup, rotation, which runtimes need pointing at it, and how to exempt a host
 - [Egress Alerts](docs/egress-alerts.md) — a host-side desktop notification the moment a project reaches a host it never has before, or is denied by the allowlist
 - [Threat Model](docs/threat-model.md) — one-page summary of what this protects against and what it doesn't, plus how to [report a vulnerability](SECURITY.md)

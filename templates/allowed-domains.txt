@@ -1,5 +1,8 @@
 # Outbound allowlist — copy to allowed-domains.txt (gitignored) and rebuild the image.
-# One hostname per line. Lines starting with # are ignored.
+# One entry per line; lines starting with # are ignored. An entry is a hostname
+# ('.apex' = apex + subdomains), optionally narrowed by a path and a leading
+# method list:  [METHOD[,METHOD] ]<host>[/path]  — e.g. "GET,HEAD api.github.com/repos".
+# Full grammar: docs/egress-proxy.md#entry-syntax
 
 # Claude Code API
 api.anthropic.com

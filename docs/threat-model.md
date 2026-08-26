@@ -13,7 +13,7 @@ Automation](attack-vectors.md#issuecomment-triggered-ci-automation-mitigated-by-
 | Threat | How |
 | --- | --- |
 | Host filesystem outside the mounted project | Only the project directory (and any explicit `CLAUDE_MOUNTS`) is bind-mounted; nothing else on the host is reachable. |
-| Arbitrary egress | Outbound traffic is locked to a per-project hostname allowlist enforced by a shared Squid proxy — see [Centralized Egress Proxy](egress-proxy.md). |
+| Arbitrary egress | Outbound traffic is locked to a per-project allowlist enforced by a shared Squid proxy, by hostname and optionally by path and method — see [Centralized Egress Proxy](egress-proxy.md). |
 | Traffic you cannot see | The proxy decrypts TLS with a local CA, so every allowed request is logged by URL and its upstream certificate is validated at the proxy — see [TLS Inspection](tls-inspection.md). |
 | Credentials outside the container | Your Claude Code login and MCP tokens live in the host config dir, mounted read-only; nothing inside can write back to them or reach another host's credentials. |
 | Untrusted project settings / auto-launched MCP servers | `run.sh` gates on a project's `.claude/settings*.json` and `.mcp.json` before any build or container work — see [Project-Level Claude Settings](attack-vectors.md#project-level-claude-settings-mitigated-by-default) and [Project-Level MCP Servers](attack-vectors.md#project-level-mcp-servers-mitigated-by-claude-code). |
@@ -26,7 +26,7 @@ Automation](attack-vectors.md#issuecomment-triggered-ci-automation-mitigated-by-
 | Threat | Why |
 | --- | --- |
 | Anything inside the mounted folder | The project directory is bind-mounted read-write by design — see [Untrusted Package Artifacts on the Host](attack-vectors.md#untrusted-package-artifacts-on-the-host). |
-| Exfiltration via an allowed domain | The allowlist controls *which hosts* are reachable, not what's sent to them. A destination already on the list (e.g. the GitHub MCP endpoint) is a usable exfil sink — see [GitHub MCP Token Write Access](attack-vectors.md#github-mcp-token-write-access-accepted-trade-off). |
+| Exfiltration via an allowed domain | The allowlist controls *which requests* are reachable, not what's sent to them. A destination already on the list (e.g. the GitHub MCP endpoint) is a usable exfil sink — narrowing an entry to `GET,HEAD` closes the obvious upload verbs, not a query string. See [GitHub MCP Token Write Access](attack-vectors.md#github-mcp-token-write-access-accepted-trade-off). |
 | Container escape | The container runs without `--cap-drop=ALL` or `--security-opt no-new-privileges`, so a root-level compromise wields a wider capability set and setuid bugs stay live — see [In-Container Privilege Escalation](attack-vectors.md#in-container-privilege-escalation-partially-mitigated). |
 | Malicious packages installed by your own build script | `install_additional_packages.sh` runs as root at image build time; what it installs is trusted like the rest of the image. |
 | Theft of the egress CA key from the host | It is mode 0600 in the host config dir and never enters a Claude container, but host compromise takes it — and with it the ability to sign for any host — see [The Egress CA's Private Key](attack-vectors.md#the-egress-cas-private-key). |

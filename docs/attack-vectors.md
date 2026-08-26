@@ -208,7 +208,9 @@ Claude containers, so Claude running in them cannot see or edit it.
 The narrow exception is running Claude **on this repo itself** with the config dir mounted in. Then
 Claude can edit `allowed-domains.txt`, and because the proxy re-reads the lists live (≈2s verdict
 cache, no rebuild), a widened allowlist takes effect within ~2s. The blast radius is still bounded:
-a widened list only adds hostnames the proxy will then permit by CONNECT target.
+a widened list only adds requests the proxy will then permit. Note that widening can be subtle now
+that entries carry a path and method — dropping the `GET,HEAD` from an entry, or the `/v1` from
+another, reads as a smaller diff than adding a host while granting more.
 `skip-decryption.txt` is editable the same way and buys less: a host listed there still has to be
 allowlisted, it only stops being decrypted. Treat edits to these files as changes to a security
 boundary, and review the diffs.
@@ -220,7 +222,8 @@ rather than dropping them, so a blocked connection fails immediately with `ECONN
 hanging. At the packet-filter layer this reveals little — only that egress is locked to the Squid
 host — but the proxy is also a fast signal: Squid answers a denied CONNECT with an immediate HTTP
 `403`, so a process can map the per-host allowlist by probing (allowed → tunnel established; denied →
-403) without timeouts.
+403) without timeouts. A path or method rule is probeable the same way, one handshake later: the
+tunnel opens on the host and the request inside it gets the 403.
 
 This does not let a process *reach* a blocked destination; it only reveals which hosts are allowed.
 The allowlist is not secret (it is a host-side file you maintain), so the disclosure is low impact.

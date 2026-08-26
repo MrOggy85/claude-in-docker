@@ -17,15 +17,19 @@
 #                              (default: current dir) and which overrides exist.
 #   cid domains [dir]          Show the effective egress allowlist for a project:
 #                              the baseline plus any per-project additions.
-#   cid domains add <host>...  Add host(s) to the per-project allowlist (default)
-#                              or, with -g, the shared baseline list.
+#   cid domains add <host>[/path]...
+#                              Add entries to the per-project allowlist (default)
+#                              or, with -g, the shared baseline list. An entry may
+#                              narrow the host with a path, and with --method an
+#                              HTTP method list — see docs/egress-proxy.md.
 #   cid domains add --for <dur> <host>...
 #                              Same, but the entry expires after <dur> (e.g. 15m,
 #                              2h, 1d) — the proxy stops honoring it once it's
 #                              passed. Re-adding refreshes the expiry; a plain
 #                              add (no --for) on a temporary entry makes it
 #                              permanent.
-#   cid domains rm  <host>...  Remove host(s) from the per-project allowlist
+#   cid domains rm  <host>[/path]...
+#                              Remove entries from the per-project allowlist
 #                              (default) or, with -g, the shared baseline list.
 #   cid domains prune          Drop expired --for entries from the list (hygiene
 #                              only — the proxy already ignores them).
@@ -65,6 +69,8 @@
 #                              Ignored with -g (the baseline is not per-project).
 #   --for <duration>           domains add only: expire the entry after
 #                              <duration> (digits + optional s/m/h/d suffix).
+#   --method <list>            domains add|rm only: restrict the entry to these
+#                              HTTP methods (comma-separated, e.g. GET,HEAD).
 #
 # The domain and skip-decryption lists are read live by the Squid proxy (2s cache),
 # so
@@ -221,9 +227,14 @@ cmd_project() {
 # resolved once by _resolve_target, which sets the TARGET_* globals the generic
 # add/rm use.
 
-# The bare entry on an allowlist line: everything before '#', whitespace-stripped.
+# The bare entry on an allowlist line: everything before '#', trimmed, with every
+# internal whitespace run collapsed to one space (a domains entry may carry a
+# leading method list, so whitespace is part of the grammar rather than noise).
 # Mirrors proxy/ext-allowlist.sh so "present" here means the same as "allowed".
-_entry_of() { local l="${1%%#*}"; printf '%s' "${l}" | tr -d '[:space:]'; }
+_entry_of() {
+  local l; l="$(printf '%s' "${1%%#*}" | tr -s '[:space:]' ' ')"
+  l="${l# }"; printf '%s' "${l% }"
+}
 
 # Reject anything that isn't a plausible hostname / wildcard entry, so we never
 # append a line the proxy would ignore or that smuggles in a comment/whitespace.
@@ -232,6 +243,70 @@ _valid_host() {  # <host>
   local h="$1"
   [[ -n "${h}" ]] || return 1
   [[ "${h}" =~ ^\.?([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]]
+}
+
+# Split a domains entry into the METHODS / TARGET / HOST / PATH the proxy parses
+# out of it (METHODS and PATH stay empty when absent). Callers declare the four
+# _E_* names local and read them back. Any of them may be nonsense — judging that
+# is _valid_domain_entry's job below.
+_split_domain_entry() {  # <entry>
+  local e; e="$(_entry_of "$1")"
+  if [[ "${e}" == *' '* ]]; then _E_METHODS="${e%% *}"; _E_TARGET="${e#* }"
+  else                           _E_METHODS=''; _E_TARGET="${e}"
+  fi
+  if [[ "${_E_TARGET}" == */* ]]; then
+    _E_HOST="${_E_TARGET%%/*}"; _E_PATH="/${_E_TARGET#*/}"
+  else
+    _E_HOST="${_E_TARGET}"; _E_PATH=''
+  fi
+}
+
+# The methods an entry may name, uppercased. A fixed list rather than "any word",
+# because the method list is the entry's first field: without it, `cid domains add
+# 'bad host/x'` would be accepted as the method BAD, and the rule would silently
+# match nothing. CONNECT is deliberately absent — the tunnel request is judged on
+# the host alone (see proxy/squid.conf), so an entry naming it can never fire.
+_HTTP_METHODS=' GET HEAD POST PUT PATCH DELETE OPTIONS TRACE PROPFIND PROPPATCH MKCOL COPY MOVE LOCK UNLOCK '
+
+# A domains entry: an optional comma-separated method list, then the host (or
+# ".apex" wildcard), then an optional path. Mirrors the grammar
+# proxy/ext-allowlist.sh parses, and additionally rejects the path shapes that
+# parse but can never fire: a query string (the proxy strips it before matching),
+# a '..' segment (it refuses to match a traversal at all) and a non-trailing '*'
+# (only a trailing one is a glob; elsewhere it means a literal asterisk).
+_valid_domain_entry() {  # <entry>
+  local _E_METHODS _E_TARGET _E_HOST _E_PATH
+  [[ -n "$1" ]] || return 1
+  _split_domain_entry "$1"
+  [[ "${_E_TARGET}" == *' '* ]] && return 1        # a third field is a typo, not a rule
+  if [[ -n "${_E_METHODS}" ]]; then
+    local m
+    for m in ${_E_METHODS//,/ }; do
+      [[ "${_HTTP_METHODS}" == *" ${m} "* ]] || return 1
+    done
+  fi
+  _valid_host "${_E_HOST}" || return 1
+  if [[ -n "${_E_PATH}" ]]; then
+    case "${_E_PATH}" in *'?'*|*'#'*|*'..'*) return 1 ;; esac
+    [[ "${_E_PATH%\*}" == *'*'* ]] && return 1
+  fi
+  return 0
+}
+
+# Normalizers: what gets written to the file, so a re-add finds its own line.
+# _norm_none is verbatim — a settings rule's own spacing is significant.
+_norm_none()  { printf '%s' "$1"; }
+_norm_lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+# Methods and hostnames are case-insensitive, so they are folded; the path is
+# case-SENSITIVE per RFC 3986 and passes through verbatim.
+_norm_domain_entry() {  # <entry>
+  local _E_METHODS _E_TARGET _E_HOST _E_PATH
+  _split_domain_entry "$1"
+  printf '%s%s%s' \
+    "${_E_METHODS:+$(printf '%s' "${_E_METHODS}" | tr '[:lower:]' '[:upper:]') }" \
+    "$(printf '%s' "${_E_HOST}" | tr '[:upper:]' '[:lower:]')" \
+    "${_E_PATH}"
 }
 
 # Docker's own container-name charset, plus an optional trailing '*' the bridge
@@ -310,44 +385,46 @@ _drop_entry() {  # <entry> <file>
 
 # Resolve the target allowlist for add/rm. Sets TARGET_FILE, TARGET_LABEL and the
 # per-kind TARGET_VALIDATOR / TARGET_PARSER / TARGET_HINT / TARGET_APPLIES /
-# TARGET_LOWER. The baseline allowed-domains.txt must already exist (the proxy
-# mounts exactly that path, so a typo'd new file would silently do nothing);
+# TARGET_NORMALIZER. The baseline allowed-domains.txt must already exist (the
+# proxy mounts exactly that path, so a typo'd new file would silently do nothing);
 # every other file is created on demand.
 _resolve_target() {  # <global?0|1> <dir> <kind: domains|containers|rules>
   local is_global="$1" dir="$2" kind="$3" name
   TARGET_PARSER='_entry_of'
   case "${kind}" in
     domains)
+      # The one kind whose entries may scope the method and path as well as the
+      # host — see docs/egress-proxy.md#entry-syntax.
       name='allowed-domains.txt'
-      TARGET_VALIDATOR='_valid_host'
-      TARGET_HINT="not a valid hostname (letters, digits, '.', '-'; leading '.' = wildcard)"
+      TARGET_VALIDATOR='_valid_domain_entry'
+      TARGET_NORMALIZER='_norm_domain_entry'
+      TARGET_HINT="not a valid allowlist entry ('[METHOD[,METHOD] ]<host>[/path]'; leading '.' = wildcard host, trailing '*' = raw path prefix)"
       TARGET_APPLIES='applies within ~2s, no restart'
-      TARGET_LOWER=1
       ;;
     skipdecrypt)
-      # Hosts the proxy must NOT decrypt. Same grammar and cache as domains, a
-      # different question — see docs/tls-inspection.md.
+      # Hosts the proxy must NOT decrypt. A pre-interception decision, so unlike
+      # domains it is hostname-only — see docs/tls-inspection.md.
       name='skip-decryption.txt'
       TARGET_VALIDATOR='_valid_host'
+      TARGET_NORMALIZER='_norm_lower'
       TARGET_HINT="not a valid hostname (letters, digits, '.', '-'; leading '.' = wildcard)"
       TARGET_APPLIES='applies within ~2s, no restart'
-      TARGET_LOWER=1
       ;;
     containers)
       name='docker-containers.txt'
       TARGET_VALIDATOR='_valid_container'
+      TARGET_NORMALIZER='_norm_none'
       TARGET_HINT="not a valid container name (letters, digits, '_', '.', '-'; trailing '*' = prefix glob)"
       TARGET_APPLIES='applies to the next bridge call — no session restart'
-      TARGET_LOWER=0
       ;;
     rules)
       # permissions.allow rules the settings scanner should stop flagging.
       name='trusted-settings-rules.txt'
       TARGET_VALIDATOR='_valid_rule'
       TARGET_PARSER='_rule_of'
+      TARGET_NORMALIZER='_norm_none'
       TARGET_HINT="not a usable rule (empty, or contains a leading '#', a tab or a newline)"
       TARGET_APPLIES='applies to the next run in that project'
-      TARGET_LOWER=0
       ;;
     *) err "internal: unknown allowlist kind '${kind}'"; return 1 ;;
   esac
@@ -370,12 +447,12 @@ _resolve_target() {  # <global?0|1> <dir> <kind: domains|containers|rules>
 
 _entries_add() {  # <kind> <global> <dir> <entry>...
   local kind="$1" is_global="$2" dir="$3"; shift 3
-  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_PARSER TARGET_HINT TARGET_APPLIES TARGET_LOWER
+  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_PARSER TARGET_HINT TARGET_APPLIES TARGET_NORMALIZER
   _resolve_target "${is_global}" "${dir}" "${kind}" || return 1
 
   local entry added=0
   for entry in "$@"; do
-    [[ "${TARGET_LOWER}" == 1 ]] && entry="$(printf '%s' "${entry}" | tr '[:upper:]' '[:lower:]')"
+    entry="$("${TARGET_NORMALIZER}" "${entry}")"
     if ! "${TARGET_VALIDATOR}" "${entry}"; then
       err "  skip '${entry}' — ${TARGET_HINT}"
       continue
@@ -404,7 +481,7 @@ _entries_add() {  # <kind> <global> <dir> <entry>...
 
 _entries_rm() {  # <kind> <global> <dir> <entry>...
   local kind="$1" is_global="$2" dir="$3"; shift 3
-  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_PARSER TARGET_HINT TARGET_APPLIES TARGET_LOWER
+  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_PARSER TARGET_HINT TARGET_APPLIES TARGET_NORMALIZER
   _resolve_target "${is_global}" "${dir}" "${kind}" || return 1
 
   if [[ ! -f "${TARGET_FILE}" ]]; then
@@ -414,7 +491,7 @@ _entries_rm() {  # <kind> <global> <dir> <entry>...
 
   local entry removed=0
   for entry in "$@"; do
-    [[ "${TARGET_LOWER}" == 1 ]] && entry="$(printf '%s' "${entry}" | tr '[:upper:]' '[:lower:]')"
+    entry="$("${TARGET_NORMALIZER}" "${entry}")"
     if ! _entry_in_file "${entry}" "${TARGET_FILE}"; then
       note "not in ${TARGET_LABEL}: ${entry}"
       continue
@@ -470,13 +547,13 @@ _domains_add_temp() {  # <global> <dir> <for_dur> <host>...
   }
   local expiry=$(( $(date +%s) + secs ))
 
-  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_PARSER TARGET_HINT TARGET_APPLIES TARGET_LOWER
+  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_PARSER TARGET_HINT TARGET_APPLIES TARGET_NORMALIZER
   _resolve_target "${is_global}" "${dir}" domains || return 1
 
   local entry added=0
   for entry in "$@"; do
-    entry="$(printf '%s' "${entry}" | tr '[:upper:]' '[:lower:]')"
-    if ! _valid_host "${entry}"; then
+    entry="$("${TARGET_NORMALIZER}" "${entry}")"
+    if ! "${TARGET_VALIDATOR}" "${entry}"; then
       err "  skip '${entry}' — ${TARGET_HINT}"
       continue
     fi
@@ -490,24 +567,39 @@ _domains_add_temp() {  # <global> <dir> <for_dur> <host>...
   return 0
 }
 
-cmd_domains_add() {  # <global> <dir> <for_dur> <host>...
-  local is_global="$1" dir="$2" for_dur="$3"; shift 3
-  [[ $# -ge 1 ]] || { err "usage: cid domains add [-g] [-C dir] [--for <dur>] <host>..."; return 2; }
+# `--method GET,HEAD` is sugar: it prefixes each entry with the method list the
+# file grammar already carries, so add/rm need no further special-casing.
+_with_methods() {  # <methods> <entry>...
+  local methods="$1"; shift
+  local entry
+  for entry in "$@"; do
+    if [[ -n "${methods}" ]]; then printf '%s %s\n' "${methods}" "${entry}"; else printf '%s\n' "${entry}"; fi
+  done
+}
+
+cmd_domains_add() {  # <global> <dir> <for_dur> <methods> <entry>...
+  local is_global="$1" dir="$2" for_dur="$3" methods="$4"; shift 4
+  [[ $# -ge 1 ]] || { err "usage: cid domains add [-g] [-C dir] [--for <dur>] [--method <list>] <host>[/path]..."; return 2; }
+  local e; local -a entries=()
+  while IFS= read -r e; do entries+=("${e}"); done < <(_with_methods "${methods}" "$@")
   if [[ -z "${for_dur}" ]]; then
-    _entries_add domains "${is_global}" "${dir}" "$@"
+    _entries_add domains "${is_global}" "${dir}" "${entries[@]}"
   else
-    _domains_add_temp "${is_global}" "${dir}" "${for_dur}" "$@"
+    _domains_add_temp "${is_global}" "${dir}" "${for_dur}" "${entries[@]}"
   fi
 }
 
-cmd_domains_rm() {  # <global> <dir> <host>...
-  [[ $# -ge 3 ]] || { err "usage: cid domains rm [-g] [-C dir] <host>..."; return 2; }
-  _entries_rm domains "$@"
+cmd_domains_rm() {  # <global> <dir> <methods> <entry>...
+  local is_global="$1" dir="$2" methods="$3"; shift 3
+  [[ $# -ge 1 ]] || { err "usage: cid domains rm [-g] [-C dir] [--method <list>] <host>[/path]..."; return 2; }
+  local e; local -a entries=()
+  while IFS= read -r e; do entries+=("${e}"); done < <(_with_methods "${methods}" "$@")
+  _entries_rm domains "${is_global}" "${dir}" "${entries[@]}"
 }
 
 cmd_domains_prune() {  # <global> <dir>
   local is_global="$1" dir="$2"
-  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_PARSER TARGET_HINT TARGET_APPLIES TARGET_LOWER
+  local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_PARSER TARGET_HINT TARGET_APPLIES TARGET_NORMALIZER
   _resolve_target "${is_global}" "${dir}" domains || return 1
   if [[ ! -f "${TARGET_FILE}" ]]; then
     note "no ${TARGET_LABEL} allowlist yet (${TARGET_FILE}); nothing to prune"
@@ -577,7 +669,9 @@ cmd_domains_show() {  # [dir]
   key="$(project_key "${dir}")"
   pdir="${PROJECTS_DIR}/${key}"
   head_ "Effective egress allowlist for ${key}"
-  printf 'The proxy allows a host if it matches EITHER list below.\n'
+  printf 'The proxy allows a request if an entry in EITHER list below covers it.\n'
+  printf 'An entry may narrow the host with a path and/or a leading method list\n'
+  printf '("GET,HEAD api.example.com/v1"). See docs/egress-proxy.md#entry-syntax.\n'
   _dump_list "Baseline" "${CONFIG_DIR}/allowed-domains.txt" "${TEMPLATES_DIR}/allowed-domains.txt"
   _dump_list "Per-project additions" "${pdir}/allowed-domains.txt"
 }
@@ -732,7 +826,7 @@ cmd_settings() {
 # shows the effective list.
 _cmd_allowlist() {  # <kind: domains|containers> [args...]
   local kind="$1"; shift
-  local sub="" is_global=0 dir="${PWD}" for_dur=""
+  local sub="" is_global=0 dir="${PWD}" for_dur="" methods=""
   local -a items=()
   local a
   while [[ $# -gt 0 ]]; do
@@ -741,6 +835,7 @@ _cmd_allowlist() {  # <kind: domains|containers> [args...]
       -g|--global)        is_global=1 ;;
       -C|--dir|--project) dir="${1:?-C needs a directory}"; shift ;;
       --for)              for_dur="${1:?--for needs a duration}"; shift ;;
+      --method|--methods) methods="${1:?--method needs a method or comma-separated list}"; shift ;;
       add)             if [[ -z "${sub}" ]]; then sub='add';   else items+=("${a}"); fi ;;
       rm|remove)       if [[ -z "${sub}" ]]; then sub='rm';    else items+=("${a}"); fi ;;
       prune)           if [[ -z "${sub}" ]]; then sub='prune'; else items+=("${a}"); fi ;;
@@ -754,6 +849,10 @@ _cmd_allowlist() {  # <kind: domains|containers> [args...]
   if [[ -n "${for_dur}" && ( "${kind}" != domains || "${sub}" != add ) ]]; then
     err "--for is only valid for 'cid domains add'"; return 2
   fi
+  # rm takes it too: a method-scoped line can only be removed by naming it whole.
+  if [[ -n "${methods}" && ( "${kind}" != domains || ( "${sub}" != add && "${sub}" != rm ) ) ]]; then
+    err "--method is only valid for 'cid domains add' / 'cid domains rm'"; return 2
+  fi
   if [[ "${sub}" == prune && "${kind}" != domains ]]; then
     err "'prune' is only valid for 'cid domains'"; return 2
   fi
@@ -761,12 +860,18 @@ _cmd_allowlist() {  # <kind: domains|containers> [args...]
   case "${sub}" in
     add)
       if [[ "${kind}" == domains ]]; then
-        cmd_domains_add "${is_global}" "${dir}" "${for_dur}" "${items[@]+"${items[@]}"}"
+        cmd_domains_add "${is_global}" "${dir}" "${for_dur}" "${methods}" "${items[@]+"${items[@]}"}"
       else
         "cmd_${kind}_add" "${is_global}" "${dir}" "${items[@]+"${items[@]}"}"
       fi
       ;;
-    rm)   "cmd_${kind}_rm"  "${is_global}" "${dir}" "${items[@]+"${items[@]}"}" ;;
+    rm)
+      if [[ "${kind}" == domains ]]; then
+        cmd_domains_rm "${is_global}" "${dir}" "${methods}" "${items[@]+"${items[@]}"}"
+      else
+        "cmd_${kind}_rm" "${is_global}" "${dir}" "${items[@]+"${items[@]}"}"
+      fi
+      ;;
     prune) cmd_domains_prune "${is_global}" "${dir}" ;;
     show|"") "cmd_${kind}_show" "${items[0]:-${dir}}" ;;
   esac
@@ -994,10 +1099,13 @@ Commands:
   show <file>             Print a global config file (credentials are never dumped)
   project [dir]           Per-project key, config dir, and which overrides exist
   domains [dir]           Effective egress allowlist (baseline + per-project) for a project
-  domains add <host>...   Add host(s) to the per-project list (-g for the baseline)
+  domains add <host>[/path]...
+                          Add entries to the per-project list (-g for the baseline).
+                          A path, and --method, narrow the entry below the host.
   domains add --for <dur> <host>...
                           Same, but the entry expires after <dur> (15m, 2h, 1d, ...)
-  domains rm  <host>...   Remove host(s) from the per-project list (-g for the baseline)
+  domains rm  <host>[/path]...
+                          Remove entries from the per-project list (-g for the baseline)
   domains prune           Drop expired --for entries (hygiene only; the proxy already
                           ignores them)
   skip-decryption [dir]   Hosts the proxy relays without decrypting TLS
@@ -1024,12 +1132,16 @@ Commands:
 domains|skip-decryption|containers|settings|hosts sub-verb flags:
   -g, --global            Target the shared baseline list (not the current project)
   -C, --dir <dir>         Select the project by directory (default: current dir)
+  --method <list>         domains add|rm only: restrict to these HTTP methods (GET,HEAD)
 
 Examples:
   cid domains add example.com              # allow example.com for THIS project
   cid domains add .githubusercontent.com   # wildcard: apex + all subdomains
   cid domains add -g registry.npmjs.org    # allow for EVERY project (baseline)
   cid domains add --for 15m github.com     # allow for 15 minutes, then auto-deny
+  cid domains add api.github.com/repos     # only /repos and what is under it
+  cid domains add 'api.github.com/repos*'  # raw prefix instead (quote the *)
+  cid domains add --method GET,HEAD api.github.com/repos   # ...and read-only
   cid domains rm  example.com              # remove from this project's list
   cid domains prune                        # drop expired --for entries
   cid skip-decryption add api.example.com           # stop decrypting it (a pinning client)

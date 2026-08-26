@@ -68,9 +68,11 @@ proj_file() { echo "${CLAUDE_PROJECTS_DIR}"/*/allowed-domains.txt; }
 }
 
 @test "add: rejects an invalid hostname and writes nothing" {
+  # 'bad' is where a method list goes, and it is not a method — so the whole
+  # entry is refused rather than stored as a rule that could never match.
   run "${CID}" domains add 'bad host/x' -C "${PROJ}"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"not a valid hostname"* ]]
+  [[ "$output" == *"not a valid allowlist entry"* ]]
   run bash -c "cat ${CLAUDE_PROJECTS_DIR}/*/allowed-domains.txt 2>/dev/null || true"
   [ -z "$output" ]
 }
@@ -127,6 +129,138 @@ proj_file() { echo "${CLAUDE_PROJECTS_DIR}"/*/allowed-domains.txt; }
   run "${CID}" domains rm example.com -C "${PROJ}"
   [ "$status" -eq 0 ]
   [[ "$output" == *"nothing to remove"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# domains add/rm with a path and/or a method — the narrower-than-a-host rules.
+# What each entry then MEANS is proxy/ext-allowlist.sh's job and is covered in
+# test/ext-allowlist.bats; here we only check what lands in the file.
+# ---------------------------------------------------------------------------
+
+@test "add: a path is stored on the host, verbatim" {
+  run "${CID}" domains add api.github.com/repos -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_file)"
+  [ "$output" = "api.github.com/repos" ]
+}
+
+@test "add: the host is lowercased but the path keeps its case" {
+  "${CID}" domains add API.GitHub.com/Repos/MyOrg -C "${PROJ}"
+  run cat "$(proj_file)"
+  [ "$output" = "api.github.com/Repos/MyOrg" ]
+}
+
+@test "add: a trailing '*' raw-prefix path is accepted" {
+  run "${CID}" domains add 'api.github.com/repos*' -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_file)"
+  [ "$output" = 'api.github.com/repos*' ]
+}
+
+@test "add: a wildcard host may carry a path" {
+  run "${CID}" domains add .githubusercontent.com/assets -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_file)"
+  [ "$output" = ".githubusercontent.com/assets" ]
+}
+
+@test "add --method: writes the method list first, uppercased" {
+  run "${CID}" domains add --method get,head api.github.com/repos -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_file)"
+  [ "$output" = "GET,HEAD api.github.com/repos" ]
+}
+
+@test "add --method: applies to every host in one call" {
+  "${CID}" domains add --method GET a.example.com b.example.com -C "${PROJ}"
+  run cat "$(proj_file)"
+  [ "${lines[0]}" = "GET a.example.com" ]
+  [ "${lines[1]}" = "GET b.example.com" ]
+}
+
+@test "add --method: a method list in the argument works too" {
+  run "${CID}" domains add 'GET api.github.com/repos' -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_file)"
+  [ "$output" = "GET api.github.com/repos" ]
+}
+
+@test "add --method: rejects a method that is not an HTTP method" {
+  run "${CID}" domains add --method GETT api.github.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"not a valid allowlist entry"* ]]
+  run bash -c "cat ${CLAUDE_PROJECTS_DIR}/*/allowed-domains.txt 2>/dev/null || true"
+  [ -z "$output" ]
+}
+
+@test "add --method: rejects CONNECT (the tunnel is judged on the host alone)" {
+  run "${CID}" domains add --method CONNECT api.github.com -C "${PROJ}"
+  [[ "$output" == *"not a valid allowlist entry"* ]]
+}
+
+@test "add: rejects a path that could never match (query, '..', inner '*')" {
+  local e
+  for e in 'api.github.com/repos?page=1' 'api.github.com/repos/../admin' 'api.github.com/re*os'; do
+    run "${CID}" domains add "${e}" -C "${PROJ}"
+    [[ "$output" == *"not a valid allowlist entry"* ]] || {
+      echo "accepted: ${e}"; return 1
+    }
+  done
+  run bash -c "cat ${CLAUDE_PROJECTS_DIR}/*/allowed-domains.txt 2>/dev/null || true"
+  [ -z "$output" ]
+}
+
+@test "add: a path-scoped entry is a distinct entry from the bare host" {
+  "${CID}" domains add api.github.com -C "${PROJ}"
+  "${CID}" domains add api.github.com/repos -C "${PROJ}"
+  run cat "$(proj_file)"
+  [ "${lines[0]}" = "api.github.com" ]
+  [ "${lines[1]}" = "api.github.com/repos" ]
+}
+
+@test "add: re-adding a scoped entry is idempotent" {
+  "${CID}" domains add --method GET api.github.com/repos -C "${PROJ}"
+  run "${CID}" domains add --method get api.github.com/repos -C "${PROJ}"
+  [[ "$output" == *"already in"* ]]
+  run grep -c . "$(proj_file)"
+  [ "$output" -eq 1 ]
+}
+
+@test "rm: removes a scoped entry without touching the bare host" {
+  "${CID}" domains add api.github.com -C "${PROJ}"
+  "${CID}" domains add --method GET api.github.com/repos -C "${PROJ}"
+  run "${CID}" domains rm --method GET api.github.com/repos -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_file)"
+  [ "$output" = "api.github.com" ]
+}
+
+@test "rm: the bare host does not remove a scoped entry for it" {
+  "${CID}" domains add api.github.com/repos -C "${PROJ}"
+  run "${CID}" domains rm api.github.com -C "${PROJ}"
+  [[ "$output" == *"not in"* ]]
+  run cat "$(proj_file)"
+  [ "$output" = "api.github.com/repos" ]
+}
+
+@test "add --for: composes with a method and a path" {
+  run "${CID}" domains add --for 15m --method GET api.github.com/repos -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_file)"
+  [[ "$output" == "GET api.github.com/repos  # expires="* ]]
+}
+
+@test "--method is rejected for a non-domains kind" {
+  run "${CID}" domains prune --method GET
+  [ "$status" -eq 2 ]
+  run "${CID}" skip-decryption add --method GET pinned.example.com
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--method is only valid"* ]]
+}
+
+@test "skip-decryption: a path is rejected (splicing is a host-level decision)" {
+  run "${CID}" skip-decryption add pinned.example.com/v1 -C "${PROJ}"
+  [[ "$output" == *"not a valid hostname"* ]]
 }
 
 # ---------------------------------------------------------------------------
