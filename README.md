@@ -172,7 +172,7 @@ function claude {
 - [Publishing ports](docs/publishing-ports.md) — expose a server running inside the container to the host via `CLAUDE_PORTS`
 - [Host-outbound ports](docs/host-outbound-ports.md) — let the container connect out to host services via `CLAUDE_HOST_OUTBOUND_PORTS` (generalizes `SOUND_PORT`)
 - [Sandbox self-awareness](docs/sandbox-info.md) — an on-demand `sandbox` skill telling the session which host port maps to its container port (the host port differs per session, and a host-side browser needs it), what is mounted, and why a request was blocked; `CLAUDE_SANDBOX_INFO=0` to disable
-- [Chrome DevTools MCP](docs/chrome-devtools-mcp.md) — drive a real Chrome on the host from the container via the `chrome-devtools-mcp` server, bridged over HTTP (host MCP + `CLAUDE_HOST_OUTBOUND_PORTS`)
+- [Chrome DevTools MCP](docs/chrome-devtools-mcp.md) — drive a real Chrome on the host from the container via the `chrome-devtools-mcp` server, bridged over HTTP with a per-project token and a persistent per-project profile (`CLAUDE_CHROME_DEVTOOLS=1`)
 - [Host docker bridge](docs/docker-bridge.md) — read-only `docker ps` / `logs` / `stats` for containers you allowlist, via a token-authenticated host MCP bridge instead of the Docker socket (`CLAUDE_DOCKER_BRIDGE=1`); off by default
 - [Passing environment variables](docs/passing-env-vars.md) — inject arbitrary env vars into the container via a `.env` file in the config dir
 - [Per-project launch config](docs/per-project-env.md) — keep per-repo mounts, ports, and secrets in a gitignored `.claude-env` sourced at launch

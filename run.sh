@@ -36,12 +36,13 @@ source "${SCRIPT_DIR}/guards/config-initialized.sh"
 
 # Pre-flight security guards, each sourced (not subprocessed) so it can abort the
 # run with `exit` before any build/volume/container work. They read PROJECT_DIR /
-# HOME / MCP_GH_BEARER / CLAUDE_ALLOW_PROJECT_SETTINGS / CLAUDE_DOCKER_BRIDGE from
-# this scope.
+# HOME / MCP_GH_BEARER / CLAUDE_ALLOW_PROJECT_SETTINGS / CLAUDE_DOCKER_BRIDGE /
+# CLAUDE_CHROME_DEVTOOLS from this scope.
 source "${SCRIPT_DIR}/guards/no-home-dir.sh"
 source "${SCRIPT_DIR}/guards/project-settings.sh"
 source "${SCRIPT_DIR}/guards/mcp-bearer-no-push.sh"
 source "${SCRIPT_DIR}/guards/docker-bridge.sh"
+source "${SCRIPT_DIR}/guards/chrome-devtools.sh"
 # Sets EGRESS_CA_CRT, used just below and at step 4.
 source "${SCRIPT_DIR}/guards/egress-ca.sh"
 
@@ -331,6 +332,43 @@ case "${CLAUDE_DOCKER_BRIDGE:-}" in
     ;;
 esac
 
+# 3c-d. Host chrome-devtools bridge — OPT-IN, off by default, same shape as the
+#       docker bridge above: CLAUDE_CHROME_DEVTOOLS=1 mints a per-project token,
+#       forwards it, and opens the bridge port (with the switch off there is no
+#       firewall rule, so the port is unreachable even if the host daemon runs).
+#       The token identifies the project to the bridge, which picks that project's
+#       Chrome profile — CLAUDE_CHROME_PROFILE names one within it, so two
+#       containers on one project can each keep their own browser state. Token
+#       passed by bare name (like MCP_GH_BEARER) to keep it out of `docker run`'s
+#       argv, which host `ps` exposes. See docs/chrome-devtools-mcp.md.
+CHROME_DEVTOOLS_ARGS=()
+case "${CLAUDE_CHROME_DEVTOOLS:-}" in
+  1|true|yes|on|TRUE|YES|ON)
+    _CD_PORT="${CHROME_DEVTOOLS_MCP_PORT:-9333}"
+    _CD_TOKEN_FILE="${PROJECT_CONFIG_DIR}/chrome-devtools.token"
+    if [[ ! -s "${_CD_TOKEN_FILE}" ]]; then
+      # 32 random bytes, hex. od+/dev/urandom rather than openssl: no extra dep.
+      od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > "${_CD_TOKEN_FILE}"
+      chmod 600 "${_CD_TOKEN_FILE}"
+      kv "minted chrome-devtools token" "${_CD_TOKEN_FILE}"
+    fi
+    CHROME_DEVTOOLS_MCP_TOKEN="$(cat "${_CD_TOKEN_FILE}")"
+    # Always exported, so the ${CLAUDE_CHROME_PROFILE} expansion in
+    # mcp-servers.json never resolves empty.
+    CLAUDE_CHROME_PROFILE="${CLAUDE_CHROME_PROFILE:-default}"
+    export CHROME_DEVTOOLS_MCP_TOKEN CLAUDE_CHROME_PROFILE
+    CHROME_DEVTOOLS_ARGS=(--env CHROME_DEVTOOLS_MCP_TOKEN --env CLAUDE_CHROME_PROFILE)
+    # Merged only if the user has not already listed it by hand (step 3c-b), which
+    # would otherwise duplicate both the firewall rule and the label.
+    case ",${CONTAINER_HOST_OUTBOUND_PORTS}," in
+      *",${_CD_PORT},"*|*",${_CD_PORT}/tcp,"*) ;;
+      *) CONTAINER_HOST_OUTBOUND_PORTS+=",${_CD_PORT}"
+         CONTAINER_HOST_PORT_LABELS+=",${_CD_PORT}=chrome-devtools MCP bridge (browser runs on the host)" ;;
+    esac
+    kv "chrome-devtools bridge" "profile '${CLAUDE_CHROME_PROFILE}' via host.docker.internal:${_CD_PORT}"
+    ;;
+esac
+
 # 3d. In-repo paths backed by named volumes — SECURE BY DEFAULT: node_modules and
 #     pnpm's store live in per-project volumes, so installed (untrusted) packages
 #     stay off the host disk yet persist across runs. Everything — the automatic
@@ -457,6 +495,7 @@ docker run \
   --env CLAUDE_HOST_PROJECT_DIR="${PROJECT_DIR}" \
   --env MCP_GH_BEARER \
   ${DOCKER_BRIDGE_ARGS[@]+"${DOCKER_BRIDGE_ARGS[@]}"} \
+  ${CHROME_DEVTOOLS_ARGS[@]+"${CHROME_DEVTOOLS_ARGS[@]}"} \
   --env CONTAINER_OPEN_PORTS="${CONTAINER_OPEN_PORTS}" \
   --env CONTAINER_HOST_OUTBOUND_PORTS="${CONTAINER_HOST_OUTBOUND_PORTS}" \
   ${SANDBOX_ENV_ARGS[@]+"${SANDBOX_ENV_ARGS[@]}"} \

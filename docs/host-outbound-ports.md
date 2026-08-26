@@ -19,13 +19,13 @@ of range 1–65535, unknown protocol — are skipped with a warning.
 
 ## Ports merged automatically
 
-Two ports need no listing, and `CLAUDE_HOST_OUTBOUND_PORTS` adds **on top of** them:
+Three ports need no listing, and `CLAUDE_HOST_OUTBOUND_PORTS` adds **on top of** them:
 
 - **`SOUND_PORT`** (default `4767`) is always merged, so the [sound server](sound-effects.md) works
   out of the box.
 - **`DOCKER_BRIDGE_PORT`** (default `9334`) is merged only when `CLAUDE_DOCKER_BRIDGE=1`.
-
-The [chrome-devtools bridge](chrome-devtools-mcp.md) is *not* merged — open `9333` yourself.
+- **`CHROME_DEVTOOLS_MCP_PORT`** (default `9333`) is merged only when `CLAUDE_CHROME_DEVTOOLS=1` —
+  see the [chrome-devtools bridge](chrome-devtools-mcp.md).
 
 ## Direction: out vs in
 
