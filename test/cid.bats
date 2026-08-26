@@ -429,6 +429,71 @@ proj_containers() { echo "${CLAUDE_PROJECTS_DIR}"/*/docker-containers.txt; }
   [[ "$output" == *"no variable name matches"* ]]
 }
 
+# ---------------------------------------------------------------------------
+# watch / hosts — the egress alert watcher's viewers. The watcher itself is
+# covered by test/watch.bats; these check the cid side reaches it.
+# ---------------------------------------------------------------------------
+
+@test "watch: status reports the watcher and the notifier" {
+  run "${CID}" watch
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"watcher"* ]]
+  [[ "$output" == *"notifier"* ]]
+}
+
+@test "watch: log says so when nothing has been recorded" {
+  run "${CID}" watch log
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"none yet"* ]]
+}
+
+@test "watch: log prints the most recent alerts" {
+  printf 'ts\tinfo\tNew egress host: k\tcdn.example.com\n' \
+    > "${CLAUDE_DOCKER_CONFIG_DIR}/egress-alerts.log"
+  run "${CID}" watch log 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"cdn.example.com"* ]]
+}
+
+@test "watch: an unknown verb exits 2" {
+  run "${CID}" watch bogus
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown 'cid watch' verb"* ]]
+}
+
+@test "hosts: shows nothing recorded for a fresh project" {
+  run "${CID}" hosts -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"has contacted"* ]]
+  [[ "$output" == *"Recorded: none"* ]]
+}
+
+@test "hosts: lists what the watcher recorded" {
+  # `domains add` is the cheapest way to create the per-project dir; proj_file
+  # then finds it without recomputing the key hash, as the domains tests do.
+  "${CID}" domains add placeholder.test -C "${PROJ}"
+  local dir; dir="$(dirname "$(proj_file)")"
+  printf 'cdn.example.com\n' > "${dir}/seen-hosts.txt"
+  run "${CID}" hosts -C "${PROJ}"
+  [[ "$output" == *"cdn.example.com"* ]]
+}
+
+@test "hosts forget: removes the record so it alerts again" {
+  "${CID}" domains add placeholder.test -C "${PROJ}"
+  local dir; dir="$(dirname "$(proj_file)")"
+  printf 'cdn.example.com\n' > "${dir}/seen-hosts.txt"
+  run "${CID}" hosts forget -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"forgot every recorded host"* ]]
+  [ ! -f "${dir}/seen-hosts.txt" ]
+}
+
+@test "hosts forget: nothing to forget is not an error" {
+  run "${CID}" hosts forget -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nothing to forget"* ]]
+}
+
 @test "list: runs and names the config dir" {
   run "${CID}" list
   [ "$status" -eq 0 ]

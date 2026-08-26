@@ -130,6 +130,7 @@ run_staged() {
     PATH="${MOCK_BIN}:${PATH}" \
     CLAUDE_AUTO_USAGE=0 \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_EGRESS_ALERTS=0 \
     CLAUDE_DOCKER_CONFIG_DIR="${CLAUDE_DOCKER_CONFIG_DIR}" \
     CLAUDE_PROJECTS_DIR="${CLAUDE_PROJECTS_DIR}" \
     bash -c "cd '${dir}' && bash '${RUN_SH}'"
@@ -265,6 +266,7 @@ teardown() {
   run --separate-stderr env \
     PATH="${MOCK_BIN}:${PATH}" \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_ALLOW_PROJECT_SETTINGS=1 \
     bash -c "cd '${STAGED_DIR}' && bash '${RUN_SH}'"

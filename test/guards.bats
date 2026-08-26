@@ -82,6 +82,9 @@ EOF
   COMMON_ENV=(
     SKIP_CLAUDE_VOLUME_PATHS=1
     CLAUDE_AUTO_USAGE=0
+    # Never background a real egress alert watcher from a test; proxy/watch.sh
+    # has its own suite.
+    CLAUDE_EGRESS_ALERTS=0
     MCP_GH_BEARER=""
   )
 }

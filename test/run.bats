@@ -146,11 +146,15 @@ EOF
   # Convenience: run run.sh from the isolated project dir with test-safe env vars
   # SKIP_CLAUDE_VOLUME_PATHS=1  — skip node_modules docker volume creation
   # CLAUDE_AUTO_USAGE=0         — skip post-run usage sync
+  # CLAUDE_EGRESS_ALERTS=0      — do not background a real egress alert watcher.
+  #   It would outlive the test (that is its job) and, with docker stubbed, retry
+  #   until it gave up. proxy/watch.sh is covered by test/watch.bats.
   # MCP_GH_BEARER is unset/empty — avoid any accidental env leak
   RUN_CMD=(
     env
       SKIP_CLAUDE_VOLUME_PATHS=1
       CLAUDE_AUTO_USAGE=0
+      CLAUDE_EGRESS_ALERTS=0
       MCP_GH_BEARER=""
     bash "${RUN_SH}"
   )
@@ -255,6 +259,7 @@ refute_run_arg() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     CLAUDE_PORTS="3000" \
     bash "${RUN_SH}"
@@ -268,6 +273,7 @@ refute_run_arg() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     CLAUDE_PORTS="3000" \
     bash "${RUN_SH}"
@@ -280,6 +286,7 @@ refute_run_arg() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     CLAUDE_PORTS="3000,4000" \
     bash "${RUN_SH}"
@@ -293,6 +300,7 @@ refute_run_arg() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     CLAUDE_PORTS="8080:3000" \
     bash "${RUN_SH}"
@@ -305,6 +313,7 @@ refute_run_arg() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     CLAUDE_PORTS="" \
     bash "${RUN_SH}"
@@ -317,6 +326,7 @@ refute_run_arg() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     bash "${RUN_SH}"
   [ "$status" -eq 0 ]
@@ -328,6 +338,7 @@ refute_run_arg() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     CLAUDE_HOST_OUTBOUND_PORTS="8080,9000/udp" \
     bash "${RUN_SH}"
@@ -340,6 +351,7 @@ refute_run_arg() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     SOUND_PORT="5000" \
     CLAUDE_HOST_OUTBOUND_PORTS="8080" \
@@ -366,6 +378,7 @@ refute_run_arg() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     CLAUDE_PORTS="9345:3000" \
     bash "${RUN_SH}"
@@ -378,6 +391,7 @@ refute_run_arg() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     CLAUDE_PORTS="127.0.0.1:5000:5000" \
     bash "${RUN_SH}"
@@ -404,6 +418,7 @@ refute_run_arg() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     CLAUDE_HOST_OUTBOUND_PORTS="9333" \
     bash "${RUN_SH}"
@@ -418,6 +433,7 @@ refute_run_arg() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     CLAUDE_MOUNTS="${mount_src}" \
     bash "${RUN_SH}"
@@ -434,6 +450,7 @@ refute_run_arg() {
   : > pnpm-lock.yaml
   run env \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     bash "${RUN_SH}"
   [ "$status" -eq 0 ]
@@ -443,11 +460,20 @@ refute_run_arg() {
   ! grep -q "^CONTAINER_VOLUME_PATHS=.*npm_config_store_dir" "${DOCKER_RUN_ARGS}"
 }
 
+@test "CLAUDE_EGRESS_ALERTS=0: says so and starts no watcher" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"egress alerts: disabled (CLAUDE_EGRESS_ALERTS)"* ]]
+  [ ! -f "${CLAUDE_DOCKER_CONFIG_DIR}/watcher.pid" ]
+}
+
 @test "CLAUDE_SANDBOX_INFO=0: no skill mount and no sandbox env vars" {
   cd "${TEST_PROJECT_DIR}"
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     CLAUDE_SANDBOX_INFO=0 \
     CLAUDE_PORTS="9345:3000" \
@@ -472,6 +498,7 @@ refute_run_arg() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     CLAUDE_MOUNTS="${mount_src}" \
     bash "${RUN_SH}"
@@ -486,6 +513,7 @@ refute_run_arg() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     CLAUDE_MOUNTS="${mount_src}:rw" \
     bash "${RUN_SH}"
@@ -498,6 +526,7 @@ refute_run_arg() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     CLAUDE_MOUNTS="/nonexistent/path-that-does-not-exist" \
     bash "${RUN_SH}"
@@ -510,6 +539,7 @@ refute_run_arg() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     bash "${RUN_SH}"
   [ "$status" -eq 0 ]
@@ -572,6 +602,7 @@ refute_run_arg() {
   # Note: SKIP_CLAUDE_VOLUME_PATHS is intentionally NOT set, so the guard runs.
   run env \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     CLAUDE_VOLUME_PATHS="~/claude-macbook-help/claude-in-docker" \
     bash "${RUN_SH}"
@@ -594,6 +625,7 @@ refute_run_arg() {
   : > pnpm-lock.yaml
   run env \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     bash "${RUN_SH}"
   [ "$status" -eq 0 ]
@@ -606,6 +638,7 @@ refute_run_arg() {
   printf '{"name":"t"}\n' > package.json
   run env \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     STUB_VOLUME_EXISTS=1 \
     bash "${RUN_SH}"
@@ -619,6 +652,7 @@ refute_run_arg() {
   printf '{"name":"t"}\n' > package.json
   run env \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     STUB_CHOWN_FAIL=1 \
     bash "${RUN_SH}"
