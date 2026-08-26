@@ -113,8 +113,11 @@ Set CLAUDE_CHROME_PROFILE to keep state.
 ```
 
 The first browser is never killed for the second. A label counts as in use only while **a browser is
-running** (Chrome's own `SingletonLock`, pid checked) or **a client is still connected** on its GET
-stream — not merely while a session object exists. That distinction matters because the server is
+running** or **a client is still connected** on its GET stream — not merely while a session object
+exists. "A browser is running" means Chrome's own `SingletonLock` names a pid that `ps` still reports
+as a Chrome: the lock survives anything but a clean quit, and this bridge kills the server out from
+under its browser, so a leftover lock is the normal case. Checking only that the pid is alive would
+hand the profile to whatever process later inherits that number — permanently. That distinction matters because the server is
 spawned at `initialize` while Chrome launches lazily on first tool use, so a session can hold a label
 for a long time with no browser behind it. A claim failing both tests is stale: the next session
 reclaims the profile and the abandoned server is killed, so it can never launch Chrome onto a

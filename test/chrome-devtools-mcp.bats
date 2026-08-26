@@ -69,6 +69,15 @@ EOF
 
 teardown() {
   [ -n "${BRIDGE_PID:-}" ] && kill "${BRIDGE_PID}" 2>/dev/null || true
+  [ -n "${CHROME_PID:-}" ] && kill "${CHROME_PID}" 2>/dev/null || true
+}
+
+# A live process that `ps -o comm=` reports as a browser, standing in for the
+# Chrome holding a profile lock. Sets CHROME_PID.
+fake_chrome() {
+  cp "$(command -v sleep)" "${BATS_TEST_TMPDIR}/bin/chrome"
+  "${BATS_TEST_TMPDIR}/bin/chrome" 30 &
+  CHROME_PID=$!
 }
 
 # Launch the bridge, optionally with extra `VAR=value` overrides, and wait for
@@ -263,8 +272,10 @@ call_on() {  # call_on <sid> <token>
 
 @test "same label with a running Chrome: the second is isolated and the first survives" {
   sid_1="$(init_sid "${TOKEN_A}" default)"
-  # Stand in for a live browser: Chrome's own lock, naming a pid that is alive.
-  ln -s "$(hostname)-$$" "${PROFILES}/proj-a/default/SingletonLock"
+  # Stand in for a live browser: Chrome's own lock, naming a live process whose
+  # name looks like Chrome (the bridge asks `ps` what the pid actually is).
+  fake_chrome
+  ln -sfn "$(hostname)-${CHROME_PID}" "${PROFILES}/proj-a/default/SingletonLock"
 
   sid_2="$(init_sid "${TOKEN_A}" default)"
   run sed -n 2p "${ARGS_LOG}"
@@ -281,6 +292,16 @@ call_on() {  # call_on <sid> <token>
   init_sid "${TOKEN_A}" default > /dev/null
   # A pid that cannot be running: Chrome crashed and left its lock behind.
   ln -sfn "$(hostname)-2147483647" "${PROFILES}/proj-a/default/SingletonLock"
+  init_sid "${TOKEN_A}" default > /dev/null
+  run sed -n 2p "${ARGS_LOG}"
+  [[ "$output" == *"--user-data-dir=${PROFILES}/proj-a/default"* ]]
+}
+
+@test "a stale lock whose pid was reused by something else does not block it" {
+  # Chrome is killed rather than quit (dropSession kills the server), so the lock
+  # outlives it and any process inheriting the pid must NOT read as a browser.
+  init_sid "${TOKEN_A}" default > /dev/null
+  ln -sfn "$(hostname)-$$" "${PROFILES}/proj-a/default/SingletonLock"   # bats' own shell
   init_sid "${TOKEN_A}" default > /dev/null
   run sed -n 2p "${ARGS_LOG}"
   [[ "$output" == *"--user-data-dir=${PROFILES}/proj-a/default"* ]]
