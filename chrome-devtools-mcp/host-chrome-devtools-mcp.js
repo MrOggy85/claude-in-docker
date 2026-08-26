@@ -28,7 +28,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const crypto = require('crypto');
 
 const PORT = parseInt(process.env.CHROME_DEVTOOLS_MCP_PORT || '9333', 10);
@@ -159,15 +159,29 @@ function sessionFor(projectKey, label) {
 }
 
 // Is a Chrome actually using this profile? Chrome locks a user-data-dir with a
-// SingletonLock symlink -> "<hostname>-<pid>"; it runs on this host, so the pid
-// is checkable. EPERM means alive but owned by another user. A stale lock left
-// by a crash names a dead pid and so reads as free.
+// SingletonLock symlink -> "<hostname>-<pid>", and it runs on this host, so the
+// pid is checkable.
+//
+// "Is that pid alive" is NOT enough. Chrome removes the lock only on a clean
+// exit, and dropSession kills the server out from under its browser — so a
+// leftover lock is the normal case here, not a crash artifact. Any process that
+// later inherits the pid then reads as a live Chrome and the profile is
+// unreachable forever. (Worse for a root-owned pid: kill(pid, 0) raises EPERM,
+// which says "exists, not yours".) So ask what the process actually IS. `ps`
+// exits non-zero once the pid is gone, which covers both questions at once.
 function chromeAlive(dir) {
   let target;
   try { target = fs.readlinkSync(path.join(dir, 'SingletonLock')); } catch { return false; }
   const pid = parseInt(target.slice(target.lastIndexOf('-') + 1), 10);
   if (!Number.isInteger(pid) || pid <= 0) return false;
-  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+
+  let comm;
+  try {
+    comm = execFileSync('ps', ['-p', String(pid), '-o', 'comm='],
+                        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch { return false; }   // no such pid
+  // macOS prints the executable's full path here, Linux the (truncated) name.
+  return /chrom(e|ium)/i.test(comm);
 }
 
 // The profile flags for a new session: a named directory, or --isolated. Never
