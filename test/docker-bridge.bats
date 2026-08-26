@@ -114,6 +114,17 @@ call_tool() {
   [ -n "$sid" ]
 }
 
+@test "a token minted into an existing project dir is seen without a restart" {
+  # The project dir already exists, so writing a token into it does not move the
+  # projects dir's mtime — the bridge must still notice.
+  mkdir -p "${PROJECTS}/gamma"
+  printf 'other-svc\n' > "${PROJECTS}/gamma/docker-containers.txt"
+  sleep 1.2   # TOKEN_TTL_MS
+  printf '%s' 't0kenC' > "${PROJECTS}/gamma/docker-bridge.token"
+  sid="$(init_sid 't0kenC')"
+  [ -n "$sid" ]
+}
+
 @test "another project's session id is not usable with this project's token" {
   other_sid="$(init_sid "${OTHER_TOKEN}")"
   [ -n "$other_sid" ]

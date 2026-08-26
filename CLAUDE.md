@@ -133,8 +133,8 @@ wrapped bullets.
   the grouped output both callers print. See docs/attack-vectors.md.
 - `guards/` — pre-flight security gates, each `source`d by `run.sh` so it can
   `exit` the run before any build/container work (home-dir, project-settings,
-  MCP token no-code-push check, egress CA). Add new guards here, not inline in
-  `run.sh`.
+  MCP token no-code-push check, docker bridge, chrome bridge, egress CA). Add new
+  guards here, not inline in `run.sh`.
   `project-settings.sh` prompts only about what the scanner flags and remembers
   the approved risk digest per project, so an unchanged profile never re-asks.
 - `sync-volume.sh` / `usage.sh` — copy per-session usage records out of the
@@ -150,12 +150,18 @@ wrapped bullets.
   allowlist), per-project `docker-containers.txt`, fixed argv. Opt-in via
   `CLAUDE_DOCKER_BRIDGE=1`; sanity-checked by `guards/docker-bridge.sh`. No
   mutating verb exists — see docs/docker-bridge.md.
-- `chrome-devtools-mcp/` — host-side bridge (mirrors `sound-effects/`): an
+- `chrome-devtools-mcp/` — host-side bridge (the four-file shape again, plus a
+  `Makefile` wrapping launchctl: `install` rewrites the plist's path to this
+  checkout, `restart`/`status`/`log`/`profiles` operate the running agent): an
   nvm-sourcing launcher + a macOS launchd plist that run a small zero-dep Node
   bridge (`host-chrome-devtools-mcp.js`) which spawns the stdio `chrome-devtools-mcp`
   server on the host and re-exposes it over MCP Streamable HTTP; the container
-  reaches it via `host.docker.internal` on a host-outbound port. See
-  docs/chrome-devtools-mcp.md.
+  reaches it via `host.docker.internal` on a host-outbound port. Auth and session
+  routing are lifted from `docker-bridge/` — a per-project bearer token names the
+  project, an `X-Claude-Profile` label names a Chrome profile inside it
+  (`~/.cache/claude-in-docker/chrome-profiles/<key>/<label>`), and one session per
+  browser means concurrent containers no longer evict each other. Opt-in via
+  `CLAUDE_CHROME_DEVTOOLS=1`. See docs/chrome-devtools-mcp.md.
 - `docs/` — feature guides.
 - `.claude/commands/` — committed slash commands (`/tighten-docs`); the only
   negation in `.gitignore`'s `.claude/*` rule. Prompts only: never add a settings
