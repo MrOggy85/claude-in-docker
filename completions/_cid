@@ -42,6 +42,7 @@ _cid_envvars() {
     CLAUDE_DOCKER_BRIDGE DOCKER_BRIDGE_PORT DOCKER_BRIDGE_BIND
     DOCKER_BRIDGE_DOCKER_CMD CLAUDE_VOLUME
     CLAUDE_CONTAINER_NAME CLAUDE_EGRESS_NETWORK CLAUDE_EGRESS_PROXY_NAME
+    CLAUDE_EGRESS_ALERTS CLAUDE_NOTIFY_CMD CLAUDE_DENY_ALERT_COOLDOWN
     CLAUDE_EGRESS_IMAGE CA_DAYS CA_KEY_BITS CA_CN
     CLAUDE_AUTO_USAGE CLAUDE_USAGE_DIR CLAUDE_USAGE_ONLINE
     CCUSAGE_VERSION
@@ -99,6 +100,8 @@ _cid() {
     'ca:show the egress CA (path, expiry, fingerprint)'
     'containers:show or edit the docker-bridge container allowlist'
     'settings:what the project .claude/settings*.json grants'
+    'watch:egress alert watcher status / start / stop / log'
+    'hosts:hosts this project has already contacted'
     'env:list the environment variables you can set'
     'help:show usage'
   )
@@ -119,6 +122,32 @@ _cid() {
           ;;
         env)
           _cid_envvars
+          ;;
+        watch)
+          local -a subs
+          subs=(
+            'status:is the watcher running, and which notifier does it use'
+            'start:start it (run.sh does this on every run)'
+            'stop:stop it'
+            'log:show the most recent egress alerts'
+          )
+          _describe -t subcommands 'watch action' subs
+          ;;
+        hosts)
+          _arguments \
+            '(-C --dir --project)'{-C,--dir,--project}'[select project by directory]:dir:_files -/' \
+            '1: :->sub'
+          case $state in
+            sub)
+              local -a subs
+              subs=(
+                'ls:show the hosts this project has contacted'
+                'forget:clear the record, so every host alerts again'
+              )
+              _describe -t subcommands 'hosts action' subs
+              _files -/
+              ;;
+          esac
           ;;
         settings)
           _arguments \

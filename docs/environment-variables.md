@@ -53,6 +53,14 @@ rename the shared network and container, or swap the image.
 | `CLAUDE_EGRESS_PROXY_NAME` | `claude-egress-proxy` | Name of the long-running Squid container. | [Centralized Egress Proxy](egress-proxy.md) |
 | `CLAUDE_EGRESS_IMAGE` | `claude-egress-squid:local` | Squid image `proxy/up.sh` runs. Set it to use your own image instead of building `proxy/Dockerfile` — it must be an `ssl_bump`-capable build. | [TLS Inspection](tls-inspection.md) |
 
+Read by the egress alert watcher (`proxy/watch.sh`), which `run.sh` starts alongside the proxy:
+
+| Variable | Default | Description | Reference |
+| --- | --- | --- | --- |
+| `CLAUDE_EGRESS_ALERTS` | `1` | Set `0` to skip starting the watcher, turning off first-time-host and denial notifications. | [Egress Alerts](egress-alerts.md) |
+| `CLAUDE_NOTIFY_CMD` | (unset) | Command to notify with instead of `osascript` / `notify-send`, called as `<cmd> <urgency> <title> <body>`. | [Egress Alerts](egress-alerts.md) |
+| `CLAUDE_DENY_ALERT_COOLDOWN` | `300` | Seconds before the same denied host may alert again. | [Egress Alerts](egress-alerts.md) |
+
 Read by `make ca` (`scripts/gen-ca.sh`) only, when generating the CA — changing one later has no
 effect until you rotate:
 

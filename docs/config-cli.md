@@ -27,6 +27,11 @@ hand.
 ./cid settings trust '<rule>'    # stop flagging a permissions.allow rule
 ./cid settings untrust '<rule>'  # flag it again
 ./cid settings forget            # drop the approved risk profile, so the next run re-prompts
+./cid watch [status]             # egress alert watcher: running? notifier? recorded here?
+./cid watch start|stop           # start / stop it (run.sh starts it on every run)
+./cid watch log [n]              # the last n egress alerts (default 20)
+./cid hosts [dir]                # hosts this project has contacted; anything else alerts
+./cid hosts forget               # clear that record, so every host alerts again
 ./cid env [filter]               # list the env vars you can set (current value / default)
 ./cid help
 ```
@@ -164,6 +169,20 @@ Deletes the approval memo (`<config-dir>/projects/<key>/approved-project-setting
 prompts again. The memo holds a sha256 of the flagged records plus the records themselves, and lives
 outside the project so a repo cannot approve itself. See [Known Attack
 Vectors](attack-vectors.md#project-level-claude-settings-mitigated-by-default).
+
+### `watch` / `hosts`
+
+The two sides of the egress alert watcher, which notifies when a project reaches a host it never has
+before. `watch` operates the daemon and reads its alert log; `hosts` shows and resets what it has
+recorded for a project (`-C` to pick one). Full behaviour in [Egress Alerts](egress-alerts.md).
+
+```bash
+cid watch                    # running? which notifier? how many hosts recorded here?
+cid watch log 50             # the last 50 alerts, oldest first
+cid watch stop               # ...run.sh starts it again next session
+cid hosts                    # every host this project has contacted
+cid hosts forget             # clear it, so each host alerts on next contact
+```
 
 ## Listing environment variables
 

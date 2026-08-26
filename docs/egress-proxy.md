@@ -85,6 +85,9 @@ decrypted hosts it is the full URL of every request every session made — which
 [`guards/docker-bridge.sh`](../guards/docker-bridge.sh) refuses to expose this container to the
 read-only docker bridge.
 
+`proxy/watch.sh` reads that same stream on the host and notifies when a project reaches a host it
+never has before, or is denied — see [Egress Alerts](egress-alerts.md).
+
 ### Health
 
 Squid outlives a helper that cannot start — it respawns it forever while every allowlist lookup

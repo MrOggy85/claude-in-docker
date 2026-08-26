@@ -64,14 +64,25 @@ wrapped bullets.
   (`say`/`kv`/`ok` on the info fd, `warn`/`fail`/`cont` on stderr). Change how a
   message looks here, never at the call site. `init-firewall.sh` carries the one
   deliberate copy — it runs inside the image, where this file does not exist.
+- `scripts/notify.sh` — sourced helper owning host desktop notifications, the way
+  `colors.sh` owns terminal output: `notify_init <log>` picks the backend
+  (CLAUDE_NOTIFY_CMD, then macOS `osascript`, then `notify-send`, then log-only)
+  and `notify <info|alert> <title> <body>` emits, always also appending to the
+  alert log. `info` auto-dismisses, `alert` does not. It strips every character
+  outside a safe charset first — its input carries an attacker-chosen hostname
+  headed for an AppleScript string, so that sanitisation stays HERE, not at the
+  call sites. Only `proxy/watch.sh` sources it. See docs/egress-alerts.md.
 - `cid` — the config CLI. Read-only viewers (`list` / `show` / `project` /
-  `domains` / `skip-decryption` / `containers` / `settings` / `ca` / `env`) plus
+  `domains` / `skip-decryption` / `containers` / `settings` / `ca` / `watch` /
+  `hosts` / `env`) plus
   in-place allowlist editing (`domains add|rm <host>`,
   `skip-decryption add|rm <host>`,
   `containers add|rm <name>`, `settings trust|untrust <rule>`, `-g` for the
   shared baseline, `-C dir` to pick the project; all four share `_resolve_target` +
   `_entries_add`/`_entries_rm`, so add a kind there rather than duplicating).
-  `env` lists the settable host env vars (terminal mirror of
+  `watch` operates `proxy/watch.sh` and reads its alert log; `hosts` shows and
+  clears one project's `seen-hosts.txt`. `env` lists the settable host env vars
+  (terminal mirror of
   docs/environment-variables.md — keep the ENV_VARS list in sync). Meant to go on
   `$PATH`; ships a zsh completion in `completions/_cid`. See docs/config-cli.md.
 - `scripts/migrate-config.sh` — `make migrate`: moves a pre-existing repo-root
@@ -92,8 +103,13 @@ wrapped bullets.
   container. `up.sh` builds the image (`Dockerfile` + `entrypoint.sh`: Debian's
   plain `squid` rejects `ssl_bump`, so `squid-openssl` it is) and brings it up;
   `squid.conf` + `ext-allowlist.sh` enforce each project's `allowed-domains.txt`
-  by hostname and decide whether to decrypt. See `docs/egress-proxy.md` and
-  `docs/tls-inspection.md`.
+  by hostname and decide whether to decrypt. `watch.sh` is the detection half and
+  the only host-side file here: `run.sh` starts it per run, it tails
+  `docker logs -f` on the proxy and notifies on a first-time or denied host. Its
+  `process` verb is the whole classifier — access-log lines in, alert lines out,
+  no docker — so keep new parsing there, where test/watch.bats can reach it. Being
+  outside the container is the point; nothing about this may move inside one. See
+  `docs/egress-proxy.md`, `docs/tls-inspection.md` and `docs/egress-alerts.md`.
 - `scripts/gen-ca.sh` — `make ca`: the CA Squid signs intercepted TLS with, in
   `<config-dir>/ca/`. `ca.key` goes only to the proxy container; `ca.crt` also
   goes into the image trust store. Interception is mandatory —
@@ -107,7 +123,9 @@ wrapped bullets.
   `docker-containers.txt` follows the same baseline+per-project layout for the
   docker bridge, read per call instead of on a TTL, and so does
   `trusted-settings-rules.txt` (permission rules the settings guard must not
-  flag), read per run.
+  flag), read per run. `seen-hosts.txt` is the odd one out: per-project only, no
+  baseline, and WRITTEN (by `proxy/watch.sh`) rather than read as policy — it
+  records what has been contacted, not what is permitted.
 - `skills/sandbox/` — the one thing mounted *for* the session rather than the
   user: an on-demand skill (`SKILL.md` + `sandbox-info.sh`) reporting this
   session's published host↔container ports, mounts, volume-backed paths, egress

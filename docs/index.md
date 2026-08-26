@@ -4,6 +4,7 @@
 - [Changing Settings for One Session](session-settings.md) — why `/effort` fails with `EBUSY` on the read-only `settings.json`, and the `run.sh` flags to use instead
 - [Centralized Egress Proxy](egress-proxy.md) — the network boundary: every container egresses through one shared Squid proxy that filters by hostname per project
 - [TLS Inspection](tls-inspection.md) — the proxy decrypts HTTPS with a local CA: setup, rotation, which runtimes need pointing at it, and how to exempt a host
+- [Egress Alerts](egress-alerts.md) — a host-side desktop notification the moment a project reaches a host it never has before, or is denied
 - [MCP Servers](mcp-servers.md) — configure user-level, project-level, and GitHub MCP servers
 - [Mounting Extra Folders](mounting-extra-folders.md) — mount additional host folders via `CLAUDE_MOUNTS`
 - [Publishing Ports](publishing-ports.md) — expose a container server to the host via `CLAUDE_PORTS`

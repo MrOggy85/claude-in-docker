@@ -165,6 +165,7 @@ function claude {
 - [The `cid` config CLI](docs/config-cli.md) — inspect config and edit the allowlists (`cid domains add|rm`, `cid containers add|rm`, per-project or `-g` baseline) without hand-editing files; put it on `$PATH` and ships zsh completion
 - [Centralized Egress Proxy](docs/egress-proxy.md) — the network boundary: every container egresses through one shared Squid proxy that filters by hostname per project
 - [TLS Inspection](docs/tls-inspection.md) — the proxy decrypts HTTPS with a local CA: setup, rotation, which runtimes need pointing at it, and how to exempt a host
+- [Egress Alerts](docs/egress-alerts.md) — a host-side desktop notification the moment a project reaches a host it never has before, or is denied by the allowlist
 - [Threat Model](docs/threat-model.md) — one-page summary of what this protects against and what it doesn't, plus how to [report a vulnerability](SECURITY.md)
 - [Known Attack Vectors](docs/attack-vectors.md) — the full vector-by-vector detail: what's mitigated (project-settings/permissions guard, MCP token, egress) and what isn't
 - [MCP Servers](docs/mcp-servers.md) — configure user-level, project-level, and GitHub MCP servers

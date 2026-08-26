@@ -136,6 +136,7 @@ teardown() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     bash "${RUN_SH}"
   [ "$status" -eq 0 ]
 }
@@ -145,6 +146,7 @@ teardown() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="" \
     bash "${RUN_SH}"
   [ "$status" -eq 0 ]
@@ -171,6 +173,7 @@ teardown() {
     PATH="${STUB_DIR}/no-curl-bin" \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="ghp_testtoken" \
     "${STUB_DIR}/no-curl-bin/bash" "${RUN_SH}"
   [ "$status" -eq 0 ]
@@ -187,6 +190,7 @@ teardown() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="ghp_invalidtoken" \
     CURL_STUB_STATUS="401" \
     bash "${RUN_SH}"
@@ -204,6 +208,7 @@ teardown() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="ghp_classictoken" \
     CURL_STUB_STATUS="200" \
     CURL_STUB_SCOPES="repo,read:user" \
@@ -218,6 +223,7 @@ teardown() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="ghp_classictoken" \
     CURL_STUB_STATUS="200" \
     CURL_STUB_SCOPES="workflow" \
@@ -232,6 +238,7 @@ teardown() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="ghp_classictoken" \
     CURL_STUB_STATUS="200" \
     CURL_STUB_SCOPES="public_repo" \
@@ -250,6 +257,7 @@ teardown() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="ghp_classictoken" \
     CURL_STUB_STATUS="200" \
     CURL_STUB_SCOPES="read:user,read:org" \
@@ -267,6 +275,7 @@ teardown() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="github_pat_finetoken" \
     CURL_STUB_STATUS="200" \
     CURL_STUB_SCOPES="" \
@@ -282,6 +291,7 @@ teardown() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="github_pat_finetoken" \
     CURL_STUB_STATUS="200" \
     CURL_STUB_SCOPES="" \
@@ -300,6 +310,7 @@ teardown() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="ghp_testtoken" \
     CURL_STUB_STATUS="" \
     bash "${RUN_SH}"
@@ -316,6 +327,7 @@ teardown() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="ghp_testtoken" \
     CURL_STUB_STATUS="403" \
     bash "${RUN_SH}"
@@ -329,6 +341,7 @@ teardown() {
   run env \
     SKIP_CLAUDE_VOLUME_PATHS=1 \
     CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
     MCP_GH_BEARER="ghp_testtoken" \
     CURL_STUB_STATUS="500" \
     bash "${RUN_SH}"

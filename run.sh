@@ -434,6 +434,25 @@ if [[ -n "${PROXY_ACTION}" ]]; then
   CLAUDE_PROJECTS_DIR="${PROJECTS_DIR}" \
     "${SCRIPT_DIR}/proxy/up.sh"
 fi
+# 3f-2. Compromise detection, such as it can be: a host-side watcher on the
+#     proxy's access log that notifies the moment any project reaches a host it
+#     never has before, or is denied. Started here rather than installed, so it
+#     is running whenever a session is; it survives this run.sh and is shared by
+#     every project. Never fatal — a missing notifier must not block a session.
+#     CLAUDE_EGRESS_ALERTS=0 disables it. See docs/egress-alerts.md.
+case "${CLAUDE_EGRESS_ALERTS:-1}" in
+  0|false|no|off|FALSE|NO|OFF) kv "egress alerts" "disabled (CLAUDE_EGRESS_ALERTS)" ;;
+  *)
+    CLAUDE_EGRESS_PROXY_NAME="${EGRESS_PROXY_NAME}" \
+    CLAUDE_DOCKER_CONFIG_DIR="${CONFIG_DIR}" \
+    CLAUDE_PROJECTS_DIR="${PROJECTS_DIR}" \
+      "${SCRIPT_DIR}/proxy/watch.sh" start \
+      || warn "egress alert watcher not started" \
+              "First-time-host and denial alerts are OFF for this session." \
+              "Check: cid watch status"
+    ;;
+esac
+
 PROXY_NET_ARGS=(--network "${EGRESS_NETWORK}")
 # The proxy decrypts TLS, so the container has to trust its CA. The image bakes it
 # into the system store (see the Dockerfile); Node reads neither that nor
