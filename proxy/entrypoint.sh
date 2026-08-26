@@ -16,6 +16,10 @@
 set -eu
 
 CA_SRC="${CA_SRC:-/etc/squid/ca-src}"
+# up.sh mounts proxy/ whole at this path — squid.conf and both helpers are read
+# from there, not from /etc/squid, so replacing a file on the host cannot leave
+# the container with a dangling single-file mount.
+SQUID_CONF="${SQUID_CONF:-/etc/squid/src/squid.conf}"
 CA_DIR="${CA_DIR:-/var/lib/squid/ca}"
 SSL_DB="${SSL_DB:-/var/lib/squid/ssl_db}"
 CERTGEN="${CERTGEN:-/usr/lib/squid/security_file_certgen}"
@@ -48,4 +52,4 @@ chown -R proxy:proxy /var/log/squid /var/spool/squid
 
 # -N foreground, -d1 log level 1 to stderr so `docker logs` shows startup errors
 # (a bad ssl_bump line, an unreadable key) instead of the container just dying.
-exec /usr/sbin/squid -N -d1 "$@"
+exec /usr/sbin/squid -N -d1 -f "${SQUID_CONF}" "$@"

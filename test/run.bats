@@ -90,7 +90,18 @@ case "\$1" in
     # container inspect (egress-proxy liveness check): report the proxy as
     # already running so run.sh does NOT invoke proxy/up.sh — that would issue a
     # second 'docker run' and clobber DOCKER_RUN_ARGS with Squid's flags.
-    echo "true"
+    # run.sh asks for Running+Health together, up.sh for Running alone; answer
+    # each in its own format so STUB_PROXY_HEALTH can drive run.sh down the
+    # recreate path without tripping up.sh's own liveness loop.
+    if [[ "\$*" == *Health* ]]; then echo "true \${STUB_PROXY_HEALTH:-}"
+    else                             echo "true"
+    fi
+    exit 0
+    ;;
+  exec)
+    # up.sh probes the allowlist helper through 'docker exec' after starting the
+    # proxy; ERR is the helper's answer for an unlisted host.
+    echo "ERR"
     exit 0
     ;;
   network)
@@ -661,6 +672,22 @@ refute_run_arg() {
   [ "$status" -eq 0 ]
   assert_run_arg "--network"
   assert_run_arg "claude-egress"
+}
+
+@test "healthy egress proxy: left alone, not recreated" {
+  cd "${TEST_PROJECT_DIR}"
+  run env STUB_PROXY_HEALTH=healthy "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"recreating egress proxy"* ]]
+}
+
+@test "unhealthy egress proxy: recreated, since Docker acts on health itself" {
+  # The only test that actually reaches proxy/up.sh, which mounts this list.
+  printf 'example.com\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/allowed-domains.txt"
+  cd "${TEST_PROJECT_DIR}"
+  run env STUB_PROXY_HEALTH=unhealthy "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"recreating egress proxy"* ]]
 }
 
 @test "docker run always sets EGRESS_PROXY_HOST=squid" {

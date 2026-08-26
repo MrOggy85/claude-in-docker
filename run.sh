@@ -374,9 +374,20 @@ kv "env file" "${ENV_FILE}"
 EGRESS_NETWORK="${CLAUDE_EGRESS_NETWORK:-claude-egress}"
 EGRESS_PROXY_NAME="${CLAUDE_EGRESS_PROXY_NAME:-claude-egress-proxy}"
 PROXY_URL="http://${PROJECT_KEY}:x@squid:3128"
-# Bring the shared proxy up if it isn't already running (up.sh is idempotent).
-if [[ "$(docker container inspect -f '{{.State.Running}}' "${EGRESS_PROXY_NAME}" 2>/dev/null || true)" != "true" ]]; then
-  kv "starting egress proxy (not running)" "${EGRESS_PROXY_NAME}"
+# Bring the shared proxy up if it isn't already running, or recreate it if its
+# HEALTHCHECK (proxy/Dockerfile) says the allowlist helper stopped answering —
+# Docker itself acts on neither. up.sh is idempotent either way.
+PROXY_STATE="$(docker container inspect \
+  -f '{{.State.Running}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' \
+  "${EGRESS_PROXY_NAME}" 2>/dev/null || true)"
+PROXY_ACTION=""
+if [[ "${PROXY_STATE}" != true* ]]; then
+  PROXY_ACTION="starting egress proxy (not running)"
+elif [[ "${PROXY_STATE}" == *unhealthy ]]; then
+  PROXY_ACTION="recreating egress proxy (unhealthy — allowlist helper not answering)"
+fi
+if [[ -n "${PROXY_ACTION}" ]]; then
+  kv "${PROXY_ACTION}" "${EGRESS_PROXY_NAME}"
   # Forward config/projects locations so the proxy reads the SAME baseline
   # allowlist and per-project dirs that run.sh mounts from.
   CLAUDE_EGRESS_NETWORK="${EGRESS_NETWORK}" \
