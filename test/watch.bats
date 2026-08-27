@@ -41,8 +41,14 @@ EOF
 # than returning the line, because $(...) would eat the newline that separates
 # two of them.
 add() {  # <epoch> <result/status> <url> <project-key>
-  LOG+="$(printf '%s      1 172.19.0.3 %s 100 CONNECT %s %s HIER_DIRECT/1.2.3.4 -' \
-    "$1" "$2" "$3" "$4")"$'\n'
+  add_req "$1" "$2" CONNECT "$3" "$4"
+}
+
+# Same, for a request logged INSIDE an established tunnel — the decrypted kind,
+# whose method is its own and whose URL carries a path.
+add_req() {  # <epoch> <result/status> <method> <url> <project-key>
+  LOG+="$(printf '%s      1 172.19.0.3 %s 100 %s %s %s HIER_DIRECT/1.2.3.4 -' \
+    "$1" "$2" "$3" "$4" "$5")"$'\n'
 }
 
 # Classify $LOG (or the argument); alert lines land in $output.
@@ -166,6 +172,60 @@ hits() {  # <pattern>
   add 1001.0 TCP_TUNNEL/200 x.example.com:443 proj-aaa111
   proc
   [ "$(hits 'x.example.com')" -eq 1 ]
+}
+
+# ---------------------------------------------------------------------------
+# Denied by a path/method rule — the host cleared the CONNECT and the request
+# inside the tunnel did not, so the fix is the opposite of "allow this host".
+# ---------------------------------------------------------------------------
+
+@test "a 403 inside the tunnel is reported as a rule denial, not a host denial" {
+  add     1000.0 TCP_TUNNEL/200 api.example.com:443 proj-aaa111
+  add_req 1001.0 TCP_DENIED/403 POST https://api.example.com/admin proj-aaa111
+  proc
+  [ "$(hits 'denied-by-rule')" -eq 1 ]
+  [ "$(hits '	denied$')" -eq 0 ]
+}
+
+@test "a rule denial on a host never seen before is still a rule denial" {
+  # The CONNECT's log line is written when the tunnel closes, so the inner
+  # request's 403 can arrive first — and must not read as an unlisted host.
+  add_req 1000.0 TCP_DENIED/403 POST https://api.example.com/admin proj-aaa111
+  proc
+  [ "$(hits 'denied-by-rule')" -eq 1 ]
+  [ "$(hits 'new-host-denied')" -eq 0 ]
+}
+
+@test "a denied CONNECT is still an unlisted host, not a rule denial" {
+  add 1000.0 TCP_DENIED/403 evil.example.com:443 proj-aaa111
+  proc
+  [ "$(hits 'new-host-denied')" -eq 1 ]
+  [ "$(hits 'denied-by-rule')" -eq 0 ]
+}
+
+@test "an allowed request inside the tunnel is silent, like any known host" {
+  add     1000.0 TCP_TUNNEL/200 api.example.com:443 proj-aaa111
+  add_req 1001.0 TCP_MISS/200 GET https://api.example.com/v1 proj-aaa111
+  proc
+  [ "$(hits 'api.example.com')" -eq 1 ]
+}
+
+@test "a rule denial does not suggest allowing the host" {
+  pipe_notify "alert	proj-aaa111	api.example.com	denied-by-rule"
+  run cat "${NOTIFY_LOG}"
+  [[ "$output" == *"DENIED by rule"* ]]
+  [[ "$output" == *"path or method rule"* ]]
+  [[ "$output" != *"domains add api.example.com"* ]]
+}
+
+@test "the two denial kinds in one burst become two notifications" {
+  # One suggested command per notification, and theirs differ.
+  pipe_notify "alert	proj-aaa111	a.example.com	denied
+alert	proj-aaa111	b.example.com	denied-by-rule"
+  run cat "${NOTIFY_LOG}"
+  [ "$(hits 'DENIED')" -eq 2 ]
+  [[ "$output" == *"domains add a.example.com"* ]]
+  [[ "$output" != *"domains add b.example.com"* ]]
 }
 
 # ---------------------------------------------------------------------------

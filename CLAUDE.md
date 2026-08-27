@@ -108,7 +108,10 @@ wrapped bullets.
   the only host-side file here: `run.sh` starts it per run, it tails
   `docker logs -f` on the proxy and notifies on a first-time or denied host. Its
   `process` verb is the whole classifier — access-log lines in, alert lines out,
-  no docker — so keep new parsing there, where test/watch.bats can reach it. Being
+  no docker — so keep new parsing there, where test/watch.bats can reach it. It
+  tells a denied CONNECT (unlisted host) from a `403` inside a tunnel (a path or
+  method rule refused it) because the suggested fix differs and one must never be
+  offered for the other. Being
   outside the container is the point; nothing about this may move inside one. See
   `docs/egress-proxy.md`, `docs/tls-inspection.md` and `docs/egress-alerts.md`.
 - `scripts/gen-ca.sh` — `make ca`: the CA Squid signs intercepted TLS with, in

@@ -22,16 +22,24 @@ outlives the session. `CLAUDE_EGRESS_ALERTS=0` skips it.
 | New host, allowed | `info` — a banner |
 | New host, denied | `alert` — must be dismissed |
 | Recorded host, denied again | `alert`, at most once per `CLAUDE_DENY_ALERT_COOLDOWN` (300s) |
+| Request denied by a path/method rule | `alert`, titled *DENIED by rule* — same cooldown |
 | Recorded host, allowed | silent |
 
 "New" means this project has never contacted it before.
+
+The last two look alike in the log and need opposite fixes, so the classifier keys on the method: a
+`403` on anything but the `CONNECT` is a denial *inside* an established tunnel, which only a
+[path or method rule](egress-proxy.md#entry-syntax) produces — the host itself cleared the CONNECT.
+That alert therefore says so and points at `cid domains` instead of offering
+`cid domains add <host>`, which would widen the entry the rule exists to narrow. Both kinds in one
+burst stay two notifications, since each carries one command.
 
 Repeated denials keep alerting because probing the allowlist host by host is the loudest compromise
 signal there is — see the fast-fail vector in [attack-vectors.md](attack-vectors.md). The cooldown
 only stops a retry loop from flooding the desktop.
 
-Alerts arriving within 2 seconds of each other are coalesced into one notification per project and
-urgency, listing up to five hosts. Without that, the first session in a new project — which
+Alerts arriving within 2 seconds of each other are coalesced into one notification per project,
+urgency and suggested fix, listing up to five hosts. Without that, the first session in a new project — which
 legitimately contacts a dozen hosts — would fire a dozen banners.
 
 ## Notifiers
