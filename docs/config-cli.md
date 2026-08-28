@@ -13,9 +13,10 @@ hand.
 ./cid show <file>                # print a global config file (credentials are never dumped)
 ./cid project [dir]              # per-project key, config dir, and which overrides exist
 ./cid domains [dir]              # effective allowlist = baseline + this project's additions
-./cid domains add <host>...      # add host(s) to the egress allowlist
+./cid domains add <host>[/path]...        # add entries to the egress allowlist
+./cid domains add --method <list> <host>[/path]...   # ...restricted to those HTTP methods
 ./cid domains add --for <dur> <host>...   # add, but the entry auto-expires after <dur>
-./cid domains rm  <host>...      # remove host(s) from the egress allowlist
+./cid domains rm  <host>[/path]...        # remove entries from the egress allowlist
 ./cid domains prune              # drop expired --for entries (hygiene only)
 ./cid skip-decryption [dir]               # hosts the proxy tunnels without decrypting TLS
 ./cid skip-decryption add|rm <host>...    # stop / resume decrypting a host
@@ -44,11 +45,13 @@ Both edit an `allowed-domains.txt`, by default the **current project's**
 - `-g`, `--global` — target the shared **baseline** list applying to every project.
 - `-C`, `--dir <dir>` — select the project by directory (default: current). Ignored with `-g`.
 
-A host is either an exact name (`example.com`) or a **wildcard** with a leading dot
-(`.githubusercontent.com`) matching the apex and every subdomain — the same syntax the proxy enforces
-(see [Centralized Egress Proxy](egress-proxy.md)). Hostnames are lowercased. `add` validates input
-and is idempotent (duplicates reported and skipped); `rm` matches on the bare entry, so it removes a
-line even with a trailing `# comment` and leaves others untouched.
+An entry is a host — exact (`example.com`) or a **wildcard** with a leading dot
+(`.githubusercontent.com`) matching the apex and every subdomain — optionally narrowed by a path
+and/or `--method`. That is the same grammar the proxy enforces, and
+[Entry syntax](egress-proxy.md#entry-syntax) is its reference. Hosts and methods are lowercased and
+uppercased respectively; a path is stored verbatim, being case-sensitive. `add` validates input and is
+idempotent (duplicates reported and skipped); `rm` matches on the bare entry, so it removes a line
+even with a trailing `# comment` and leaves others untouched.
 
 ```bash
 cid domains add example.com              # allow example.com for THIS project
@@ -57,7 +60,18 @@ cid domains add -g registry.npmjs.org    # allow for EVERY project (baseline)
 cid domains rm  example.com              # remove from this project's list
 cid domains rm  -g sentry.io             # remove from the baseline
 cid domains add -C ~/code/other foo.com  # edit a different project's list
+
+cid domains add api.github.com/repos                    # /repos and anything under it
+cid domains add 'api.github.com/repos*'                 # raw prefix (quote the *)
+cid domains add --method GET,HEAD api.github.com/repos  # ...read-only
+cid domains rm  --method GET,HEAD api.github.com/repos  # name it whole to remove it
 ```
+
+An entry and a narrower version of it are two entries, and they union — so adding
+`--method GET api.github.com/repos` next to a bare `api.github.com` restricts nothing. `rm` the broad
+entry to make the narrow one bite. `--method` takes a comma-separated list of real HTTP methods; a
+typo is refused rather than stored as a rule that could never match, and `CONNECT` is refused because
+the tunnel request is judged on the host alone.
 
 Edits take effect **within ~2s**: Squid re-reads both lists on each request and caches verdicts for
 2 seconds (`ttl=2` in `proxy/squid.conf`). No rebuild, no proxy restart. (Creating the baseline
@@ -81,9 +95,10 @@ cid domains prune                            # drop expired --for entries (hygie
 ### `skip-decryption add` / `skip-decryption rm`
 
 The same machinery against `skip-decryption.txt`: a host listed there is relayed undecrypted, for
-clients that pin certificates. Identical grammar, `-g`/`-C` behaviour and ~2s propagation as
-`domains`; `--for` and `prune` are not accepted. It grants no access — the host must still be on the
-egress allowlist. See [TLS Inspection](tls-inspection.md).
+clients that pin certificates. Same `-g`/`-C` behaviour and ~2s propagation as `domains`; `--for`,
+`--method` and `prune` are not accepted, and neither is a path — splicing is decided before there is a
+request to scope. It grants no access — the host must still be on the egress allowlist. See
+[TLS Inspection](tls-inspection.md).
 
 ```bash
 cid skip-decryption add api.example.com     # stop decrypting it, for THIS project

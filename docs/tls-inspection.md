@@ -3,13 +3,15 @@
 The egress proxy decrypts HTTPS. What that means for one request to an allowlisted `github.com`:
 
 1. The container sends `CONNECT github.com:443` to Squid. Squid checks
-   [`allowed-domains.txt`](egress-proxy.md#allowlists) — that file's only job — and allows it.
+   [`allowed-domains.txt`](egress-proxy.md#allowlists) — that file's only job — for the host, all a
+   CONNECT names, and allows it.
 2. Squid then **impersonates github.com**: it mints a certificate naming that host, signs it with a
    CA on your machine, and presents it to the container.
 3. The container trusts that CA (the image installs it), so its client accepts and sends
    `GET /repos/x HTTP/1.1` — encrypted to *Squid*, not to GitHub.
-4. Squid decrypts it, logs `GET https://github.com/repos/x`, then opens its **own** TLS session to
-   the real github.com and forwards the request.
+4. Squid decrypts it, logs `GET https://github.com/repos/x`, re-checks the allowlist — now with the
+   method and path in hand — then opens its **own** TLS session to the real github.com and forwards
+   the request.
 
 Two TLS sessions instead of one, plaintext in the middle. Before, steps 2-4 were a blind byte relay
 logged as that one `CONNECT github.com:443` line.
@@ -82,11 +84,17 @@ Two lists, two questions — they layer rather than repeat:
 
 | File | Question | Default |
 | ---------------------- | ----------------------------------------------- | ------------ |
-| `allowed-domains.txt`  | may the container reach this host at all?        | no           |
+| `allowed-domains.txt`  | may the container make this request at all?      | no           |
 | `skip-decryption.txt`  | for a host it may reach, does Squid decrypt it?  | yes, decrypt |
 
 Note the combination the table does not spell out: a host in `skip-decryption.txt` **only** is still
 blocked. Not decrypting is a treatment, not a grant, so the entry does nothing alone.
+
+The lists can also contradict each other, and the allowlist wins. A path or method rule
+(`GET api.example.com/v1`) is enforced on the decrypted request, which a spliced host does not have —
+so when the allowlist grants a host *only* through such a rule, the helper answers "do not splice"
+and the host is decrypted despite its `skip-decryption.txt` entry. Per host you get the rule or the
+pinning client, not both. Add a bare `api.example.com` alongside it to choose the client.
 
 One reason to use it, with a specific symptom: a tool fails with a certificate error while
 `curl https://thathost/` in the same container succeeds. That tool **pins certificates** — it
@@ -99,9 +107,10 @@ cid skip-decryption add -g .example.com     # every project (baseline)
 cid skip-decryption rm  api.example.com     # decrypt it again
 ```
 
-Same grammar and ~2s propagation as the egress allowlist: baseline
+Same layout and ~2s propagation as the egress allowlist: baseline
 `<config-dir>/skip-decryption.txt` plus `projects/<key>/skip-decryption.txt`, one host per line, a
-leading `.` matching the apex and every subdomain.
+leading `.` matching the apex and every subdomain. The path and method syntax the allowlist accepts
+is rejected here — splicing is decided before there is a request to scope.
 
 Keep the list short: a listed host loses its URL log lines and its inner-host check, so domain
 fronting is open again there. It buys a working client at the price of visibility — not speed.
@@ -117,8 +126,10 @@ latency.
 - **Upstream certificates are validated by the proxy** (`sslproxy_cert_error deny all`), so a bad
   one on an allowlisted host fails there rather than in each client.
 - **Domain fronting is closed.** Squid now sees the inner request's host, not just the CONNECT name.
-- **Path-level rules are possible but not implemented.** The allowlist still matches hostnames only;
-  "`api.github.com`, `GET /repos/*` only" is a follow-up.
+- **Path- and method-level rules.** `GET,HEAD api.github.com/repos` is a legal allowlist entry
+  because the decrypted request is what gets checked. See
+  [Entry syntax](egress-proxy.md#entry-syntax); the cost is that such a rule is enforced *after* the
+  tunnel opens, and cannot apply to a spliced host.
 
 ## Troubleshooting
 

@@ -138,7 +138,7 @@ fi
 # Squid being alive is not the same as egress working: a helper that cannot exec
 # leaves Squid up, respawning it forever, with every allowlist lookup failing.
 # Probe it directly rather than waiting for the HEALTHCHECK's first interval.
-if ! printf 'healthcheck healthcheck.invalid -\n' \
+if ! printf 'healthcheck GET healthcheck.invalid / -\n' \
      | docker exec -i "${PROXY_NAME}" "${SRC_MOUNT}/ext-allowlist.sh" 2>/dev/null \
      | grep -q '^ERR$'; then
   fail "${PROXY_NAME} is up but its allowlist helper is not answering." \

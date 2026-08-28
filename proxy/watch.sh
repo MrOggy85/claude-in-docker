@@ -132,6 +132,12 @@ _process() {
       status = $4
       if (status ~ /\/407$/) next               # auth challenge, not a decision
       denied = (status ~ /\/403$/)
+      # A 403 on anything but the CONNECT is a denial INSIDE an established
+      # tunnel, which only a path or method rule produces (the host cleared the
+      # CONNECT). The two need opposite fixes, so they are told apart here rather
+      # than both suggesting "allow this host" — which for a rule denial would
+      # widen the entry the rule exists to narrow. See docs/egress-proxy.md.
+      byrule = (denied && $6 != "CONNECT")
       ts = $1 + 0
 
       loadseen(key)
@@ -139,12 +145,14 @@ _process() {
 
       if (isnew) {
         record(key, host)
-        alert(denied ? "alert" : "info", key, host, denied ? "new-host-denied" : "new-host")
+        if (byrule)     alert("alert", key, host, "denied-by-rule")
+        else if (denied) alert("alert", key, host, "new-host-denied")
+        else             alert("info",  key, host, "new-host")
         if (denied) lastdeny[key SUBSEP host] = ts
       } else if (denied) {
         if (!((key SUBSEP host) in lastdeny) || ts - lastdeny[key SUBSEP host] >= cooldown) {
           lastdeny[key SUBSEP host] = ts
-          alert("alert", key, host, "denied")
+          alert("alert", key, host, byrule ? "denied-by-rule" : "denied")
         }
       }
     }
@@ -159,13 +167,15 @@ _process() {
 # bash 3.2 has no namerefs.
 _BUF=()
 
-# Turn the buffer into one notification per (project, urgency), listing the
-# distinct hosts.
+# Turn the buffer into one notification per (project, urgency, fix), listing the
+# distinct hosts. "fix" splits the two denial kinds apart, since one notification
+# carries one suggested command and theirs differ; every other reason shares the
+# "host" fix, so this groups exactly as before for them.
 _flush() {
   (( ${#_BUF[@]} )) || return 0
   local grouped
   grouped="$(printf '%s\n' "${_BUF[@]}" | awk -F'\t' '
-    { k = $1 "\t" $2
+    { k = $1 "\t" $2 "\t" ($4 == "denied-by-rule" ? "rule" : "host")
       if (!((k SUBSEP $3) in seen)) {
         seen[k SUBSEP $3] = 1
         hosts[k] = hosts[k] (hosts[k] == "" ? "" : ",") $3
@@ -174,18 +184,23 @@ _flush() {
     END { for (k in hosts) printf "%s\t%d\t%s\n", k, n[k], hosts[k] }')"
   _BUF=()
 
-  local urgency key count hosts
-  while IFS=$'\t' read -r urgency key count hosts; do
+  local urgency key fix count hosts
+  while IFS=$'\t' read -r urgency key fix count hosts; do
     [[ -n "${urgency}" ]] || continue
-    _emit "${urgency}" "${key}" "${count}" "${hosts}"
+    _emit "${urgency}" "${key}" "${fix}" "${count}" "${hosts}"
   done <<< "${grouped}"
 }
 
 # Titles and hints stay inside notify()'s charset (ASCII, no angle brackets or
 # dashes it would strip), so what the user reads is what is written here.
-_emit() {  # <urgency> <key> <count> <csv-hosts>
-  local urgency="$1" key="$2" count="$3" csv="$4" title body hint
-  if [[ "${urgency}" == alert ]]; then
+_emit() {  # <urgency> <key> <fix: host|rule> <count> <csv-hosts>
+  local urgency="$1" key="$2" fix="$3" count="$4" csv="$5" title body hint
+  if [[ "${urgency}" == alert && "${fix}" == rule ]]; then
+    # The host IS allowed — a path or method rule refused the request inside the
+    # tunnel. Suggesting `domains add HOST` here would undo that rule, so don't.
+    title="Egress DENIED by rule: ${key}"
+    hint="The host is allowed, a path or method rule refused it. Review: cid domains"
+  elif [[ "${urgency}" == alert ]]; then
     title="Egress DENIED: ${key}"
     # Name the host in the fix when there is exactly one — that is the command
     # to paste, not a template to fill in.

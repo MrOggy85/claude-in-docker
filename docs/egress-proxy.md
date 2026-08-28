@@ -1,7 +1,8 @@
 # Centralized Egress Proxy (Squid)
 
 The project's network containment boundary. Every Claude container egresses through **one shared
-Squid proxy**, which allows or denies each connection by its CONNECT target **hostname**. Nothing
+Squid proxy**, which allows or denies each request by **hostname**, and optionally by path and method
+([entry syntax](#entry-syntax)). Nothing
 inside a container can reach the network any other way: a thin in-container nftables rule
 (`init-firewall.sh`) permits outbound traffic *only* to the proxy, so a process that ignores the
 `HTTP(S)_PROXY` env vars doesn't leak — it fails to connect.
@@ -38,9 +39,10 @@ and DNS closed to everything but Docker's resolver (Squid resolves upstream name
    `HTTPS_PROXY=http://<project-key>:x@squid:3128`, where `<project-key>` is the same
    `<safe-name>-<path-hash>` used for `projects/<key>/`. The password (`x`) is not checked.
 2. **Squid selects that project's allowlist.** An [`external_acl`](../proxy/ext-allowlist.sh) helper
-   receives `<project-key> <host>` and returns `OK` when `<host>` is in the baseline list **or** in
-   `<config-dir>/projects/<project-key>/allowed-domains.txt`. Everything else is denied
-   (`http_access deny all`).
+   receives `<project-key> <method> <host> <path>` and returns `OK` when an entry in the baseline list
+   **or** in `<config-dir>/projects/<project-key>/allowed-domains.txt` grants that request.
+   Everything else is denied (`http_access deny all`). The CONNECT is checked, then every decrypted
+   request inside it is checked again on its own.
 3. **TLS is decrypted**, with a locally generated CA the containers trust, so Squid reads the full
    URL and validates the upstream certificate. Hosts on `skip-decryption.txt` are relayed
    undecrypted instead. See [TLS Inspection](tls-inspection.md).
@@ -98,7 +100,7 @@ at startup. To look yourself:
 
 ```bash
 docker inspect -f '{{.State.Health.Status}}' claude-egress-proxy
-printf 'k example.com -\n' | docker exec -i claude-egress-proxy /etc/squid/src/ext-allowlist.sh
+printf 'k GET example.com / -\n' | docker exec -i claude-egress-proxy /etc/squid/src/ext-allowlist.sh
 ```
 
 `proxy/` is mounted whole at `/etc/squid/src` rather than file by file: a single-file bind mount
@@ -111,7 +113,7 @@ running container pointed at a deleted file.
 | ------------------------------------------ | --------------------------------------------------------------- |
 | `<config-dir>/allowed-domains.txt`         | **baseline** — always allowed, every project (falls back to `templates/allowed-domains.txt` if absent) |
 | `<config-dir>/projects/<key>/allowed-domains.txt` | that project's full list (seeded by `run.sh` on first run) |
-| `<config-dir>/skip-decryption.txt`, `projects/<key>/skip-decryption.txt` | same grammar, different question: hosts **not** to decrypt ([TLS Inspection](tls-inspection.md)) |
+| `<config-dir>/skip-decryption.txt`, `projects/<key>/skip-decryption.txt` | a different question — hosts **not** to decrypt — over the hostname half of the grammar below ([TLS Inspection](tls-inspection.md)) |
 
 All are bind-mounted read-only into the proxy and read live by the helper (2-second verdict cache),
 so **editing a list needs no proxy restart** — the change applies within ~2s. The two baseline
@@ -121,16 +123,47 @@ baseline from every verdict.
 
 ### Entry syntax
 
-One entry per line; `#` comments and blank lines ignored. Matching is on the **hostname only**:
+One entry per line; `#` comments and blank lines ignored. An entry is a hostname, optionally narrowed
+by a path and/or a method list:
 
-| Entry                 | Matches                                                              |
-| --------------------- | ------------------------------------------------------------------- |
-| `api.example.com`     | that exact host only                                                |
-| `.example.com`        | the apex `example.com` **and** any subdomain (`a.example.com`, …)   |
-| `api.example.com  # expires=1719999999` | that exact host, but only until the epoch timestamp passes |
+```
+[<METHOD>[,<METHOD>…] ]<host>[<path>]
+```
 
-That is the full grammar — no path, URL, or port syntax. An entry like `example.com/some/path` is
-compared against the hostname and never matches. List the host and every path on it is reachable.
+| Entry                                   | Matches                                                              |
+| --------------------------------------- | -------------------------------------------------------------------- |
+| `api.example.com`                       | that exact host, every path, every method                            |
+| `.example.com`                          | the apex `example.com` **and** any subdomain (`a.example.com`, …)     |
+| `api.example.com/v1`                    | `/v1` and anything under it — never `/v11` (see below)                |
+| `api.example.com/v1*`                   | any path starting with `/v1`, `/v11` included                         |
+| `api.example.com/`                      | every path (identical to the bare host)                              |
+| `GET api.example.com`                   | that host, every path, but only `GET`                                |
+| `GET,HEAD api.example.com/v1`           | all three axes at once                                               |
+| `api.example.com  # expires=1719999999` | that exact host, but only until the epoch timestamp passes           |
+
+A path matches on a **segment boundary** — the hostname's label-boundary rule, one layer down, so
+`/v1` covers `/v1` and `/v1/users` but not `/v11`. A trailing `*` opts out into a raw prefix. There is
+no port or query-string syntax: a `?` in an entry is rejected, because the proxy drops the query
+before matching. Methods are case-insensitive; hosts are too; **paths are not** (RFC 3986).
+
+Entries union, so a bare `api.example.com` alongside `GET api.example.com/v1` grants the whole host —
+narrow by *removing* the broad entry, not by adding a narrow one.
+
+Two things a scoped entry cannot do, both because the scope lives in the encrypted request:
+
+- **The CONNECT is still judged on the host alone.** Squid sees only `CONNECT api.example.com:443` at
+  tunnel-setup time, so a path or method rule is enforced on the decrypted request *inside* the
+  tunnel. A denied request fails with a 403 from the proxy after the tunnel is up, not at connect.
+- **A spliced host cannot carry one.** A host on [`skip-decryption.txt`](tls-inspection.md) has no
+  decrypted inner request to check, so the helper refuses to splice it when the allowlist grants it
+  *only* through a scoped entry — the rule wins and the host gets decrypted after all. Pinning
+  clients and scoped entries are mutually exclusive per host.
+
+```bash
+cid domains add api.example.com/v1                  # this project
+cid domains add --method GET,HEAD api.example.com/v1
+cid domains rm  --method GET,HEAD api.example.com/v1   # name it whole to remove it
+```
 
 ### Temporary entries
 
@@ -145,15 +178,15 @@ CLI](config-cli.md#domains-add--domains-rm).
 
 ## Trust model / limitations
 
-- **Host-level rules, though the plaintext is now visible.** The request URL *is* available to the
-  proxy, but the allowlist grammar still matches hostnames only: you can allow or deny a *host*, not
-  "this host, only this path". Path-level rules are a follow-up on top of
-  [TLS Inspection](tls-inspection.md).
+- **Rules reach the path and method, but only inside the tunnel.** The CONNECT names a host and
+  nothing else, so `GET api.example.com/v1` cannot stop the tunnel from opening — it denies the
+  requests sent through it. Blocked traffic therefore costs a TLS handshake before it fails.
 - **The CA private key is a new secret.** It signs for any host and lives on the host plus the Squid
   container, never in a Claude container. See
   [Known Attack Vectors](attack-vectors.md#the-egress-cas-private-key).
 - **A host on `skip-decryption.txt` is filtered by hostname only** — the pre-interception
-  treatment: CONNECT target in, encrypted tunnel out.
+  treatment: CONNECT target in, encrypted tunnel out. Which is why the helper will not splice a host
+  the allowlist grants only through a path or method rule.
 - **Cross-project borrowing.** The project key is a *self-asserted* proxy username — a process in
   project A's container can present project B's key and use B's allowlist. Accepted trade-off: every
   container belongs to the same user, and a borrowed list only names hosts that user already
