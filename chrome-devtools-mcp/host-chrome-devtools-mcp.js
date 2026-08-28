@@ -23,12 +23,17 @@
 //   GET                             -> SSE stream for server-initiated
 //                                       notifications/requests (progress, logs).
 //   DELETE                          -> terminate the session (kill Chrome).
+//
+// One thing is not passed through: filesystem paths. The client is in a
+// container and the server is not, so they spell shared directories
+// differently. See "Path translation" below.
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawn, execFileSync } = require('child_process');
+const { fileURLToPath, pathToFileURL } = require('url');
 const crypto = require('crypto');
 
 const PORT = parseInt(process.env.CHROME_DEVTOOLS_MCP_PORT || '9333', 10);
@@ -126,6 +131,117 @@ function bearer(req) {
   const h = req.headers.authorization || '';
   const m = h.match(/^Bearer\s+(.+)$/i);
   return m ? m[1].trim() : null;
+}
+
+// ---------------------------------------------------------------------------
+// Path translation
+// ---------------------------------------------------------------------------
+
+// The client runs in a container, this server does not, and both touch the same
+// bind-mounted directories under different names: /home/dev/repo here is
+// /Users/you/code/thing there. chrome-devtools-mcp confines every filePath write
+// to a workspace root, so an untranslated container root resolves to nothing on
+// this host, gets skipped, and leaves the OS temp dir as the only writable
+// place — a screenshot the container then cannot read back.
+//
+// So paths are rewritten in both directions and the container's spelling is the
+// only one anybody outside sees. run.sh writes the map to
+// <projects-dir>/<key>/mounts.txt, one "<container>\t<host>" line per
+// READ-WRITE mount (see run.sh step 3c-d for why ro mounts are excluded).
+const MOUNTS_TTL_MS = 1000;
+const mountsCache = new Map();  // projectKey -> { at, byContainer, byHost }
+
+const trimSlash = (p) => p.replace(/\/+$/, '') || '/';
+
+function loadMounts(projectKey) {
+  const now = Date.now();
+  const hit = mountsCache.get(projectKey);
+  if (hit && now - hit.at < MOUNTS_TTL_MS) return hit;
+
+  let text = '';
+  try { text = fs.readFileSync(path.join(PROJECTS_DIR, projectKey, 'mounts.txt'), 'utf8'); }
+  catch { /* bridge enabled but no run yet, or an old run.sh */ }
+
+  const pairs = text.split('\n')
+    .map((line) => line.split('\t'))
+    .filter((p) => p.length === 2 && p[0].startsWith('/') && p[1].startsWith('/'))
+    .map(([container, host]) => ({ container: trimSlash(container), host: trimSlash(host) }));
+  // Longest prefix first, per direction: a mount nested inside another must win.
+  const entry = {
+    at: now,
+    byContainer: [...pairs].sort((a, b) => b.container.length - a.container.length),
+    byHost: [...pairs].sort((a, b) => b.host.length - a.host.length),
+  };
+  mountsCache.set(projectKey, entry);
+  return entry;
+}
+
+// One absolute path across the mount, or null if none covers it. Exact match or
+// a '/'-delimited prefix only, so /home/dev/repo never swallows /home/dev/repo2.
+function mapPath(list, p, from, to) {
+  if (typeof p !== 'string' || !p.startsWith('/')) return null;
+  const norm = trimSlash(p);
+  for (const m of list) {
+    if (norm === m[from]) return m[to];
+    if (norm.startsWith(m[from] + '/')) return m[to] + norm.slice(m[from].length);
+  }
+  return null;
+}
+
+// Host paths embedded in free text (tools report where they saved a file), put
+// back into the container's spelling. Prefix + '/' only, and a plain
+// split/join so nothing in the path is read as a pattern.
+function containerize(byHost, text) {
+  let out = text;
+  for (const m of byHost) out = out.split(m.host + '/').join(m.container + '/');
+  return out;
+}
+
+// Client -> server. Two carriers of a container path:
+//   * the roots/list answer, whose ids `routeFromServer` recorded
+//   * a tools/call filePath (take_screenshot, performance_start_trace,
+//     take_heapsnapshot, evaluate_script)
+// A root with no mount behind it is DROPPED, not passed through: the server can
+// only log an ENOENT and skip it, so forwarding it just adds noise.
+function fromClient(s, m) {
+  const { byContainer } = loadMounts(s.projectKey);
+  if (!byContainer.length) return m;
+
+  if (m.id != null && m.method === undefined && s.rootsRequests.has(m.id)) {
+    s.rootsRequests.delete(m.id);
+    const roots = m.result && m.result.roots;
+    if (Array.isArray(roots)) {
+      m.result.roots = roots.flatMap((r) => {
+        let p;
+        try { p = fileURLToPath(r.uri); } catch { return []; }
+        const host = mapPath(byContainer, p, 'container', 'host');
+        return host ? [{ ...r, uri: pathToFileURL(host).href }] : [];
+      });
+      log(`session ${s.id.slice(0, 8)} roots -> ${m.result.roots.length}/${roots.length} mapped`);
+    }
+    return m;
+  }
+
+  if (m.method === 'tools/call' && m.params && m.params.arguments) {
+    const host = mapPath(byContainer, m.params.arguments.filePath, 'container', 'host');
+    if (host) m.params.arguments.filePath = host;
+  }
+  return m;
+}
+
+// Server -> client: the reverse, over the text parts of a tool result ("Saved
+// screenshot to <path>."), so the agent is handed a path it can actually open.
+function toClient(s, msg) {
+  const { byHost } = loadMounts(s.projectKey);
+  if (!byHost.length) return msg;
+  const content = msg.result && msg.result.content;
+  if (!Array.isArray(content)) return msg;
+  for (const part of content) {
+    if (part && part.type === 'text' && typeof part.text === 'string') {
+      part.text = containerize(byHost, part.text);
+    }
+  }
+  return msg;
 }
 
 // ---------------------------------------------------------------------------
@@ -232,7 +348,8 @@ function startSession(projectKey, label) {
   const id = crypto.randomUUID();
   const child = spawn(bin, argv, { stdio: ['pipe', 'pipe', 'inherit'] });
   // An isolated session holds no label, so it never blocks the real profile.
-  const s = { id, projectKey, label: isolated ? null : label, child, pending: new Map(), getStream: null, queue: [] };
+  const s = { id, projectKey, label: isolated ? null : label, child, pending: new Map(),
+              getStream: null, queue: [], rootsRequests: new Set() };
   sessions.set(id, s);
   // One line per session naming what it actually got: "why is my profile empty"
   // is otherwise only answerable when something went wrong enough to log.
@@ -262,12 +379,16 @@ function startSession(projectKey, label) {
 // A server->client message: a response (id, no method) goes back on the POST
 // stream that carried its request; everything else goes on the GET stream.
 function routeFromServer(s, msg) {
+  // Remember a roots/list so the client's answer is recognisable on the way
+  // back — that is the one client message carrying container paths to rewrite.
+  if (msg.method === 'roots/list' && msg.id != null) s.rootsRequests.add(msg.id);
+
   const isResponse = msg.id != null && msg.method === undefined;
   if (isResponse && s.pending.has(msg.id)) {
     const entry = s.pending.get(msg.id);
     s.pending.delete(msg.id);
     entry.ids.delete(msg.id);
-    sse(entry.res, msg);
+    sse(entry.res, toClient(s, msg));
     if (entry.ids.size === 0) { clearInterval(entry.ping); try { entry.res.end(); } catch {} }
     return;
   }
@@ -340,7 +461,7 @@ const server = http.createServer((req, res) => {
     }
     if (!s) { res.writeHead(404).end('no session'); return; }
 
-    for (const m of msgs) s.child.stdin.write(JSON.stringify(m) + '\n');
+    for (const m of msgs) s.child.stdin.write(JSON.stringify(fromClient(s, m)) + '\n');
 
     if (requestIds.length === 0) { res.writeHead(202, headers).end(); return; }
 
