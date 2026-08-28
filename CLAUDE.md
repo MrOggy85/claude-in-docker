@@ -200,3 +200,13 @@ wrapped bullets.
   (Dependabot cannot: package.json pins `"latest"`). `release.yml` fires on a
   `v*` tag push and turns that tag's `CHANGELOG.md` section into a GitHub
   Release; it derives nothing, so a tag/changelog mismatch fails the run.
+- `.github/PULL_REQUEST_TEMPLATE/` — `feature.md` and `bugfix.md`. GitHub picks
+  neither on its own: a directory of templates is reachable only through
+  `?template=<file>` on the compare URL, and there is no default
+  `pull_request_template.md` on purpose (a wrong-shaped default gets deleted by
+  hand every time). Both close on the breaking-change footer, and both say the
+  same load-bearing thing: the PR BODY never reaches `scripts/release.sh`. We
+  squash-merge, so the PR title becomes the commit subject but GitHub builds the
+  squash body from the branch's commit messages — a `BREAKING CHANGE:` footer
+  has to live in a commit, and a `## Breaking Change` heading flags nothing. The
+  `!` in the title is what actually forces the major bump.
