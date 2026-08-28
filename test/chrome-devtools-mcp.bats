@@ -32,23 +32,37 @@ setup() {
   PROJECTS="${BATS_TEST_TMPDIR}/projects"
   PROFILES="${BATS_TEST_TMPDIR}/profiles"
   ARGS_LOG="${BATS_TEST_TMPDIR}/child-args"
+  STUB_RX="${BATS_TEST_TMPDIR}/stub-rx"
+  MOUNT_HOST="${BATS_TEST_TMPDIR}/host-repo"
 
-  mkdir -p "${PROJECTS}/proj-a" "${PROJECTS}/proj-b"
+  mkdir -p "${PROJECTS}/proj-a" "${PROJECTS}/proj-b" "${MOUNT_HOST}"
   printf '%s\n' "${TOKEN_A}" > "${PROJECTS}/proj-a/chrome-devtools.token"
   printf '%s\n' "${TOKEN_B}" > "${PROJECTS}/proj-b/chrome-devtools.token"
+  # proj-a is bind-mounted (as run.sh records it); proj-b deliberately is not, so
+  # the untranslated passthrough stays covered.
+  printf '%s\t%s\n' /home/dev/repo "${MOUNT_HOST}" > "${PROJECTS}/proj-a/mounts.txt"
   : > "${ARGS_LOG}"
+  : > "${STUB_RX}"
 
-  # Stub MCP server: answers initialize (plus one unsolicited notification) and
-  # echoes any other request's method back in its result.
+  # Stub MCP server: answers initialize (plus one unsolicited notification and a
+  # roots/list, the way the real server asks for workspace roots), reports a
+  # tools/call's filePath back the way chrome-devtools-mcp reports a saved file,
+  # and echoes any other request's method. Every line it receives is appended to
+  # STUB_RX, which is how the path translation is asserted.
   cat > "${BATS_TEST_TMPDIR}/stub.js" <<'EOF'
 const rl = require('readline').createInterface({ input: process.stdin });
+const fs = require('fs');
 const send = (o) => process.stdout.write(JSON.stringify(o) + '\n');
 rl.on('line', (line) => {
   if (!line.trim()) return;
   let m; try { m = JSON.parse(line); } catch { return; }
+  if (process.env.STUB_RX) fs.appendFileSync(process.env.STUB_RX, line.trim() + '\n');
   if (m.method === 'initialize') {
     send({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-06-18', serverInfo: { name: 'stub' }, capabilities: {} } });
     send({ jsonrpc: '2.0', method: 'notifications/message', params: { data: 'stub-ready' } });
+    send({ jsonrpc: '2.0', id: 'roots-1', method: 'roots/list' });
+  } else if (m.method === 'tools/call') {
+    send({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: `Saved screenshot to ${m.params.arguments.filePath}.` }] } });
   } else if (m.id != null) {
     send({ jsonrpc: '2.0', id: m.id, result: { echoed: m.method } });
   }
@@ -88,6 +102,7 @@ start_bridge() {
     CHROME_DEVTOOLS_MCP_PORT="${PORT}" \
     CID_PROJECTS_DIR="${PROJECTS}" \
     CHROME_DEVTOOLS_MCP_PROFILE_ROOT="${PROFILES}" \
+    STUB_RX="${STUB_RX}" \
     node "${BRIDGE}" >/dev/null 2>&1 &
   BRIDGE_PID=$!
   for _ in $(seq 1 50); do
@@ -383,6 +398,100 @@ call_on() {  # call_on <sid> <token>
   run curl -s --max-time 2 -H "Authorization: Bearer ${TOKEN_A}" \
     -H "mcp-session-id: ${sid}" "${BASE}"
   [[ "$output" == *'stub-ready'* ]]
+}
+
+# ---------------------------------------------------------------------------
+# Container <-> host path translation
+# ---------------------------------------------------------------------------
+
+# POST one message on a session; echoes the response body.
+post_on() {  # post_on <sid> <token> <json>
+  curl -s --max-time 5 \
+    -H "Authorization: Bearer ${2}" -H "mcp-session-id: ${1}" \
+    -H 'Accept: application/json, text/event-stream' -H 'Content-Type: application/json' \
+    -d "${3}" "${BASE}"
+}
+
+# Answer the roots/list the stub sends at initialize. Notification-shaped from
+# curl's side (a response carries no method), so this returns 202.
+answer_roots() {  # answer_roots <sid> <token> <uri>...
+  local sid="$1" token="$2"; shift 2
+  local roots="" uri
+  for uri in "$@"; do roots="${roots:+${roots},}{\"uri\":\"${uri}\",\"name\":\"r\"}"; done
+  post_on "${sid}" "${token}" "{\"jsonrpc\":\"2.0\",\"id\":\"roots-1\",\"result\":{\"roots\":[${roots}]}}" >/dev/null
+}
+
+screenshot_call() {  # screenshot_call <sid> <token> <filePath>
+  post_on "${1}" "${2}" \
+    "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"take_screenshot\",\"arguments\":{\"filePath\":\"${3}\"}}}"
+}
+
+@test "a filePath under a mount reaches the server as a host path" {
+  sid="$(init_sid "${TOKEN_A}")"
+  screenshot_call "${sid}" "${TOKEN_A}" /home/dev/repo/shot.png > /dev/null
+  run cat "${STUB_RX}"
+  [[ "$output" == *"${MOUNT_HOST}/shot.png"* ]]
+  [[ "$output" != *'/home/dev/repo/shot.png'* ]]
+}
+
+@test "the saved path comes back in the container's spelling" {
+  sid="$(init_sid "${TOKEN_A}")"
+  run screenshot_call "${sid}" "${TOKEN_A}" /home/dev/repo/shot.png
+  [[ "$output" == *'Saved screenshot to /home/dev/repo/shot.png.'* ]]
+  [[ "$output" != *"${MOUNT_HOST}"* ]]
+}
+
+@test "a filePath outside every mount is passed through untouched" {
+  sid="$(init_sid "${TOKEN_A}")"
+  screenshot_call "${sid}" "${TOKEN_A}" /tmp/elsewhere.png > /dev/null
+  run cat "${STUB_RX}"
+  [[ "$output" == *'/tmp/elsewhere.png'* ]]
+}
+
+@test "a mount prefix only matches on a path boundary" {
+  # /home/dev/repo must not swallow /home/dev/repo-other.
+  sid="$(init_sid "${TOKEN_A}")"
+  screenshot_call "${sid}" "${TOKEN_A}" /home/dev/repo-other/shot.png > /dev/null
+  run cat "${STUB_RX}"
+  [[ "$output" == *'/home/dev/repo-other/shot.png'* ]]
+  [[ "$output" != *"${MOUNT_HOST}"* ]]
+}
+
+@test "roots reach the server as host paths" {
+  sid="$(init_sid "${TOKEN_A}")"
+  answer_roots "${sid}" "${TOKEN_A}" 'file:///home/dev/repo' 'file:///home/dev/repo/.claude'
+  run cat "${STUB_RX}"
+  [[ "$output" == *"${MOUNT_HOST}\""* ]]
+  [[ "$output" == *"${MOUNT_HOST}/.claude"* ]]
+  [[ "$output" != *'/home/dev/repo'* ]]
+}
+
+@test "a root with no mount behind it is dropped rather than forwarded" {
+  sid="$(init_sid "${TOKEN_A}")"
+  answer_roots "${sid}" "${TOKEN_A}" 'file:///home/dev/repo' 'file:///home/dev/scratch'
+  run grep -c '"roots"' "${STUB_RX}"
+  [ "$output" = "1" ]
+  run cat "${STUB_RX}"
+  [[ "$output" != *'/home/dev/scratch'* ]]
+  [[ "$output" == *"${MOUNT_HOST}"* ]]
+}
+
+@test "a project with no mounts.txt has nothing rewritten" {
+  sid="$(init_sid "${TOKEN_B}")"
+  answer_roots "${sid}" "${TOKEN_B}" 'file:///home/dev/repo'
+  screenshot_call "${sid}" "${TOKEN_B}" /home/dev/repo/shot.png > /dev/null
+  run cat "${STUB_RX}"
+  [[ "$output" == *'file:///home/dev/repo'* ]]
+  [[ "$output" == *'/home/dev/repo/shot.png'* ]]
+}
+
+@test "a mounts.txt written after the bridge started is picked up" {
+  sid="$(init_sid "${TOKEN_B}")"
+  printf '%s\t%s\n' /home/dev/repo "${MOUNT_HOST}" > "${PROJECTS}/proj-b/mounts.txt"
+  sleep 1.2   # MOUNTS_TTL_MS
+  screenshot_call "${sid}" "${TOKEN_B}" /home/dev/repo/shot.png > /dev/null
+  run cat "${STUB_RX}"
+  [[ "$output" == *"${MOUNT_HOST}/shot.png"* ]]
 }
 
 # ---------------------------------------------------------------------------

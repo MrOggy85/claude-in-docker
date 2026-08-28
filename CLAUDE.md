@@ -131,9 +131,12 @@ wrapped bullets.
   `docker-containers.txt` follows the same baseline+per-project layout for the
   docker bridge, read per call instead of on a TTL, and so does
   `trusted-settings-rules.txt` (permission rules the settings guard must not
-  flag), read per run. `seen-hosts.txt` is the odd one out: per-project only, no
-  baseline, and WRITTEN (by `proxy/watch.sh`) rather than read as policy — it
-  records what has been contacted, not what is permitted.
+  flag), read per run. Two are per-project only, no baseline, and WRITTEN rather
+  than read as policy: `seen-hosts.txt` (by `proxy/watch.sh`) records what has
+  been contacted, not what is permitted; `mounts.txt` (by `run.sh`, only with the
+  chrome bridge on) records `<container>\t<host>` for each read-write bind mount
+  so the bridge can translate paths — ro mounts stay out, or the agent could
+  write through the host bridge to a path its container is denied.
 - `skills/sandbox/` — the one thing mounted *for* the session rather than the
   user: an on-demand skill (`SKILL.md` + `sandbox-info.sh`) reporting this
   session's published host↔container ports, mounts, volume-backed paths, egress
@@ -186,8 +189,14 @@ wrapped bullets.
   routing are lifted from `docker-bridge/` — a per-project bearer token names the
   project, an `X-Claude-Profile` label names a Chrome profile inside it
   (`~/.cache/claude-in-docker/chrome-profiles/<key>/<label>`), and one session per
-  browser means concurrent containers no longer evict each other. Opt-in via
-  `CLAUDE_CHROME_DEVTOOLS=1`. See docs/chrome-devtools-mcp.md.
+  browser means concurrent containers no longer evict each other. It is a
+  transparent JSON-RPC pipe with ONE exception: filesystem paths. The client is
+  in a container and the server is not, so `roots/list` answers, `tools/call`
+  `filePath`s and the saved-path text in results are rewritten across
+  `mounts.txt` — the container's spelling is the only one Claude ever sees,
+  and keeping it that way is the point (a model told to switch spellings
+  mid-task will not). Opt-in via `CLAUDE_CHROME_DEVTOOLS=1`. See
+  docs/chrome-devtools-mcp.md.
 - `docs/` — feature guides.
 - `.claude/commands/` — committed slash commands (`/tighten-docs`); the only
   negation in `.gitignore`'s `.claude/*` rule. Prompts only: never add a settings

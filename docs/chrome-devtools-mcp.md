@@ -152,9 +152,35 @@ session.
 
 Tools taking a `filePath` (`take_screenshot`, `performance_start_trace`, `take_heapsnapshot`,
 `evaluate_script`) write to the **host** filesystem where the bridge runs, not the container
-workspace, and unless the client negotiates the MCP `roots` capability those writes are confined to
-the OS temp dir. Inline results (screenshots and snapshots returned in the tool response) flow back
-to Claude normally; only explicit `filePath` saves land host-side.
+workspace. `chrome-devtools-mcp` confines those writes to the MCP *workspace roots* the client
+declares, plus the OS temp dir. Inline results (screenshots and snapshots returned in the tool
+response) flow back to Claude normally; only explicit `filePath` saves touch a disk.
+
+Container and host spell the same directory differently — `/home/dev/repo` here is
+`/Users/you/code/thing` there — so the bridge **translates paths in both directions** and the
+container's spelling is the only one Claude ever sees:
+
+| Message | Direction | Rewrite |
+| --- | --- | --- |
+| `roots/list` answer | client -> server | each root to its host path; unmapped roots dropped |
+| `tools/call` `filePath` | client -> server | container -> host |
+| tool result text | server -> client | host -> container |
+
+Without this, every declared root is a container path that does not exist host-side; the server logs
+`Could not resolve configured root`, skips it, and leaves the temp dir as the only writable place,
+where the container cannot read the file back.
+
+The map is `<config-dir>/projects/<key>/mounts.txt`, one `<container>\t<host>` line per
+**read-write** bind mount, rewritten by `run.sh` each run. Read-only mounts are excluded on purpose:
+the bridge runs as the host user, so translating one would let the agent write through it to a path
+its own container is denied. Consequences of the map being the boundary:
+
+- **Only bind-mounted paths round-trip.** A `filePath` elsewhere is passed through untranslated and
+  the server rejects it (or writes it somewhere the container cannot see).
+- **[Volume-backed paths](volume-backed-paths.md) are not real host paths.** `node_modules` and
+  friends live in Docker volumes, so a write under one translates to an unrelated host directory.
+- **A screenshot >= 2 MB is never inlined.** `chrome-devtools-mcp` spills it to the host temp dir
+  instead, which no mount covers. Pass an explicit `filePath` under the repo to get it back.
 
 ## Security
 

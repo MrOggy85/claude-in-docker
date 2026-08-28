@@ -353,6 +353,21 @@ case "${CLAUDE_CHROME_DEVTOOLS:-}" in
       kv "minted chrome-devtools token" "${_CD_TOKEN_FILE}"
     fi
     CHROME_DEVTOOLS_MCP_TOKEN="$(cat "${_CD_TOKEN_FILE}")"
+    # Host and container spell the same directory differently and the bridge runs
+    # host-side, so a container filePath means nothing to it until translated.
+    # Record the READ-WRITE bind mounts for it to map both ways; ro mounts are
+    # left out deliberately — translating one would let the agent write, through
+    # the host bridge, to a path its own container is denied. See
+    # docs/chrome-devtools-mcp.md#file-outputs.
+    {
+      printf '%s\t%s\n' "${REPO_IN_CONTAINER}" "${PROJECT_DIR}"
+      for _m in ${EXTRA_MOUNT_LIST[@]+"${EXTRA_MOUNT_LIST[@]}"}; do
+        _hm="${_m#*=}"                    # "<host>:<mode>" (target is before '=')
+        if [[ "${_hm##*:}" == "rw" ]]; then
+          printf '%s\t%s\n' "${_m%%=*}" "${_hm%:*}"
+        fi
+      done
+    } > "${PROJECT_CONFIG_DIR}/mounts.txt"
     # Always exported, so the ${CLAUDE_CHROME_PROFILE} expansion in
     # mcp-servers.json never resolves empty.
     CLAUDE_CHROME_PROFILE="${CLAUDE_CHROME_PROFILE:-default}"
