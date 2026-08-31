@@ -223,13 +223,30 @@ _cid() {
                 _files -/
                 ;;
               rest)
-                if [[ ${line[1]} == rm ]]; then
-                  case $kind in
-                    domains) _cid_hosts ;;
-                    skip-decryption) _cid_skip_decryption ;;
-                    *)       _cid_containers ;;
-                  esac
-                fi
+                # `cid` parses these flags in any position (see _cmd_allowlist),
+                # so offer them after the verb too — and only where that verb
+                # accepts them, matching _cmd_allowlist's own rejections.
+                local verb=${line[1]} entries=''
+                local -a rest_flags method_flag
+                method_flag=(
+                  '--method[restrict the entry to these HTTP methods]:methods:(GET HEAD POST PUT PATCH DELETE OPTIONS GET,HEAD)'
+                )
+                rest_flags=(
+                  '(-g --global)'{-g,--global}'[target the shared baseline list]'
+                  '(-C --dir --project)'{-C,--dir,--project}'[select project by directory]:dir:_files -/'
+                )
+                case $kind:$verb in
+                  domains:add)
+                    rest_flags+=(
+                      '--for[expire the entry after a duration, e.g. 15m/2h/1d]:duration:'
+                      "${method_flag[@]}"
+                    ) ;;
+                  domains:rm|domains:remove)
+                    rest_flags+=("${method_flag[@]}"); entries=_cid_hosts ;;
+                  skip-decryption:rm|skip-decryption:remove) entries=_cid_skip_decryption ;;
+                  containers:rm|containers:remove)           entries=_cid_containers ;;
+                esac
+                _arguments "${rest_flags[@]}" "*:entry:${entries}"
                 ;;
             esac
           fi
