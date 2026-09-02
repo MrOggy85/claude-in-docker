@@ -107,6 +107,13 @@ case "\$1" in
   network)
     exit 0
     ;;
+  info)
+    # scripts/resource-limits.sh derives its memory/cpu defaults from this.
+    # 24 GiB / 12 cores -> --memory=6g --cpus=10. STUB_HOST_INFO="" simulates a
+    # reading that failed.
+    echo "\${STUB_HOST_INFO-25769803776 12}"
+    exit 0
+    ;;
   volume)
     case "\$2" in
       # exit 1 = "not found", so run.sh creates the volume. Tests that need the
@@ -669,6 +676,89 @@ refute_run_arg() {
   [ "$status" -eq 0 ]
   ! grep -q 'npm_config_store_dir' "${DOCKER_RUN_ARGS}"
   ! grep -q '^--volume=claude-vol-' "${DOCKER_RUN_ARGS}"
+}
+
+# ---------------------------------------------------------------------------
+# Resource limits: the wiring to scripts/resource-limits.sh (that script's own
+# behaviour — derivation, validation, the off spellings — is in
+# resource-limits.bats)
+# ---------------------------------------------------------------------------
+
+@test "resource limits: the derived caps reach docker run" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--memory=6g"
+  assert_run_arg "--memory-swap=6g"
+  assert_run_arg "--cpus=10"
+  assert_run_arg "--pids-limit=2048"
+}
+
+@test "resource limits: CLAUDE_MEMORY overrides the derived cap" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_MEMORY="12g" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--memory=12g"
+  refute_run_arg "--memory=6g"
+}
+
+@test "resource limits: CLAUDE_MEMORY=unlimited removes the flag entirely" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_MEMORY="unlimited" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  ! grep -q -- '^--memory' "${DOCKER_RUN_ARGS}"
+  assert_run_arg "--pids-limit=2048"
+}
+
+@test "resource limits: a malformed value aborts before the container starts" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_MEMORY="6x" \
+    bash "${RUN_SH}"
+  [ "$status" -ne 0 ]
+  # Command substitution, not process substitution: an uncapped container must
+  # never be the fallback for a typo.
+  [ ! -f "${DOCKER_RUN_ARGS}" ]
+}
+
+@test "resource limits: the caps are passed to the sandbox skill too" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "CONTAINER_MEMORY_LIMIT=6g"
+  assert_run_arg "CONTAINER_CPU_LIMIT=10"
+  assert_run_arg "CONTAINER_PIDS_LIMIT=2048"
+}
+
+@test "resource limits: an undetectable host still caps pids and still runs" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
+    MCP_GH_BEARER="" \
+    STUB_HOST_INFO="" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--pids-limit=2048"
+  ! grep -q -- '^--memory' "${DOCKER_RUN_ARGS}"
+  assert_run_arg "CONTAINER_MEMORY_LIMIT="
 }
 
 # ---------------------------------------------------------------------------

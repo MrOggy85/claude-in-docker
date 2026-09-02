@@ -20,7 +20,7 @@ SHELL_SOURCES := cid \
   $(wildcard sound-effects/*.sh) $(wildcard templates/*.sh) \
   $(wildcard skills/*/*.sh)
 
-.PHONY: init ca migrate bats test test-extra-mounts test-extra-ports test-path-volumes test-run test-e2e test-ext-allowlist test-watch test-gen-ca test-chrome-devtools-mcp test-docker-bridge test-guards test-scan-settings test-cid test-colors test-sandbox-info test-release lint lockfile update-claude pin-digest proxy-up proxy-down release
+.PHONY: init ca migrate bats test test-extra-mounts test-extra-ports test-path-volumes test-resource-limits test-run test-e2e test-ext-allowlist test-watch test-gen-ca test-chrome-devtools-mcp test-docker-bridge test-guards test-scan-settings test-cid test-colors test-sandbox-info test-release lint lockfile update-claude pin-digest proxy-up proxy-down release
 
 # install_additional_packages.sh and egress-ca.crt stay in the repo: both are
 # COPY'd into the base image at build time (build context = repo dir), so they
@@ -76,6 +76,9 @@ test-extra-ports:
 
 test-path-volumes:
 	bats test/path-volumes.bats
+
+test-resource-limits:
+	bats test/resource-limits.bats
 
 test-run:
 	bats test/run.bats

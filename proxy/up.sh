@@ -99,11 +99,22 @@ fi
 docker rm -f "${PROXY_NAME}" >/dev/null 2>&1 || true
 
 kv "starting ${PROXY_NAME} on ${NETWORK}" "${IMAGE}"
+# Capped like every Claude container, and for the same reason (see
+# docs/resource-limits.md): this one is long-lived, so a leak here is the most
+# likely way this project takes the host down. Squid's workload is known and
+# bounded — 256 MB of cache_mem plus the cert-signing helpers — so the ceiling is
+# a fixed value rather than a share of the host. --memory-swap equal to --memory
+# means no swap: swap-thrash would hang every container's egress rather than
+# restart one proxy.
+MEMORY="${CLAUDE_EGRESS_MEMORY:-1g}"
 docker run -d \
   --name "${PROXY_NAME}" \
   --network "${NETWORK}" \
   --network-alias squid \
   --restart unless-stopped \
+  --memory "${MEMORY}" \
+  --memory-swap "${MEMORY}" \
+  --pids-limit 512 \
   --volume "${SCRIPT_DIR}:${SRC_MOUNT}:ro" \
   --volume "${BASELINE_DOMAINS_FILE}:/etc/squid/baseline-domains.txt:ro" \
   --volume "${BASELINE_SKIP_DECRYPTION_FILE}:/etc/squid/baseline-skip-decryption.txt:ro" \

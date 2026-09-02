@@ -154,6 +154,14 @@ wrapped bullets.
   `docker run` token per line (`--volume=`, plus one `--env=` for pnpm) and is
   called by `run.sh` (step 3d) via command substitution, so a failure there aborts
   the run. See docs/volume-backed-paths.md.
+- `scripts/resource-limits.sh` — owns the container's memory/CPU/pids caps: the
+  defaults derived from `docker info` (so Docker Desktop's VM, not the Mac's
+  RAM), the validation, and swap-off-by-default. Prints one `docker run` token
+  per line like `path-volumes.sh`, called by `run.sh` (step 3g) via command
+  substitution, so a malformed `CLAUDE_MEMORY` aborts the run rather than
+  starting an uncapped container. The proxy's own caps are inline in
+  `proxy/up.sh` — a known, bounded workload needs no derivation. See
+  docs/resource-limits.md.
 - `scripts/scan-project-settings.sh` — classifies a project's
   `.claude/settings*.json` by capability (dependency-free: a literal key scan
   plus an awk JSON walk, both fail-closed). Backs both

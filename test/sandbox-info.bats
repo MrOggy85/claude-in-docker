@@ -22,6 +22,7 @@ render() {  # <VAR=VALUE>...
     -u CONTAINER_EXTRA_MOUNTS -u CONTAINER_VOLUME_PATHS \
     -u REPO_IN_CONTAINER -u EGRESS_PROXY_HOST -u DOCKER_BRIDGE_TOKEN \
     -u CONTAINER_PROJECT_INSTALL_SCRIPT -u CONTAINER_PROJECT_IMAGE \
+    -u CONTAINER_MEMORY_LIMIT -u CONTAINER_CPU_LIMIT -u CONTAINER_PIDS_LIMIT \
     "$@" bash "${SANDBOX_INFO}"
 }
 
@@ -196,6 +197,46 @@ render() {  # <VAR=VALUE>...
 }
 
 # ---------------------------------------------------------------------------
+# Resource limits — a session that hits one sees only exit 137
+# ---------------------------------------------------------------------------
+
+@test "memory cap: reported with the exit-137 explanation and the relaunch route" {
+  render CONTAINER_MEMORY_LIMIT="6g"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Memory is capped at 6g"* ]]
+  [[ "$output" == *"exit 137"* ]]
+  [[ "$output" == *'`CLAUDE_MEMORY=<larger> run.sh`'* ]]
+}
+
+@test "no memory cap: stated as absent, with no false exit-137 advice" {
+  render
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Memory: no cap on this container."* ]]
+  [[ "$output" != *"exit 137"* ]]
+}
+
+@test "cpu cap: reported, and nproc is flagged as not reflecting it" {
+  render CONTAINER_CPU_LIMIT="10"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CPU is capped at 10 cores"* ]]
+  [[ "$output" == *"nproc"* ]]
+}
+
+@test "pids cap: the EAGAIN a spawn fails with is named" {
+  render CONTAINER_PIDS_LIMIT="2048"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"At most 2048 processes"* ]]
+  [[ "$output" == *"Resource temporarily unavailable"* ]]
+}
+
+@test "no cpu or pids cap: no ceiling is claimed" {
+  render CONTAINER_MEMORY_LIMIT="6g"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"CPU is capped"* ]]
+  [[ "$output" != *"At most"* ]]
+}
+
+# ---------------------------------------------------------------------------
 # Shape of the whole report
 # ---------------------------------------------------------------------------
 
@@ -204,6 +245,7 @@ render() {  # <VAR=VALUE>...
   [ "$status" -eq 0 ]
   [[ "$output" == *"## Files"* ]]
   [[ "$output" == *"## Installing packages"* ]]
+  [[ "$output" == *"## Memory, CPU and processes"* ]]
   [[ "$output" == *"## Ports published to the host (inbound)"* ]]
   [[ "$output" == *"## Host services reachable from here (outbound)"* ]]
   [[ "$output" == *"## Everything else on the network"* ]]

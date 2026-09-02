@@ -27,6 +27,9 @@
 #   DOCKER_BRIDGE_TOKEN             presence only — the value is never printed
 #   CONTAINER_PROJECT_INSTALL_SCRIPT  host path of the project's install script
 #   CONTAINER_PROJECT_IMAGE         per-project image tag, set only when one is used
+#   CONTAINER_MEMORY_LIMIT          --memory value, empty when uncapped
+#   CONTAINER_CPU_LIMIT             --cpus value, empty when uncapped
+#   CONTAINER_PIDS_LIMIT            --pids-limit value, empty when uncapped
 set -euo pipefail
 
 REPO_IN_CONTAINER="${REPO_IN_CONTAINER:-/home/dev/repo}"
@@ -113,6 +116,31 @@ else
   echo "- System packages: the host-side install script path was not passed in. Tell"
   echo "  the user to add the package to their \`install_additional_packages.sh\` and"
   echo "  relaunch \`run.sh\`; you cannot install it from here."
+fi
+echo
+
+echo "## Memory, CPU and processes"
+echo
+if [[ -n "${CONTAINER_MEMORY_LIMIT:-}" ]]; then
+  # The swap setting is deliberately not reported: run.sh does not forward it, and
+  # a hardcoded "swap off" would be a lie whenever CLAUDE_MEMORY_SWAP raised it.
+  echo "- Memory is capped at ${CONTAINER_MEMORY_LIMIT} for this container."
+  echo "- Past that the kernel SIGKILLs the biggest process here: exit 137, or a bare"
+  echo "  \`Killed\`, with no error from the program itself. That is this cap, not a bug"
+  echo "  in the command — re-running it unchanged fails the same way."
+  echo "- Make the work fit (fewer parallel jobs, a smaller batch, a lower"
+  echo "  \`--max-old-space-size\`) or tell the user to relaunch with"
+  echo "  \`CLAUDE_MEMORY=<larger> run.sh\`. You cannot raise it from here."
+else
+  echo "- Memory: no cap on this container."
+fi
+if [[ -n "${CONTAINER_CPU_LIMIT:-}" ]]; then
+  echo "- CPU is capped at ${CONTAINER_CPU_LIMIT} cores' worth. \`nproc\` still reports the host's"
+  echo "  count, so pick job counts from this number, not from \`nproc\`."
+fi
+if [[ -n "${CONTAINER_PIDS_LIMIT:-}" ]]; then
+  echo "- At most ${CONTAINER_PIDS_LIMIT} processes/threads at once. A spawn refused with"
+  echo "  \`Resource temporarily unavailable\` is that cap, not a broken toolchain."
 fi
 echo
 

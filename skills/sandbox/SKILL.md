@@ -1,6 +1,6 @@
 ---
 name: sandbox
-description: Report this session's sandbox shape — which host port maps to a container port, what is mounted from the host, which paths are Docker volumes, what is installed and how to get more, and why network requests get blocked. Read this BEFORE reaching for apt-get, sudo, or any install command, and whenever a command is "not found" — apt-get cannot succeed here. Also use when you need the URL the user (or a host-side browser such as the chrome-devtools MCP server) must open to reach a server you started, when a fetch/curl/install fails on the network, when a file you wrote is not visible on the host, or when the user asks what is reachable from where. The values change per session, so read them rather than assuming.
+description: Report this session's sandbox shape — which host port maps to a container port, what is mounted from the host, which paths are Docker volumes, what is installed and how to get more, and why network requests get blocked. Read this BEFORE reaching for apt-get, sudo, or any install command, and whenever a command is "not found" — apt-get cannot succeed here — or dies with exit 137 or a bare "Killed", which is this container's memory cap rather than a crash. Also use when you need the URL the user (or a host-side browser such as the chrome-devtools MCP server) must open to reach a server you started, when a fetch/curl/install fails on the network, when a file you wrote is not visible on the host, or when the user asks what is reachable from where. The values change per session, so read them rather than assuming.
 ---
 
 # This session's sandbox
@@ -49,6 +49,11 @@ nothing to clean up. Re-run it any time; it is cheap.
   the container, so a `node_modules` you install is invisible to host tooling.
 - **Installing packages.** Which package managers work, and the host file the
   user must edit for anything else.
+- **Memory, CPU and processes.** The container's own ceilings. Exit 137 or a bare
+  `Killed` is the memory cap doing its job, so retrying the same command is
+  pointless: shrink the work, or give the user the relaunch command the output
+  prints. `nproc` reports the host's cores and ignores the CPU cap — size parallel
+  jobs from the reported cap instead.
 
 ## Toolchain
 
