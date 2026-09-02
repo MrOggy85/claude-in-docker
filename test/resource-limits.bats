@@ -22,6 +22,9 @@ setup() {
   mkdir -p "${TEST_TMP}/bin"
   cat > "${TEST_TMP}/bin/docker" << 'EOF'
 #!/usr/bin/env bash
+# STUB_EXIT makes the call itself fail: 127 is what a missing binary yields,
+# 1 what a dead daemon does. The script only ever sees the exit status.
+[[ -n "${STUB_EXIT:-}" ]] && exit "${STUB_EXIT}"
 [[ "$1" == info ]] || exit 1
 # Unset STUB_HOST = docker answered nothing, the "could not derive" path.
 [[ -n "${STUB_HOST:-}" ]] && echo "${STUB_HOST}"
@@ -101,10 +104,22 @@ refute_token() {
   [[ "$stderr" == *"no memory limit on this container"* ]]
 }
 
-@test "docker missing entirely: no crash, pids still capped" {
-  PATH="/usr/bin:/bin" run --separate-stderr bash "${LIMITS}"
+@test "docker not installed or daemon down: no crash, pids still capped" {
+  # Driven through the stub's exit code, NOT by trimming PATH: a CI runner has a
+  # real docker in /usr/bin, so a trimmed PATH would query the live daemon and
+  # this suite would stop being hermetic.
+  STUB_EXIT=127 run --separate-stderr bash "${LIMITS}"
   [ "$status" -eq 0 ]
   [ "$output" = "--pids-limit=2048" ]
+  [[ "$stderr" == *"no memory limit on this container"* ]]
+}
+
+@test "docker info answering garbage: read as no reading at all, never parsed" {
+  STUB_HOST="lots-of-ram 12" run --separate-stderr bash "${LIMITS}"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"--memory"* ]]
+  # The CPU field was still numeric, so that half of the reading stands.
+  assert_token "--cpus=10"
 }
 
 # ---------------------------------------------------------------------------
