@@ -12,6 +12,7 @@
 - [Passing Environment Variables](passing-env-vars.md) — inject env vars via a `.env` file in the config dir
 - [Per-Project Launch Config](per-project-env.md) — per-repo mounts, ports, and secrets in a gitignored `.claude-env`
 - [Volume-Backed Paths](volume-backed-paths.md) — `node_modules` and the pnpm store stay off the host disk; extend with `CLAUDE_VOLUME_PATHS`
+- [Resource Limits](resource-limits.md) — memory, CPU and process caps so a runaway container dies alone instead of the kernel killing a bystander; tune with `CLAUDE_MEMORY` / `CLAUDE_CPUS`
 - [Installing Additional Packages](installing-packages.md) — add tools (e.g. Deno) at image build time
 - [Updating Claude Code](updating-claude-code.md) — bump the pinned `@anthropic-ai/claude-code` version and rebuild
 - [Cutting a Release](releasing.md) — `make release` derives the version from Conventional Commits, writes CHANGELOG.md and tags; pushing the tag publishes the GitHub Release

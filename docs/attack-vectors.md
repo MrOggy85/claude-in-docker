@@ -424,3 +424,27 @@ if you opt out with `SKIP_CLAUDE_VOLUME_PATHS`.
 - **`direnv` / `.envrc`** — a planted `.envrc` runs on the host when you `cd` into the directory.
 - **Parser/tooling exploits** — a crafted file exploits a vulnerability in a host editor/LSP/parser
   that merely reads it (low probability).
+
+## Host Resource Exhaustion (Mitigated)
+
+A package `postinstall`, a mistaken `make -j`, or a deliberate fork bomb can allocate until the host
+thrashes. The blast radius is the machine, not the container: the kernel's OOM killer picks its
+victim by size across every process on the box, so the process it kills is frequently an unrelated
+container or editor rather than the one that spiked.
+
+Every container this project starts is therefore capped on memory, CPU and process count, with
+defaults derived from the Docker host and no configuration required — see [Resource
+Limits](resource-limits.md). A container that exceeds its memory cap is killed inside its own cgroup;
+the ceiling is set at `docker run` time, so nothing in the container can raise it.
+
+What remains:
+
+- **Disk and inodes are not capped.** A container can fill the host filesystem through the
+  bind-mounted repo, or through its named volumes. `--storage-opt` needs a specific storage driver
+  and is not set.
+- **Disk I/O is not throttled** (`--blkio-weight`), so a heavy writer can still make the host
+  sluggish without hitting any limit.
+- **Concurrency.** Each container is capped individually; nothing limits how many you launch, and
+  enough sessions still oversubscribe the host.
+- **Opting out re-opens the vector** — `CLAUDE_MEMORY=unlimited` restores the pre-cap behaviour
+  exactly.

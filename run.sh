@@ -253,7 +253,7 @@ kv "mcp config" "${MCP_FILE}"
 #     (ro default, ":rw"/":ro", ~ and relative paths). The primary repo and
 #     session volume are unaffected; usage tracking keys off the primary repo.
 #     Each token is also recorded as "<target>=<host path>:<mode>" for the sandbox
-#     skill to report (see 3g).
+#     skill to report (see 3h).
 EXTRA_MOUNT_LIST=()
 while IFS= read -r vol; do
   RO_MOUNTS+=("$vol")
@@ -273,7 +273,7 @@ done < <(
 #     container ports go into CONTAINER_OPEN_PORTS for the firewall to open
 #     explicitly (its INPUT policy is DROP — publishing alone isn't enough); the
 #     host endpoint is the one part the container cannot derive, so the full
-#     mapping goes in too for the sandbox skill to report (see 3g). See that
+#     mapping goes in too for the sandbox skill to report (see 3h). See that
 #     script's syntax.
 PUBLISH_ARGS=()
 OPEN_PORTS=()
@@ -294,7 +294,7 @@ CONTAINER_PUBLISHED_PORTS="$(IFS=,; printf '%s' "${PUBLISHED_PORTS[*]+${PUBLISHE
 #       OUTPUT rule per port. See docs/host-outbound-ports.md.
 CONTAINER_HOST_OUTBOUND_PORTS="${SOUND_PORT:-4767}${CLAUDE_HOST_OUTBOUND_PORTS:+,${CLAUDE_HOST_OUTBOUND_PORTS}}"
 # Labels for the ports whose purpose is known here, so the sandbox skill can name
-# them instead of printing a bare number (see 3g). The user's own entries stay
+# them instead of printing a bare number (see 3h). The user's own entries stay
 # unlabelled; CHROME_DEVTOOLS_MCP_PORT is labelled only if they opened it.
 CONTAINER_HOST_PORT_LABELS="${SOUND_PORT:-4767}=sound server"
 # The trailing-comma pattern also accepts a "/tcp" suffix on the user's entry.
@@ -402,7 +402,7 @@ _path_volume_out="$(
   SKIP_CLAUDE_VOLUME_PATHS="${SKIP_CLAUDE_VOLUME_PATHS:-}" \
     "${SCRIPT_DIR}/scripts/path-volumes.sh"
 )"
-#     The `--volume=` targets are also recorded for the sandbox skill (see 3g);
+#     The `--volume=` targets are also recorded for the sandbox skill (see 3h);
 #     the `--env=` token pnpm gets is not a path, so it is skipped.
 VOLUME_PATH_LIST=()
 while IFS= read -r _tok; do
@@ -486,7 +486,38 @@ PROXY_ENV_ARGS=(
 kv "egress via central proxy" "network ${EGRESS_NETWORK}, project key ${PROJECT_KEY}"
 kv "TLS intercepted by the proxy" "CA ${EGRESS_CA_CRT}" "exempt a host: cid skip-decryption add <host>"
 
-# 3g. Sandbox self-awareness, ON DEMAND: mount the `sandbox` skill so the session
+# 3g. Resource limits — SECURE BY DEFAULT: cap memory, CPU and process count so a
+#     runaway (or hostile) process is killed inside its OWN cgroup instead of
+#     leaving the host's OOM killer to shoot whichever container is biggest, which
+#     is usually a bystander. Defaults are derived from the Docker host and every
+#     one is overridable; the script owns the derivation, the validation and the
+#     "swap off" default. See it and docs/resource-limits.md.
+#
+#     Command substitution, like 3d: a malformed CLAUDE_MEMORY must abort the run,
+#     not silently start an uncapped container.
+LIMIT_ARGS=()
+_limits_out="$(
+  CLAUDE_MEMORY="${CLAUDE_MEMORY:-}" \
+  CLAUDE_MEMORY_SWAP="${CLAUDE_MEMORY_SWAP:-}" \
+  CLAUDE_CPUS="${CLAUDE_CPUS:-}" \
+  CLAUDE_PIDS_LIMIT="${CLAUDE_PIDS_LIMIT:-}" \
+    "${SCRIPT_DIR}/scripts/resource-limits.sh"
+)"
+#     The values are also handed to the sandbox skill (see 3h): a session that
+#     hits a limit sees exit 137 and nothing else, so it needs to be able to read
+#     the ceiling it just hit.
+CONTAINER_MEMORY_LIMIT=""; CONTAINER_CPU_LIMIT=""; CONTAINER_PIDS_LIMIT=""
+while IFS= read -r _tok; do
+  [[ -n "${_tok}" ]] || continue
+  LIMIT_ARGS+=("${_tok}")
+  case "${_tok}" in
+    --memory=*)      CONTAINER_MEMORY_LIMIT="${_tok#*=}" ;;
+    --cpus=*)        CONTAINER_CPU_LIMIT="${_tok#*=}" ;;
+    --pids-limit=*)  CONTAINER_PIDS_LIMIT="${_tok#*=}" ;;
+  esac
+done <<< "${_limits_out}"
+
+# 3h. Sandbox self-awareness, ON DEMAND: mount the `sandbox` skill so the session
 #     can look up the one thing it cannot derive — which host port maps to which
 #     container port — plus its mounts, volume-backed paths, egress policy and how
 #     to get a package installed instead of reaching for apt-get. The
@@ -511,6 +542,10 @@ case "${CLAUDE_SANDBOX_INFO:-1}" in
       # The host file to edit to add a system package (see 2d) — passed whether or
       # not it exists yet, since "create this file" is the answer either way.
       --env "CONTAINER_PROJECT_INSTALL_SCRIPT=${_PROJECT_INSTALL}"
+      # The ceilings from 3g, so an exit 137 reads as policy rather than a crash.
+      --env "CONTAINER_MEMORY_LIMIT=${CONTAINER_MEMORY_LIMIT}"
+      --env "CONTAINER_CPU_LIMIT=${CONTAINER_CPU_LIMIT}"
+      --env "CONTAINER_PIDS_LIMIT=${CONTAINER_PIDS_LIMIT}"
     )
     # Only when 2d actually derived one, so the session never claims a per-project
     # image that isn't in play.
@@ -532,6 +567,7 @@ docker run \
   --interactive --tty --rm \
   --user "$(id -u):$(id -g)" \
   --cap-add=NET_ADMIN \
+  ${LIMIT_ARGS[@]+"${LIMIT_ARGS[@]}"} \
   ${PROXY_NET_ARGS[@]+"${PROXY_NET_ARGS[@]}"} \
   --env-file "${ENV_FILE}" \
   ${PROXY_ENV_ARGS[@]+"${PROXY_ENV_ARGS[@]}"} \

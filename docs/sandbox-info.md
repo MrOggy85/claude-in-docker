@@ -43,6 +43,9 @@ It reports, in order:
   validation failure` sudo returns; which package managers work unaided; and the host path of this
   project's `install_additional_packages.sh` for everything else. See [Installing
   Packages](installing-packages.md).
+- **Memory, CPU and processes** — this container's three ceilings, so an exit 137 reads as the memory
+  cap rather than a crash and the session names the variable to raise instead of retrying. See
+  [Resource Limits](resource-limits.md).
 - **Ports published to the host (inbound)** — each container port with the host endpoint forwarding
   to it, or an explicit "none" plus the `CLAUDE_PORTS` relaunch route. See [Publishing
   Ports](publishing-ports.md).
@@ -58,9 +61,10 @@ It reports, in order:
 ## How it stays correct across parallel sessions
 
 `sandbox-info.sh` is a pure function of the environment, and the environment is per container.
-`run.sh` (step 3g) forwards `CONTAINER_PUBLISHED_PORTS`, `CONTAINER_HOST_PORT_LABELS`,
-`CONTAINER_EXTRA_MOUNTS`, `CONTAINER_VOLUME_PATHS` and `CONTAINER_PROJECT_INSTALL_SCRIPT` alongside
-the `CLAUDE_HOST_PROJECT_DIR` and `CONTAINER_HOST_OUTBOUND_PORTS` it already set, plus
+`run.sh` (step 3h) forwards `CONTAINER_PUBLISHED_PORTS`, `CONTAINER_HOST_PORT_LABELS`,
+`CONTAINER_EXTRA_MOUNTS`, `CONTAINER_VOLUME_PATHS`, `CONTAINER_PROJECT_INSTALL_SCRIPT` and the
+`CONTAINER_MEMORY_LIMIT` / `CONTAINER_CPU_LIMIT` / `CONTAINER_PIDS_LIMIT` trio alongside the
+`CLAUDE_HOST_PROJECT_DIR` and `CONTAINER_HOST_OUTBOUND_PORTS` it already set, plus
 `CONTAINER_PROJECT_IMAGE` when step 2d derived a per-project image. Two sessions in one project with different
 `CLAUDE_PORTS` each report their own mapping, with nothing generated on the host to clean up.
 
@@ -77,8 +81,9 @@ CLAUDE_SANDBOX_INFO=0 ./run.sh
 ```
 
 Accepts `0`/`false`/`no`/`off`. The mount is skipped entirely, so `~/.claude/skills/sandbox` does
-not exist and the four env vars are unset. What the sandbox *is* does not change — ports are still
-published and opened identically; only the session's ability to look them up goes away.
+not exist and the `CONTAINER_*` env vars above are unset. What the sandbox *is* does not change —
+ports are still published and opened identically, limits still apply; only the session's ability to
+look them up goes away.
 
 ## Avoiding the permission prompt
 

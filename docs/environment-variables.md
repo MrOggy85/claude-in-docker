@@ -38,6 +38,10 @@ CLAUDE_MOUNTS="$HOME/data:/data" ./run.sh
 | `DOCKER_BRIDGE_BIND` | `0.0.0.0` | Address the docker bridge binds. `0.0.0.0` is required to be reachable over the Docker gateway; narrow it if you know your gateway address. Host-only. | [Host Docker Bridge](docker-bridge.md) |
 | `DOCKER_BRIDGE_DOCKER_CMD` | `docker` | Path to the `docker` CLI the bridge invokes (launchd's `PATH` is minimal). Host-only. | [Host Docker Bridge](docker-bridge.md) |
 | `CLAUDE_SANDBOX_INFO` | `1` | `0`/`false`/`no`/`off` stops mounting the `sandbox` skill, so the session cannot look up its own ports, mounts and egress policy. The sandbox itself is unchanged. | [Sandbox Self-Awareness](sandbox-info.md) |
+| `CLAUDE_MEMORY` | 25% of the host's RAM, floor `2g` | Memory cap (`--memory`). `0`/`off`/`unlimited` removes it. | [Resource Limits](resource-limits.md) |
+| `CLAUDE_MEMORY_SWAP` | same as `CLAUDE_MEMORY` (swap off) | Memory+swap **total** (`--memory-swap`); must be ≥ `CLAUDE_MEMORY`. | [Resource Limits](resource-limits.md) |
+| `CLAUDE_CPUS` | host cores − 2 | CPU quota (`--cpus`); accepts fractions. Unset on a 1–2 core host. | [Resource Limits](resource-limits.md) |
+| `CLAUDE_PIDS_LIMIT` | `2048` | Max processes/threads (`--pids-limit`). | [Resource Limits](resource-limits.md) |
 | `CLAUDE_VOLUME` | `claude-<project>-<hash>` | Override the per-project session volume name. | — |
 | `CLAUDE_CONTAINER_NAME` | `claude-<project>-<random>` | Pin a container name instead of the randomized default. | — |
 
@@ -52,6 +56,7 @@ rename the shared network and container, or swap the image.
 | `CLAUDE_EGRESS_NETWORK` | `claude-egress` | Docker network shared by the proxy and the Claude containers. | [Centralized Egress Proxy](egress-proxy.md) |
 | `CLAUDE_EGRESS_PROXY_NAME` | `claude-egress-proxy` | Name of the long-running Squid container. | [Centralized Egress Proxy](egress-proxy.md) |
 | `CLAUDE_EGRESS_IMAGE` | `claude-egress-squid:local` | Squid image `proxy/up.sh` runs. Set it to use your own image instead of building `proxy/Dockerfile` — it must be an `ssl_bump`-capable build. | [TLS Inspection](tls-inspection.md) |
+| `CLAUDE_EGRESS_MEMORY` | `1g` | Memory cap for the proxy container, applied with swap off. | [Resource Limits](resource-limits.md) |
 
 Read by the egress alert watcher (`proxy/watch.sh`), which `run.sh` starts alongside the proxy:
 
