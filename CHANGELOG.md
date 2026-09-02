@@ -8,6 +8,33 @@ section by hand — the Release page is a copy taken at tag time. See
 
 [releases]: https://github.com/MrOggy85/claude-in-docker/releases
 
+## 2.0.0 (2026-09-02)
+
+### BREAKING CHANGES
+
+* footer has to live in a commit message. The changelog quotes ([#124](https://github.com/MrOggy85/claude-in-docker/pull/124))
+* the bearer token is required, so an existing ([#118](https://github.com/MrOggy85/claude-in-docker/pull/118))
+
+### Features
+
+* **chrome-devtools:** translate paths between container and host ([#125](https://github.com/MrOggy85/claude-in-docker/pull/125))
+* **proxy:** path- and method-level egress allowlist rules ([#123](https://github.com/MrOggy85/claude-in-docker/pull/123))
+* **proxy:** alert immediately on a first-time or denied egress host ([#122](https://github.com/MrOggy85/claude-in-docker/pull/122))
+* **proxy:** relay the squid access log to docker logs ([#120](https://github.com/MrOggy85/claude-in-docker/pull/120))
+* Chrome DevTools per-project tokens, named profiles and concurrent sessions ([#118](https://github.com/MrOggy85/claude-in-docker/pull/118))
+* Egress TLS Inspection ([#110](https://github.com/MrOggy85/claude-in-docker/pull/110))
+
+### Bug Fixes
+
+* **completions:** offer domains flags after the verb, not only before it ([#126](https://github.com/MrOggy85/claude-in-docker/pull/126))
+* **chrome-devtools:** don't mistake a reused pid for a running Chrome ([#119](https://github.com/MrOggy85/claude-in-docker/pull/119))
+* **proxy:** mount proxy/ whole and health-check the allowlist helper ([#117](https://github.com/MrOggy85/claude-in-docker/pull/117))
+
+### Documentation
+
+* add feature and bugfix pull request templates ([#124](https://github.com/MrOggy85/claude-in-docker/pull/124))
+* add OpenShell/agentsh comparison, lead README with host-integration strengths ([#109](https://github.com/MrOggy85/claude-in-docker/pull/109))
+
 ## 1.0.0 (2026-08-20)
 
 First tagged release, covering the project's history to this point.
