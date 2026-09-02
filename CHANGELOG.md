@@ -12,8 +12,14 @@ section by hand — the Release page is a copy taken at tag time. See
 
 ### BREAKING CHANGES
 
-* footer has to live in a commit message. The changelog quotes ([#124](https://github.com/MrOggy85/claude-in-docker/pull/124))
-* the bearer token is required, so an existing ([#118](https://github.com/MrOggy85/claude-in-docker/pull/118))
+* **chrome-devtools:** the bearer token is now required, so an existing
+  `mcp-servers.json` entry gets 401 on every call. Add the `Authorization` and
+  `X-Claude-Profile` headers documented in
+  [docs/chrome-devtools-mcp.md](docs/chrome-devtools-mcp.md) and launch with
+  `CLAUDE_CHROME_DEVTOOLS=1`, which mints the token and opens the port. The entry
+  is no longer in `templates/mcp-servers.json`: with the bridge disabled it would
+  show as a failed MCP server on every run.
+  ([#118](https://github.com/MrOggy85/claude-in-docker/pull/118))
 
 ### Features
 
