@@ -45,10 +45,12 @@ add() {  # <epoch> <result/status> <url> <project-key>
 }
 
 # Same, for a request logged INSIDE an established tunnel — the decrypted kind,
-# whose method is its own and whose URL carries a path.
-add_req() {  # <epoch> <result/status> <method> <url> <project-key>
-  LOG+="$(printf '%s      1 172.19.0.3 %s 100 %s %s %s HIER_DIRECT/1.2.3.4 -' \
-    "$1" "$2" "$3" "$4" "$5")"$'\n'
+# whose method is its own and whose URL carries a path. The hierarchy defaults to
+# HIER_DIRECT (an upstream was contacted); pass NONE/- for a line Squid answered
+# by itself, which is what its own denials look like.
+add_req() {  # <epoch> <result/status> <method> <url> <project-key> [hierarchy]
+  LOG+="$(printf '%s      1 172.19.0.3 %s 100 %s %s %s %s -' \
+    "$1" "$2" "$3" "$4" "$5" "${6:-HIER_DIRECT/1.2.3.4}")"$'\n'
 }
 
 # Classify $LOG (or the argument); alert lines land in $output.
@@ -226,6 +228,84 @@ alert	proj-aaa111	b.example.com	denied-by-rule"
   [ "$(hits 'DENIED')" -eq 2 ]
   [[ "$output" == *"domains add a.example.com"* ]]
   [[ "$output" != *"domains add b.example.com"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# The origin's own 403 — relayed, not imposed. Squid logs it with the result code
+# of a normal fetch and a hierarchy naming the server it reached, so only those
+# two fields tell it from a denial the allowlist made.
+# ---------------------------------------------------------------------------
+
+@test "an origin 403 relayed through the tunnel is not a rule denial" {
+  add     1000.0 TCP_TUNNEL/200 api.example.com:443 proj-aaa111
+  add_req 1001.0 TCP_MISS/403 POST https://api.example.com/v1/login proj-aaa111
+  proc
+  [ "$(hits 'upstream-403')" -eq 1 ]
+  [ "$(hits 'denied-by-rule')" -eq 0 ]
+  [ "$(hits '^alert')" -eq 0 ]
+}
+
+@test "an origin 403 on a first contact reports both the new host and the refusal" {
+  add_req 1000.0 TCP_MISS/403 GET https://api.example.com/v1 proj-aaa111
+  proc
+  [ "$(hits 'new-host$')" -eq 1 ]
+  [ "$(hits 'upstream-403')" -eq 1 ]
+  [ "$(hits 'new-host-denied')" -eq 0 ]
+}
+
+@test "a Squid denial reaching no upstream is a denial whatever its result code" {
+  # Belt and braces for the result-code test: a line that contacted nobody
+  # cannot be relaying anyone's 403, so it must fall to the denial side.
+  add_req 1000.0 TAG_NONE/403 POST https://api.example.com/admin proj-aaa111 NONE/-
+  proc
+  [ "$(hits 'denied-by-rule')" -eq 1 ]
+  [ "$(hits 'upstream-403')" -eq 0 ]
+}
+
+@test "TCP_DENIED_ABORTED still reads as a denial" {
+  add_req 1000.0 TCP_DENIED_ABORTED/403 POST https://api.example.com/admin proj-aaa111
+  proc
+  [ "$(hits 'denied-by-rule')" -eq 1 ]
+  [ "$(hits 'upstream-403')" -eq 0 ]
+}
+
+@test "a repeated origin 403 is squelched by its own cooldown" {
+  add     1000.0 TCP_TUNNEL/200 api.example.com:443 proj-aaa111
+  add_req 1001.0 TCP_MISS/403 GET https://api.example.com/v1 proj-aaa111
+  add_req 1002.0 TCP_MISS/403 GET https://api.example.com/v1 proj-aaa111
+  add_req 1302.0 TCP_MISS/403 GET https://api.example.com/v1 proj-aaa111
+  proc
+  [ "$(hits 'upstream-403')" -eq 2 ]
+}
+
+@test "an origin 403 does not squelch a real denial for the same host" {
+  # Separate cooldown maps: the security-relevant alert must survive a chatty
+  # server 403ing inside the window.
+  add     1000.0 TCP_TUNNEL/200 api.example.com:443 proj-aaa111
+  add_req 1001.0 TCP_MISS/403 GET https://api.example.com/v1 proj-aaa111
+  add_req 1002.0 TCP_DENIED/403 POST https://api.example.com/admin proj-aaa111
+  proc
+  [ "$(hits 'upstream-403')" -eq 1 ]
+  [ "$(hits 'denied-by-rule')" -eq 1 ]
+}
+
+@test "an origin 403 notifies without the language of a block" {
+  pipe_notify "info	proj-aaa111	api.example.com	upstream-403"
+  run cat "${NOTIFY_LOG}"
+  [[ "$output" == "[info]"* ]]
+  [[ "$output" == *"Upstream refused"* ]]
+  [[ "$output" == *"api.example.com 403"* ]]
+  [[ "$output" != *"DENIED"* ]]
+  [[ "$output" != *"cid domains"* ]]
+}
+
+@test "a new host and an origin 403 in one burst stay two notifications" {
+  pipe_notify "info	proj-aaa111	api.example.com	new-host
+info	proj-aaa111	api.example.com	upstream-403"
+  run cat "${NOTIFY_LOG}"
+  [ "$(hits '^\[info\]')" -eq 2 ]
+  [[ "$output" == *"New egress host"* ]]
+  [[ "$output" == *"Upstream refused"* ]]
 }
 
 # ---------------------------------------------------------------------------

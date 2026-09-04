@@ -131,12 +131,27 @@ _process() {
 
       status = $4
       if (status ~ /\/407$/) next               # auth challenge, not a decision
-      denied = (status ~ /\/403$/)
-      # A 403 on anything but the CONNECT is a denial INSIDE an established
-      # tunnel, which only a path or method rule produces (the host cleared the
-      # CONNECT). The two need opposite fixes, so they are told apart here rather
-      # than both suggesting "allow this host" — which for a rule denial would
-      # widen the entry the rule exists to narrow. See docs/egress-proxy.md.
+
+      # A 403 is OURS only if Squid produced it. TCP_DENIED (and
+      # TCP_DENIED_ABORTED) is the result code for its own refusal, and such a
+      # line reached no upstream, so its hierarchy is NONE/HIER_NONE. Any other
+      # 403 was RELAYED from the origin: the allowlist passed the request and the
+      # server at the far end refused it — a VPN, a WAF, an expired token. Those
+      # must not be reported as an egress block, which sends the user to widen an
+      # allowlist that was never in the way. An unrecognised hierarchy falls to
+      # the denial side, so a Squid format change over-reports rather than hides
+      # a real block.
+      hier = $9
+      sub(/\/.*$/, "", hier)
+      contacted = (hier != "" && hier != "-" && hier != "NONE" && hier != "HIER_NONE")
+      is403    = (status ~ /\/403$/)
+      denied   = (is403 && (status ~ /DENIED/ || !contacted))
+      upstream = (is403 && !denied)
+      # A denial on anything but the CONNECT is one INSIDE an established tunnel,
+      # which only a path or method rule produces (the host cleared the CONNECT).
+      # The two need opposite fixes, so they are told apart here rather than both
+      # suggesting "allow this host" — which for a rule denial would widen the
+      # entry the rule exists to narrow. See docs/egress-proxy.md.
       byrule = (denied && $6 != "CONNECT")
       ts = $1 + 0
 
@@ -155,6 +170,19 @@ _process() {
           alert("alert", key, host, byrule ? "denied-by-rule" : "denied")
         }
       }
+
+      # The origin refused it, not us — worth saying, since the failure looks
+      # identical from inside the container, but it is not a security event and
+      # never raises the urgency. Its OWN cooldown map: sharing lastdeny would let
+      # a server that 403s constantly silence the alert for this project actually
+      # being denied that host, which is the one that matters. Independent of the
+      # isnew branch above, so a first contact that is refused says both things.
+      if (upstream) {
+        if (!((key SUBSEP host) in lastup) || ts - lastup[key SUBSEP host] >= cooldown) {
+          lastup[key SUBSEP host] = ts
+          alert("info", key, host, "upstream-403")
+        }
+      }
     }
   '
 }
@@ -168,14 +196,18 @@ _process() {
 _BUF=()
 
 # Turn the buffer into one notification per (project, urgency, fix), listing the
-# distinct hosts. "fix" splits the two denial kinds apart, since one notification
-# carries one suggested command and theirs differ; every other reason shares the
+# distinct hosts. "fix" splits the three reasons that carry different advice
+# apart — a host denial, a rule denial, and an origin's own 403 — since one
+# notification carries one suggested command. Every other reason shares the
 # "host" fix, so this groups exactly as before for them.
 _flush() {
   (( ${#_BUF[@]} )) || return 0
   local grouped
   grouped="$(printf '%s\n' "${_BUF[@]}" | awk -F'\t' '
-    { k = $1 "\t" $2 "\t" ($4 == "denied-by-rule" ? "rule" : "host")
+    { fix = "host"
+      if ($4 == "denied-by-rule")    fix = "rule"
+      else if ($4 == "upstream-403") fix = "upstream"
+      k = $1 "\t" $2 "\t" fix
       if (!((k SUBSEP $3) in seen)) {
         seen[k SUBSEP $3] = 1
         hosts[k] = hosts[k] (hosts[k] == "" ? "" : ",") $3
@@ -193,9 +225,16 @@ _flush() {
 
 # Titles and hints stay inside notify()'s charset (ASCII, no angle brackets or
 # dashes it would strip), so what the user reads is what is written here.
-_emit() {  # <urgency> <key> <fix: host|rule> <count> <csv-hosts>
-  local urgency="$1" key="$2" fix="$3" count="$4" csv="$5" title body hint
-  if [[ "${urgency}" == alert && "${fix}" == rule ]]; then
+_emit() {  # <urgency> <key> <fix: host|rule|upstream> <count> <csv-hosts>
+  local urgency="$1" key="$2" fix="$3" count="$4" csv="$5" title body hint suffix=''
+  if [[ "${fix}" == upstream ]]; then
+    # Squid relayed the origin's own 403. Nothing was blocked here, so this must
+    # not read as a denial or point at `cid domains` — the allowlist is not the
+    # thing to change. Note the missing apostrophes: notify() strips them.
+    title="Upstream refused: ${key}"
+    hint="The proxy allowed this. The server refused it. Check VPN, credentials, or the rules at the far end."
+    suffix=' 403'
+  elif [[ "${urgency}" == alert && "${fix}" == rule ]]; then
     # The host IS allowed — a path or method rule refused the request inside the
     # tunnel. Suggesting `domains add HOST` here would undo that rule, so don't.
     title="Egress DENIED by rule: ${key}"
@@ -214,7 +253,8 @@ _emit() {  # <urgency> <key> <fix: host|rule> <count> <csv-hosts>
     title="New egress host: ${key}"
     hint="Review: cid hosts"
   fi
-  body="$(printf '%s' "${csv}" | tr ',' '\n' | head -5)"
+  # ${suffix} is the status for the classes where "why" is not in the title.
+  body="$(printf '%s' "${csv}" | tr ',' '\n' | head -5 | awk -v s="${suffix}" '{print $0 s}')"
   (( count > 5 )) && body="${body}"$'\n'"...and $((count - 5)) more"
   notify "${urgency}" "${title}" "${body}"$'\n'"${hint}"
 }
