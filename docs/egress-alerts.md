@@ -23,16 +23,32 @@ outlives the session. `CLAUDE_EGRESS_ALERTS=0` skips it.
 | New host, denied | `alert` — must be dismissed |
 | Recorded host, denied again | `alert`, at most once per `CLAUDE_DENY_ALERT_COOLDOWN` (300s) |
 | Request denied by a path/method rule | `alert`, titled *DENIED by rule* — same cooldown |
+| Origin returned the 403, proxy allowed it | `info`, titled *Upstream refused* — its own cooldown |
 | Recorded host, allowed | silent |
 
 "New" means this project has never contacted it before.
 
-The last two look alike in the log and need opposite fixes, so the classifier keys on the method: a
-`403` on anything but the `CONNECT` is a denial *inside* an established tunnel, which only a
-[path or method rule](egress-proxy.md#entry-syntax) produces — the host itself cleared the CONNECT.
-That alert therefore says so and points at `cid domains` instead of offering
-`cid domains add <host>`, which would widen the entry the rule exists to narrow. Both kinds in one
-burst stay two notifications, since each carries one command.
+### Three 403s, three fixes
+
+A `403` reaching the watcher is one of three things, and the suggested fix differs every time, so
+the classifier separates them on two fields rather than on the status alone.
+
+**Whose 403 is it.** Squid's own refusal carries a `DENIED` result code (`TCP_DENIED`,
+`TCP_DENIED_ABORTED`) and reached no server, so its hierarchy is `NONE`/`HIER_NONE`. Any other 403
+next to a hierarchy naming a real address was *relayed* from the origin: the allowlist passed the
+request and the far end refused it — a VPN you are off, a WAF, an expired token. That is not an
+egress event, so it notifies at `info` as *Upstream refused* and never mentions `cid domains`;
+saying "denied" there sends you to widen an allowlist that was never in the way. An unrecognised
+hierarchy counts as a denial, so a Squid format change over-reports rather than hides a real block.
+
+**Which of ours.** Among Squid's own, a `403` on anything but the `CONNECT` is a denial *inside* an
+established tunnel, which only a [path or method rule](egress-proxy.md#entry-syntax) produces — the
+host itself cleared the CONNECT. That alert says so and points at `cid domains` instead of offering
+`cid domains add <host>`, which would widen the entry the rule exists to narrow.
+
+Each kind in one burst stays its own notification, since each carries one command. The upstream
+cooldown is a separate map from the denial cooldown: a server that 403s constantly must not be able
+to squelch the alert for this project being genuinely denied that same host.
 
 Repeated denials keep alerting because probing the allowlist host by host is the loudest compromise
 signal there is — see the fast-fail vector in [attack-vectors.md](attack-vectors.md). The cooldown
@@ -119,10 +135,11 @@ notifications:
 docker logs claude-egress-proxy | proxy/watch.sh process
 # info   myrepo-a1b2c3d4e5   cdn.assets.example.com   new-host
 # alert  myrepo-a1b2c3d4e5   169.254.169.254          new-host-denied
+# info   myrepo-a1b2c3d4e5   api.example.com          upstream-403
 ```
 
-It reads Squid's built-in log format positionally: timestamp, result/status, URL, username. Adding
-a `logformat` directive to `proxy/squid.conf` would break it.
+It reads Squid's built-in log format positionally: timestamp, result/status, method, URL, username,
+hierarchy. Adding a `logformat` directive to `proxy/squid.conf` would break it.
 
 This records what it classifies, so a manual run silences those hosts for the running watcher too.
 `cid hosts forget` undoes that.
