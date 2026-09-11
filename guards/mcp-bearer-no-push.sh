@@ -9,9 +9,18 @@
 # Sourced by run.sh (not run standalone): reads MCP_GH_BEARER from the caller
 # and `exit`s the whole run when the token is invalid or can push code. Network
 # or tooling failures fail open (warn and continue).
+#
+# HOST-ONLY. It is the one guard that spends the real token on an outbound
+# request, so inside a container those two calls leave through Squid as the
+# project's login and trip its api.github.com rule — and run.sh cannot start a
+# session there anyway (no docker daemon). EGRESS_PROXY_HOST is the marker:
+# run.sh sets it on every container unconditionally, and unlike /.dockerenv a
+# test can blank it (test/mcp-bearer-check.bats does, to drive the real path).
 
 if [[ -n "${MCP_GH_BEARER:-}" ]]; then
-  if ! command -v curl >/dev/null 2>&1; then
+  if [[ -n "${EGRESS_PROXY_HOST:-}" ]]; then
+    warn "Inside a container; skipping the GitHub token write-access check."
+  elif ! command -v curl >/dev/null 2>&1; then
     warn "curl not found; skipping GitHub token write-access check."
   else
     _gh_headers=$(curl -sI \
