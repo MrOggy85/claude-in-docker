@@ -2,6 +2,8 @@
 # Run `make pin-digest` after an upstream patch to append @sha256:... here.
 FROM debian:trixie-slim
 
+# zsh is here as a parser, not the shell (that stays bash): shellcheck cannot read
+# zsh, so `zsh -n` is the only way to syntax-check completions/_cid from a session.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
   git \
@@ -27,6 +29,7 @@ RUN apt-get update \
   nftables \
   shellcheck \
   yamllint \
+  zsh \
   nano \
   make \
   sudo \
