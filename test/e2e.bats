@@ -151,6 +151,12 @@ setup() {
   CLAUDE_DOCKER_CONFIG_DIR="${TEST_TMP}/config"
   CLAUDE_PROJECTS_DIR="${TEST_TMP}/projects"
   export DOCKER_ARGS_FILE MOCK_BIN TEST_TMP CLAUDE_DOCKER_CONFIG_DIR CLAUDE_PROJECTS_DIR
+  # Disarm the bearer guard (run.sh:43): non-empty, it curls api.github.com for
+  # real with whatever token the developer has exported. Only docker is stubbed
+  # here, so the real curl stays on PATH. Exported rather than added to the env
+  # lists below so a NEW invocation site in this file is covered by default —
+  # that omission is what leaked it in the first place.
+  export MCP_GH_BEARER=""
   # Seed a baseline .env and mcp-servers.json so the config-initialized guard and
   # the required-MCP check treat this as an already-initialized config dir
   # (mirrors `make init`).

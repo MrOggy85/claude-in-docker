@@ -50,7 +50,9 @@ Use a **fine-grained personal access token**, not an OAuth/classic one — the l
 bundles Contents:write and can't be scoped below it, so it is rejected.
 
 - **Contents must be Read-only.** This is the code-push vector `guards/mcp-bearer-no-push.sh`
-  blocks; it rejects any token where a repo reports `permissions.push`.
+  blocks; it rejects any token where a repo reports `permissions.push`. The check runs on the host
+  only — it is the one guard that spends the token on an outbound request, so inside a container it
+  warns and skips rather than sending it through the egress proxy.
 - **Other write permissions are your call.** Issues and Pull requests **Read and write** pass the
   guard and let Claude open, comment on, and update issues and PRs on your behalf.
 - Merging a PR would land code, but that first requires committing to a branch (Contents:write,

@@ -55,6 +55,11 @@ setup() {
   # guard passes and the bearer guard under test runs.
   export CLAUDE_DOCKER_CONFIG_DIR="${STUB_DIR}/config"
   export CLAUDE_PROJECTS_DIR="${STUB_DIR}/projects"
+  # The guard skips itself when this is set (see its header). It IS set when the
+  # suite runs inside a container, which would silently turn every test below
+  # into a no-op — green here, green in CI, checking nothing. Blank it so these
+  # tests drive the real code path; the one test that wants the skip sets it back.
+  export EGRESS_PROXY_HOST=""
   mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}"
   : > "${CLAUDE_DOCKER_CONFIG_DIR}/.env"
   printf '{"mcpServers":{}}\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/mcp-servers.json"
@@ -179,6 +184,31 @@ teardown() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"WARNING"* ]]
   [[ "$output" == *"curl not found"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# Inside a container — warn and continue, without dialling out
+# ---------------------------------------------------------------------------
+
+# CURL_STUB_STATUS=401 would abort the run (see the next test). It does not here,
+# which is the assertion: the guard returned before reaching curl at all. The
+# real cost of getting this wrong is not a failed check but an outbound request
+# carrying the token, so prove the request never happened, not just that it
+# warned.
+@test "inside a container: warns, skips the check, and makes no request" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
+    MCP_GH_BEARER="ghp_invalidtoken" \
+    CURL_STUB_STATUS="401" \
+    EGRESS_PROXY_HOST="squid" \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"WARNING"* ]]
+  [[ "$output" == *"Inside a container"* ]]
+  [[ "$output" != *"verified: no code-push"* ]]
 }
 
 # ---------------------------------------------------------------------------
