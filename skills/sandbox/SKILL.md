@@ -59,6 +59,7 @@ nothing to clean up. Re-run it any time; it is cheap.
 
 The base image ships git, ripgrep, `fd`, `bat`, jq, curl, wget, python3, `uv`,
 Node via nvm, sqlite3, shellcheck, yamllint, make, tree, zip/unzip and an editor.
+zsh is installed to parse zsh (`zsh -n`); the shell is still bash.
 A per-project install script may have added more — confirm with `command -v`.
 
 What you can install yourself, with no permission and no rebuild:
