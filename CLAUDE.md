@@ -74,14 +74,22 @@ wrapped bullets.
   call sites. Only `proxy/watch.sh` sources it. See docs/egress-alerts.md.
 - `cid` — the config CLI. Read-only viewers (`list` / `show` / `project` /
   `domains` / `skip-decryption` / `containers` / `settings` / `ca` / `watch` /
-  `hosts` / `env`) plus
+  `hosts` / `env` / `vnc`) plus
   in-place allowlist editing (`domains add|rm <host>`,
   `skip-decryption add|rm <host>`,
   `containers add|rm <name>`, `settings trust|untrust <rule>`, `-g` for the
   shared baseline, `-C dir` to pick the project; all four share `_resolve_target` +
   `_entries_add`/`_entries_rm`, so add a kind there rather than duplicating).
   `watch` operates `proxy/watch.sh` and reads its alert log; `hosts` shows and
-  clears one project's `seen-hosts.txt`. `env` lists the settable host env vars
+  clears one project's `seen-hosts.txt`; `vnc` delegates wholesale to
+  `scripts/vnc.sh`. `cid` itself never calls `docker` — anything that must goes
+  in a delegated sibling script, and that is the rule, not an accident. It also
+  refuses to run INSIDE the container (`CLAUDE_HOST_PROJECT_DIR` is the marker,
+  `CID_ALLOW_IN_CONTAINER=1` the test-suite override): every session mounts its
+  repo at the same `/home/dev/repo`, so in there it would key every project
+  identically and write to a config dir that dies with the `--rm` container,
+  while printing "added".
+  `env` lists the settable host env vars
   (terminal mirror of
   docs/environment-variables.md — keep the ENV_VARS list in sync). Meant to go on
   `$PATH`; ships a zsh completion in `completions/_cid`. See docs/config-cli.md.
@@ -125,15 +133,27 @@ wrapped bullets.
   entry is `[METHOD[,METHOD] ]<host>[/path]`; the grammar's one authoritative
   description is `docs/egress-proxy.md#entry-syntax`, mirrored in
   `ext-allowlist.sh`'s `match_in_file` and `cid`'s `_valid_domain_entry` — change
-  all three together. `skip-decryption.txt` has the same layout and TTL but only
+  all three together. `browser-domains.txt` is the same grammar and the same
+  baseline+per-project layout, read ONLY for a `<key>-browser` login (the
+  in-container browser) and strictly ADDITIVE on top of the agent's two lists —
+  so the agent's reach is always a subset, and a CDN allowed to render a page
+  never widens `curl`. `ext-allowlist.sh` strips the suffix to find the project
+  dir; no real key can collide, since `project_key()` ends in 10 hex chars.
+  `skip-decryption.txt` has the same layout and TTL but only
   the hostname half of the grammar, and answers a different question: which hosts
   Squid must NOT decrypt.
   `docker-containers.txt` follows the same baseline+per-project layout for the
   docker bridge, read per call instead of on a TTL, and so does
   `trusted-settings-rules.txt` (permission rules the settings guard must not
-  flag), read per run. Two are per-project only, no baseline, and WRITTEN rather
-  than read as policy: `seen-hosts.txt` (by `proxy/watch.sh`) records what has
-  been contacted, not what is permitted; `mounts.txt` (by `run.sh`, only with the
+  flag), read per run. Three are per-project only, no baseline, and WRITTEN
+  rather than read as policy: `seen-hosts.txt` and `denied-hosts.txt` (both by
+  `proxy/watch.sh`) record what has been contacted and what was refused, not what
+  is permitted — `denied-hosts.txt` is what `cid domains add --denied` reads,
+  since the alert log coalesces to five hosts plus a count and so cannot serve.
+  Both are keyed by Squid login, so the browser's land in a SIBLING
+  `<key>-browser/` dir holding records only, never config — `cid list` excludes
+  it from the project count and `cid hosts` shows both.
+  `mounts.txt` (by `run.sh`, only with the
   chrome bridge on) records `<container>\t<host>` for each read-write bind mount
   so the bridge can translate paths — ro mounts stay out, or the agent could
   write through the host bridge to a path its container is denied.
@@ -162,6 +182,13 @@ wrapped bullets.
   starting an uncapped container. The proxy's own caps are inline in
   `proxy/up.sh` — a known, bounded workload needs no derivation. See
   docs/resource-limits.md.
+- `scripts/vnc.sh` — host-side, owns every `docker` call behind `cid vnc`:
+  resolves the project's running container through the `cid.project-key` label
+  `run.sh` sets (the container NAME is random and recorded nowhere), then
+  `docker exec`s x11vnc + websockify on demand. Xvfb is not here — it starts in
+  `entrypoint.sh` with the container, because Chromium inherits `DISPLAY` at
+  launch, and the published port is reserved at `docker run` for the same
+  reason. Only these two halves are lazy. See docs/browser-vnc.md.
 - `scripts/scan-project-settings.sh` — classifies a project's
   `.claude/settings*.json` by capability (dependency-free: a literal key scan
   plus an awk JSON walk, both fail-closed). Backs both

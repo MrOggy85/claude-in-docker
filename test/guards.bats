@@ -436,6 +436,72 @@ _containers_file() {
 # guards/egress-ca.sh
 # ---------------------------------------------------------------------------
 
+@test "browser guard: off by default, so nothing is validated" {
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" CLAUDE_VNC_PORT=bogus bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 0 ]
+}
+
+@test "browser guard: a non-numeric CLAUDE_VNC_PORT aborts with exit 1" {
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" CLAUDE_BROWSER=1 CLAUDE_VNC_PORT=bogus bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not a port number"* ]]
+}
+
+@test "browser guard: a privileged CLAUDE_VNC_PORT aborts" {
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" CLAUDE_BROWSER=1 CLAUDE_VNC_PORT=80 bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *">= 1024"* ]]
+}
+
+@test "browser guard: 0 is the default and passes silently" {
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" CLAUDE_BROWSER=1 CLAUDE_VNC_PORT=0 bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"pinned to"* ]]
+}
+
+@test "browser guard: pinning the port warns that it blocks concurrent sessions" {
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" CLAUDE_BROWSER=1 CLAUDE_VNC_PORT=6080 bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pinned to 6080"* ]]
+  [[ "$output" == *"already allocated"* ]]
+}
+
+@test "browser guard: a hostname in CLAUDE_VNC_BIND aborts" {
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" CLAUDE_BROWSER=1 CLAUDE_VNC_BIND=localhost bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not an IP address"* ]]
+}
+
+@test "browser guard: binding off loopback warns but still runs" {
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" CLAUDE_BROWSER=1 CLAUDE_VNC_BIND=0.0.0.0 bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"not just loopback"* ]]
+}
+
+@test "browser guard: a CLAUDE_PORTS collision warns but still runs" {
+  # Only reachable with a PINNED port: the default 0 is assigned by Docker and
+  # so can never clash with anything the user published.
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" CLAUDE_BROWSER=1 CLAUDE_VNC_PORT=6080 CLAUDE_PORTS=6080 \
+    bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already mentions host port 6080"* ]]
+}
+
+@test "browser guard: the default port raises no collision warning" {
+  cd "${TEST_PROJECT_DIR}"
+  run env "${COMMON_ENV[@]}" CLAUDE_BROWSER=1 CLAUDE_PORTS=6080 bash "${RUN_SH}" </dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"already mentions host port"* ]]
+}
+
 @test "egress-CA guard: a valid CA proceeds" {
   cd "${TEST_PROJECT_DIR}"
   run env "${COMMON_ENV[@]}" bash "${RUN_SH}" </dev/null

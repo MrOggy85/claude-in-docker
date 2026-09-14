@@ -37,12 +37,13 @@ source "${SCRIPT_DIR}/guards/config-initialized.sh"
 # Pre-flight security guards, each sourced (not subprocessed) so it can abort the
 # run with `exit` before any build/volume/container work. They read PROJECT_DIR /
 # HOME / MCP_GH_BEARER / CLAUDE_ALLOW_PROJECT_SETTINGS / CLAUDE_DOCKER_BRIDGE /
-# CLAUDE_CHROME_DEVTOOLS from this scope.
+# CLAUDE_CHROME_DEVTOOLS / CLAUDE_BROWSER from this scope.
 source "${SCRIPT_DIR}/guards/no-home-dir.sh"
 source "${SCRIPT_DIR}/guards/project-settings.sh"
 source "${SCRIPT_DIR}/guards/mcp-bearer-no-push.sh"
 source "${SCRIPT_DIR}/guards/docker-bridge.sh"
 source "${SCRIPT_DIR}/guards/chrome-devtools.sh"
+source "${SCRIPT_DIR}/guards/browser.sh"
 # Sets EGRESS_CA_CRT, used just below and at step 4.
 source "${SCRIPT_DIR}/guards/egress-ca.sh"
 
@@ -58,6 +59,13 @@ if ! cmp -s "${EGRESS_CA_CRT}" "${CA_IN_CONTEXT}"; then
   kv "egress CA copied into the build context" "${CA_IN_CONTEXT}" "image will rebuild"
 fi
 
+# Resolved here because step 1 needs it: the browser layer is a --build-arg, and
+# build args are NOT part of the file list below, so the flag has to join the
+# hash by hand or flipping it would silently reuse the stale image. Step 3c-e
+# does the rest. See docs/browser-vnc.md.
+BROWSER_ON=0
+case "${CLAUDE_BROWSER:-}" in 1|true|yes|on|TRUE|YES|ON) BROWSER_ON=1 ;; esac
+
 # 1. Build the image when missing or when the build context changed. A SHA-256
 #    of the key files is stored as an image label at build time; each run
 #    recomputes it and rebuilds on mismatch.
@@ -67,6 +75,7 @@ context_hash() {
     "${SCRIPT_DIR}/entrypoint.sh"
     "${SCRIPT_DIR}/init-firewall.sh"
     "${SCRIPT_DIR}/install_additional_packages.sh"
+    "${SCRIPT_DIR}/scripts/playwright-cli.sh"
     "${CA_IN_CONTEXT}"
     "${SCRIPT_DIR}/package.json"
     "${SCRIPT_DIR}/package-lock.json"
@@ -74,9 +83,10 @@ context_hash() {
   local existing=()
   for f in "${files[@]}"; do [ -f "$f" ] && existing+=("$f"); done
   # Include caller identity: the image embeds host UID/GID/username via
-  # --build-arg, so a different user must get a fresh image.
+  # --build-arg, so a different user must get a fresh image. Same for the browser
+  # layer's flag — every --build-arg value that changes the image belongs here.
   { sha256_ "${existing[@]}"
-    printf 'uid=%s gid=%s user=%s\n' "$(id -u)" "$(id -g)" "$(id -un)"
+    printf 'uid=%s gid=%s user=%s browser=%s\n' "$(id -u)" "$(id -g)" "$(id -un)" "${BROWSER_ON}"
   } | sha256_ - | cut -c1-16
 }
 
@@ -93,6 +103,7 @@ if [[ "$BASE_IMAGE_HASH" != "$CURRENT_HASH" ]]; then
     --build-arg "USER_ID=$(id -u)" \
     --build-arg "GROUP_ID=$(id -g)" \
     --build-arg "USERNAME=$(id -un)" \
+    --build-arg "WITH_BROWSER=${BROWSER_ON}" \
     "${SCRIPT_DIR}"
 fi
 
@@ -384,6 +395,112 @@ case "${CLAUDE_CHROME_DEVTOOLS:-}" in
     ;;
 esac
 
+# 3c-e. In-container browser — OPT-IN, off by default (BROWSER_ON, resolved above
+#       step 1 because the image layer is gated on it). Unlike the chrome bridge
+#       in 3c-d this browser runs HERE, so its traffic goes through Squid under
+#       this project's allowlist like everything else, and its output files land
+#       in the repo mount with no path translation.
+#
+#       Publishing is inbound, not host-outbound like 3c-c/3c-d: noVNC serves
+#       from inside the container and the host browser connects in. The arrays
+#       from 3c are still open, but CONTAINER_OPEN_PORTS/CONTAINER_PUBLISHED_PORTS
+#       were flattened at the end of 3c, so append to those as strings.
+#       `cid vnc` starts x11vnc and websockify on demand; here we only reserve the
+#       port, since Docker cannot publish one on a running container.
+#
+#       The HOST port defaults to 0, meaning "Docker, pick a free one". A fixed
+#       default cannot work: 2b randomises the container name precisely so several
+#       sessions can run at once, and a fixed published port would make the second
+#       one die with "port is already allocated" — not just per project, but across
+#       every browser-enabled session on the machine. `cid vnc` asks `docker port`
+#       for the real number, so nothing downstream needs to know it in advance.
+#       Pin CLAUDE_VNC_PORT only if you want a stable URL and run one at a time.
+#       See docs/browser-vnc.md.
+BROWSER_ARGS=()
+if [[ "${BROWSER_ON}" == 1 ]]; then
+  _VNC_CPORT=6080
+  _VNC_HPORT="${CLAUDE_VNC_PORT:-0}"
+  _VNC_BIND="${CLAUDE_VNC_BIND:-127.0.0.1}"
+  PUBLISH_ARGS+=(--publish "${_VNC_BIND}:${_VNC_HPORT}:${_VNC_CPORT}")
+  CONTAINER_OPEN_PORTS="${CONTAINER_OPEN_PORTS:+${CONTAINER_OPEN_PORTS},}${_VNC_CPORT}/tcp"
+  # Only when the host port is known HERE. With 0 the real one is assigned at
+  # `docker run`, so publishing "127.0.0.1:0" would have the sandbox skill report
+  # an endpoint that does not exist. The label below still announces the port, and
+  # `cid vnc` is what prints the working URL.
+  if [[ "${_VNC_HPORT}" != 0 ]]; then
+    CONTAINER_PUBLISHED_PORTS="${CONTAINER_PUBLISHED_PORTS:+${CONTAINER_PUBLISHED_PORTS},}${_VNC_BIND}:${_VNC_HPORT}:${_VNC_CPORT}/tcp"
+  fi
+  CONTAINER_HOST_PORT_LABELS+=",${_VNC_CPORT}=noVNC (start it with \`cid vnc start\` on the host)"
+
+  # Squid demands proxy auth and the username selects this project's allowlist,
+  # but Chromium cannot carry credentials on the command line — it would sit at a
+  # 407 with no one to answer it. Playwright answers the 407 itself when given
+  # proxy.username/password, and the config file is the only place those can be
+  # expressed (no env var covers them), so generate it per project and let the
+  # PATH wrapper inject it. Same squid:3128 and literal "x" password as PROXY_URL
+  # in 3f: the username is what carries identity, so this file holds no secret.
+  #
+  # That username is "<key>-browser", NOT the plain key: the browser gets the
+  # project's lists PLUS browser-domains.txt, so the CDN and font hosts a page
+  # needs never widen what the agent's own curl and npm can reach. Squid resolves
+  # the suffix in proxy/ext-allowlist.sh. The bypass list is Playwright's own (it
+  # does not read NO_PROXY) and is what lets the browser reach a dev server on
+  # localhost inside this container. See docs/browser-vnc.md.
+  _BROWSER_HEADLESS=false
+  case "${CLAUDE_BROWSER_HEADLESS:-}" in 1|true|yes|on|TRUE|YES|ON) _BROWSER_HEADLESS=true ;; esac
+  # --no-sandbox: Chromium's own sandbox needs user namespaces this container
+  # does not have. The container is the boundary instead — see docs/browser-vnc.md.
+  cat > "${PROJECT_CONFIG_DIR}/playwright-cli.config.json" <<JSON
+{
+  "browser": {
+    "browserName": "chromium",
+    "launchOptions": {
+      "headless": ${_BROWSER_HEADLESS},
+      "proxy": {
+        "server": "http://squid:3128",
+        "username": "${PROJECT_KEY}-browser",
+        "password": "x",
+        "bypass": "localhost,127.0.0.1,::1"
+      },
+      "args": ["--no-sandbox", "--disable-dev-shm-usage"]
+    },
+    "contextOptions": {
+      "viewport": { "width": 1280, "height": 800 }
+    }
+  }
+}
+JSON
+  add_ro_mount "${PROJECT_CONFIG_DIR}/playwright-cli.config.json" /etc/claude/playwright-cli.config.json
+
+  # --shm-size: Docker's default 64 MB /dev/shm crashes Chromium under load.
+  # --init: entrypoint.sh execs, so claude is PID 1 and reaps nothing; a browser
+  # forks hard and the zombies would accumulate against 3g's --pids-limit.
+  BROWSER_ARGS=(
+    --env CLAUDE_BROWSER_ON=1
+    --env "DISPLAY=${CLAUDE_BROWSER_DISPLAY:-:99}"
+    --env "CLAUDE_BROWSER_GEOMETRY=${CLAUDE_BROWSER_GEOMETRY:-1280x800x24}"
+    --shm-size=512m
+    --init
+  )
+  kv "in-container browser" "playwright-cli on ${CLAUDE_BROWSER_DISPLAY:-:99}" "watch it with: cid vnc start"
+
+  # entrypoint.sh runs `playwright-cli install --skills` as the host UID, writing
+  # to ~/.claude/skills — which 3h's nested bind makes docker create as root:root
+  # inside the session volume, so the install dies with EACCES. Claim it here, the
+  # only side that can (no NET_ADMIN in the container); same reasoning and shape as
+  # the ownership pass in scripts/path-volumes.sh. Not -R: the mountpoint and any
+  # already-installed skill below it are ours already.
+  #
+  # Unlike that pass this one is NOT fatal — it buys a skill, not a working
+  # session, and entrypoint.sh already degrades to a warning when the install fails.
+  docker run --rm --user 0:0 --entrypoint sh \
+    --volume "${VOLUME}:/v" \
+    --env "VOL_UID=$(id -u)" --env "VOL_GID=$(id -g)" \
+    "${IMAGE}" -c 'mkdir -p /v/skills && chown "$VOL_UID:$VOL_GID" /v/skills' >&2 \
+    || warn "could not claim ~/.claude/skills in ${VOLUME}" \
+            "The playwright-cli skills will not install; the browser still works."
+fi
+
 # 3d. In-repo paths backed by named volumes — SECURE BY DEFAULT: node_modules and
 #     pnpm's store live in per-project volumes, so installed (untrusted) packages
 #     stay off the host disk yet persist across runs. Everything — the automatic
@@ -552,6 +669,11 @@ case "${CLAUDE_SANDBOX_INFO:-1}" in
     if [[ "${IMAGE}" != "${BASE_IMAGE}" ]]; then
       SANDBOX_ENV_ARGS+=(--env "CONTAINER_PROJECT_IMAGE=${IMAGE}")
     fi
+    # Only when 3c-e turned the browser on, so the session never claims a browser
+    # it does not have. The host cannot be named here — `cid vnc` prints the URL.
+    if [[ "${BROWSER_ON}" == 1 ]]; then
+      SANDBOX_ENV_ARGS+=(--env "CONTAINER_BROWSER_DISPLAY=${CLAUDE_BROWSER_DISPLAY:-:99}")
+    fi
     kv "sandbox skill" "the session can read its own ports/mounts on demand"
     ;;
 esac
@@ -560,13 +682,19 @@ esac
 #    UID. NET_ADMIN is needed for the nftables egress-lock, only exercisable via
 #    the sudo rule scoped to init-firewall.sh — no other escalation is possible.
 #    "${ARR[@]+...}" keeps it safe under `set -u` on macOS bash 3.2. No `exec` so
-#    control returns here to update the usage archive below.
+#    control returns here to update the usage archive below. The project-key
+#    label is how host-side tooling finds this container later (scripts/vnc.sh):
+#    CONTAINER_NAME carries a random suffix and is recorded nowhere, and --rm
+#    makes the label self-cleaning. The name also goes IN as an env var, so the
+#    status line can tell one terminal from another — see
+#    docs/host-path-statusline.md.
 STATUS=0
 docker run \
   --name "${CONTAINER_NAME}" \
   --interactive --tty --rm \
   --user "$(id -u):$(id -g)" \
   --cap-add=NET_ADMIN \
+  --label "cid.project-key=${PROJECT_KEY}" \
   ${LIMIT_ARGS[@]+"${LIMIT_ARGS[@]}"} \
   ${PROXY_NET_ARGS[@]+"${PROXY_NET_ARGS[@]}"} \
   --env-file "${ENV_FILE}" \
@@ -574,9 +702,11 @@ docker run \
   --env HOME="${HOME_IN_CONTAINER}" \
   --env COLORTERM=truecolor \
   --env CLAUDE_HOST_PROJECT_DIR="${PROJECT_DIR}" \
+  --env CONTAINER_NAME="${CONTAINER_NAME}" \
   --env MCP_GH_BEARER \
   ${DOCKER_BRIDGE_ARGS[@]+"${DOCKER_BRIDGE_ARGS[@]}"} \
   ${CHROME_DEVTOOLS_ARGS[@]+"${CHROME_DEVTOOLS_ARGS[@]}"} \
+  ${BROWSER_ARGS[@]+"${BROWSER_ARGS[@]}"} \
   --env CONTAINER_OPEN_PORTS="${CONTAINER_OPEN_PORTS}" \
   --env CONTAINER_HOST_OUTBOUND_PORTS="${CONTAINER_HOST_OUTBOUND_PORTS}" \
   ${SANDBOX_ENV_ARGS[@]+"${SANDBOX_ENV_ARGS[@]}"} \

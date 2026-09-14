@@ -17,6 +17,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME}")/.." && pwd)"
 CID="${SCRIPT_DIR}/cid"
 
 setup() {
+  # cid refuses to run inside the container, and this suite is developed and run
+  # inside one. Everything here targets an isolated config dir via -C and the two
+  # vars below, so the hazard the guard exists for does not apply.
+  export CID_ALLOW_IN_CONTAINER=1
   export CLAUDE_DOCKER_CONFIG_DIR="${BATS_TEST_TMPDIR}/cfg"
   export CLAUDE_PROJECTS_DIR="${BATS_TEST_TMPDIR}/cfg/projects"
   mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}"
@@ -30,8 +34,12 @@ setup() {
   mkdir -p "${PROJ}"
 }
 
-# Path to the (single) per-project allowlist file, whatever key it hashed to.
-proj_file() { echo "${CLAUDE_PROJECTS_DIR}"/*/allowed-domains.txt; }
+# Path to a per-project config file, whatever key the dir hashed to. Defaults to
+# the allowlist, since most callers want that one. The glob deliberately excludes
+# the "<key>-browser" dir the watcher creates: that holds records, not policy.
+proj_file() {  # [basename]
+  echo "${CLAUDE_PROJECTS_DIR}"/*[0-9a-f]/"${1:-allowed-domains.txt}"
+}
 
 # ---------------------------------------------------------------------------
 # domains add — per-project (default target)
@@ -595,6 +603,233 @@ proj_containers() { echo "${CLAUDE_PROJECTS_DIR}"/*/docker-containers.txt; }
   [[ "$output" == *"unknown 'cid watch' verb"* ]]
 }
 
+# ---------------------------------------------------------------------------
+# Refusing to run inside the container. Every session mounts its repo at the same
+# /home/dev/repo, so in there cid would key every project identically and write to
+# a config dir that dies with the --rm container — while printing "added".
+# ---------------------------------------------------------------------------
+
+@test "in-container: an edit is refused rather than silently lost" {
+  run env -u CID_ALLOW_IN_CONTAINER CLAUDE_HOST_PROJECT_DIR=/Users/me/code/app \
+    "${CID}" domains add example.com -C "${PROJ}"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"cannot run inside the container"* ]]
+  # And it really did not write.
+  [ ! -f "$(proj_file)" ]
+}
+
+@test "in-container: the error names both paths, so the mismatch is visible" {
+  run env -u CID_ALLOW_IN_CONTAINER CLAUDE_HOST_PROJECT_DIR=/Users/me/code/app \
+    "${CID}" domains add example.com -C "${PROJ}"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"/Users/me/code/app"* ]]
+}
+
+@test "in-container: read-only verbs are refused too" {
+  # In here a read reports an empty allowlist for a project that does not exist,
+  # which reads as "nothing is allowed" rather than "wrong machine".
+  run env -u CID_ALLOW_IN_CONTAINER CLAUDE_HOST_PROJECT_DIR=/Users/me/code/app \
+    "${CID}" project
+  [ "$status" -eq 2 ]
+}
+
+@test "in-container: the message tells the agent what to do instead" {
+  run env -u CID_ALLOW_IN_CONTAINER CLAUDE_HOST_PROJECT_DIR=/Users/me/code/app "${CID}" list
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"report what you need"* ]]
+}
+
+@test "on the host: no marker means no refusal" {
+  run env -u CID_ALLOW_IN_CONTAINER -u CLAUDE_HOST_PROJECT_DIR "${CID}" project "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"${PROJ}"* ]]
+}
+
+@test "CID_ALLOW_IN_CONTAINER overrides the refusal" {
+  run env CID_ALLOW_IN_CONTAINER=1 CLAUDE_HOST_PROJECT_DIR=/Users/me/code/app \
+    "${CID}" project "${PROJ}"
+  [ "$status" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# domains --browser — the in-container browser's own list. The proxy-side
+# decision is covered by test/ext-allowlist.bats; these cover the editing side.
+# ---------------------------------------------------------------------------
+
+@test "domains --browser: writes browser-domains.txt, not allowed-domains.txt" {
+  run "${CID}" domains --browser add cdn.example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [ -f "$(proj_file browser-domains.txt)" ]
+  [ ! -f "$(proj_file allowed-domains.txt)" ]
+}
+
+@test "domains --browser add: defaults to GET,HEAD" {
+  run "${CID}" domains --browser add cdn.example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$(proj_file browser-domains.txt)")" == "GET,HEAD cdn.example.com" ]]
+}
+
+@test "domains --browser add: --method ALL removes the restriction" {
+  run "${CID}" domains --browser add --method ALL api.example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$(proj_file browser-domains.txt)")" == "api.example.com" ]]
+}
+
+@test "domains --browser add: an explicit --method wins over the default" {
+  run "${CID}" domains --browser add --method POST api.example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$(proj_file browser-domains.txt)")" == "POST api.example.com" ]]
+}
+
+@test "domains add: the agent list is unaffected by the browser default" {
+  run "${CID}" domains add cdn.example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$(proj_file allowed-domains.txt)")" == "cdn.example.com" ]]
+}
+
+@test "domains --browser rm: removes from the browser list only" {
+  "${CID}" domains --browser add --method ALL cdn.example.com -C "${PROJ}"
+  "${CID}" domains add cdn.example.com -C "${PROJ}"
+  run "${CID}" domains --browser rm cdn.example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run grep -q cdn.example.com "$(proj_file browser-domains.txt)"
+  [ "$status" -ne 0 ]
+  run grep -q cdn.example.com "$(proj_file allowed-domains.txt)"
+  [ "$status" -eq 0 ]
+}
+
+@test "domains --browser: -g targets the shared browser baseline" {
+  run "${CID}" domains -g --browser add fonts.gstatic.com
+  [ "$status" -eq 0 ]
+  [[ "$(cat "${CLAUDE_DOCKER_CONFIG_DIR}/browser-domains.txt")" == *"fonts.gstatic.com"* ]]
+}
+
+@test "domains --browser: show lists all four sources" {
+  run "${CID}" domains --browser -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Browser baseline"* ]]
+  [[ "$output" == *"Browser per-project additions"* ]]
+  [[ "$output" == *"-browser"* ]]
+}
+
+@test "domains --browser: --for still works and expires" {
+  run "${CID}" domains --browser add --for 15m cdn.example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$(proj_file browser-domains.txt)")" == *"# expires="* ]]
+}
+
+# `-g` and `-C` are single-dash, so typing `-browser` is the natural slip. The
+# rejection is correct either way; the point is that it names the fix.
+@test "a single-dash long flag suggests the double-dash spelling" {
+  run "${CID}" domains -browser add example.com -C "${PROJ}"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"did you mean --browser?"* ]]
+}
+
+@test "the hint covers the other long flags too" {
+  run "${CID}" domains -denied add -C "${PROJ}"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"did you mean --denied?"* ]]
+  run "${CID}" hosts -project "${PROJ}"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"did you mean --project?"* ]]
+}
+
+@test "a flag with no double-dash counterpart keeps the plain message" {
+  run "${CID}" domains -zzz add x -C "${PROJ}"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown flag: -zzz"* ]]
+  [[ "$output" != *"did you mean"* ]]
+}
+
+@test "the hint never names a flag the command does not accept" {
+  # --browser is domains-only, so `hosts` must not suggest it.
+  run "${CID}" hosts -browser
+  [ "$status" -eq 2 ]
+  [[ "$output" != *"did you mean"* ]]
+}
+
+@test "--browser is rejected for non-domains kinds" {
+  run "${CID}" containers --browser add foo -C "${PROJ}"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"only valid for 'cid domains'"* ]]
+}
+
+@test "--denied is rejected outside 'domains add'" {
+  run "${CID}" domains --denied rm x -C "${PROJ}"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"only valid for 'cid domains add'"* ]]
+}
+
+@test "--denied with no record says so rather than failing" {
+  run "${CID}" domains --browser add --denied -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no denied hosts recorded"* ]]
+}
+
+@test "--denied adds the watcher's refused hosts, deduped" {
+  local key bdir
+  key="$(cd "${PROJ}" && "${CID}" project | grep -o '[a-z0-9]*-[0-9a-f]\{10\}' | head -1)"
+  bdir="${CLAUDE_PROJECTS_DIR}/${key}-browser"
+  mkdir -p "${bdir}"
+  printf 'fonts.gstatic.com\nfonts.gstatic.com\ncdn.jsdelivr.net\n' > "${bdir}/denied-hosts.txt"
+  run "${CID}" domains --browser add --denied -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$(grep -c . "$(proj_file browser-domains.txt)")" -eq 2 ]]
+  [[ "$(cat "$(proj_file browser-domains.txt)")" == *"GET,HEAD fonts.gstatic.com"* ]]
+}
+
+@test "--denied without --browser reads the agent's own record" {
+  local key
+  key="$(cd "${PROJ}" && "${CID}" project | grep -o '[a-z0-9]*-[0-9a-f]\{10\}' | head -1)"
+  mkdir -p "${CLAUDE_PROJECTS_DIR}/${key}"
+  printf 'api.internal.test\n' > "${CLAUDE_PROJECTS_DIR}/${key}/denied-hosts.txt"
+  run "${CID}" domains add --denied -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$(proj_file allowed-domains.txt)")" == "api.internal.test" ]]
+}
+
+# ---------------------------------------------------------------------------
+# vnc — delegation only. scripts/vnc.sh is covered by test/vnc.bats; these check
+# the cid side reaches it and forwards flags rather than reimplementing them.
+# ---------------------------------------------------------------------------
+
+@test "vnc: an unknown verb exits 2 from the delegated script" {
+  run "${CID}" vnc bogus -C "${PROJ}"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"start | stop | status | url"* ]]
+}
+
+@test "vnc: --help reaches the delegated script's usage" {
+  run "${CID}" vnc --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"scripts/vnc.sh"* ]]
+}
+
+@test "vnc: with no container it fails rather than hanging" {
+  # No docker stub here: either docker is absent (command not found) or it is
+  # present and finds no labelled container. Both must be a clean non-zero exit.
+  run "${CID}" vnc status -C "${PROJ}"
+  [ "$status" -ne 0 ]
+}
+
+@test "help and usage list vnc" {
+  run "${CID}" help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"vnc [start]"* ]]
+  [[ "$output" == *"vnc stop|status|url"* ]]
+}
+
+@test "env: lists the browser and VNC variables" {
+  run "${CID}" env CLAUDE_VNC
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CLAUDE_VNC_PORT"* ]]
+  [[ "$output" == *"CLAUDE_VNC_BIND"* ]]
+  run "${CID}" env CLAUDE_BROWSER
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CLAUDE_BROWSER_HEADLESS"* ]]
+}
+
 @test "hosts: shows nothing recorded for a fresh project" {
   run "${CID}" hosts -C "${PROJ}"
   [ "$status" -eq 0 ]
@@ -618,8 +853,38 @@ proj_containers() { echo "${CLAUDE_PROJECTS_DIR}"/*/docker-containers.txt; }
   printf 'cdn.example.com\n' > "${dir}/seen-hosts.txt"
   run "${CID}" hosts forget -C "${PROJ}"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"forgot every recorded host"* ]]
+  [[ "$output" == *"will alert again"* ]]
   [ ! -f "${dir}/seen-hosts.txt" ]
+}
+
+@test "hosts forget: clears the denied record and the browser's, not just seen" {
+  "${CID}" domains add placeholder.test -C "${PROJ}"
+  local dir; dir="$(dirname "$(proj_file)")"
+  printf 'a.test\n' > "${dir}/seen-hosts.txt"
+  printf 'b.test\n' > "${dir}/denied-hosts.txt"
+  mkdir -p "${dir}-browser"
+  printf 'c.test\n' > "${dir}-browser/seen-hosts.txt"
+  printf 'd.test\n' > "${dir}-browser/denied-hosts.txt"
+  run "${CID}" hosts forget -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [ ! -f "${dir}/seen-hosts.txt" ]
+  [ ! -f "${dir}/denied-hosts.txt" ]
+  [ ! -f "${dir}-browser/seen-hosts.txt" ]
+  [ ! -f "${dir}-browser/denied-hosts.txt" ]
+  # The allowlist is policy, not a record — forget must never touch it.
+  [ -f "$(proj_file)" ]
+}
+
+@test "hosts: shows the browser's separate record when it exists" {
+  "${CID}" domains add placeholder.test -C "${PROJ}"
+  local dir; dir="$(dirname "$(proj_file)")"
+  mkdir -p "${dir}-browser"
+  printf 'cdn.jsdelivr.net\n' > "${dir}-browser/denied-hosts.txt"
+  run "${CID}" hosts -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Refused (browser)"* ]]
+  [[ "$output" == *"cdn.jsdelivr.net"* ]]
+  [[ "$output" == *"--browser add --denied"* ]]
 }
 
 @test "hosts forget: nothing to forget is not an error" {

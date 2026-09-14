@@ -51,6 +51,18 @@ EOF
   cat > "${PROJECTS_DIR}/proj-aaa111/skip-decryption.txt" <<'EOF'
 pinned.aaa.test
 EOF
+
+  # The in-container browser's extra lists, reached only by a "-browser" login.
+  # Disjoint from everything above, so a leak in either direction is visible.
+  export BROWSER_BASELINE="${BATS_TEST_TMPDIR}/baseline-browser-domains.txt"
+  cat > "${BROWSER_BASELINE}" <<'EOF'
+# Browser baseline — every project's browser, no project's agent
+GET,HEAD fonts.gstatic.com
+EOF
+  cat > "${PROJECTS_DIR}/proj-aaa111/browser-domains.txt" <<'EOF'
+GET,HEAD cdn.aaa-browser.test
+unrestricted.aaa-browser.test
+EOF
 }
 
 # Feed the helper one Squid-format request line and capture status/output.
@@ -577,4 +589,85 @@ EOF
   printf 'pinned.aaa.test\n' > "${PROJECTS_DIR}/proj-aaa111/allowed-domains.txt"
   ask_skip_decryption proj-aaa111 pinned.aaa.test
   [ "$output" = "OK" ]
+}
+
+# ---------------------------------------------------------------------------
+# The browser identity: "<key>-browser" gets two extra lists, additively.
+# This is the whole point of the split, so both directions are asserted.
+# ---------------------------------------------------------------------------
+
+@test "browser: reaches a host only its own project list grants" {
+  ask proj-aaa111-browser cdn.aaa-browser.test
+  [ "$output" = "OK" ]
+}
+
+@test "browser: the AGENT cannot reach that host — the split is one-way" {
+  ask proj-aaa111 cdn.aaa-browser.test
+  [ "$output" = "ERR" ]
+}
+
+@test "browser: reaches the browser baseline" {
+  ask proj-aaa111-browser fonts.gstatic.com
+  [ "$output" = "OK" ]
+}
+
+@test "browser: the agent cannot reach the browser baseline" {
+  ask proj-aaa111 fonts.gstatic.com
+  [ "$output" = "ERR" ]
+}
+
+@test "browser: additive — still gets everything the agent gets" {
+  ask proj-aaa111-browser api.anthropic.com      # shared baseline
+  [ "$output" = "OK" ]
+  ask proj-aaa111-browser internal.aaa.test      # the project's own list
+  [ "$output" = "OK" ]
+}
+
+@test "browser: another project's browser list does not leak" {
+  ask proj-bbb222-browser cdn.aaa-browser.test
+  [ "$output" = "ERR" ]
+}
+
+@test "browser: a method rule on a browser entry is enforced" {
+  ask_req proj-aaa111-browser GET cdn.aaa-browser.test /x.js
+  [ "$output" = "OK" ]
+  ask_req proj-aaa111-browser POST cdn.aaa-browser.test /x.js
+  [ "$output" = "ERR" ]
+}
+
+@test "browser: an unlisted host is still denied" {
+  ask proj-aaa111-browser evil.example.org
+  [ "$output" = "ERR" ]
+}
+
+@test "browser: a missing browser list is not an error, just no extras" {
+  rm -f "${PROJECTS_DIR}/proj-aaa111/browser-domains.txt"
+  ask proj-aaa111-browser cdn.aaa-browser.test
+  [ "$output" = "ERR" ]
+  ask proj-aaa111-browser api.anthropic.com
+  [ "$output" = "OK" ]
+}
+
+@test "browser: the suffix is stripped before the key guard, not after" {
+  # A traversal in the stripped key must still be refused, not resolved.
+  ask ../../etc-browser api.anthropic.com
+  [ "$output" = "OK" ]     # baseline only
+  ask ../../etc-browser cdn.aaa-browser.test
+  [ "$output" = "ERR" ]
+}
+
+@test "browser: splice decision sees the browser lists too" {
+  # unrestricted.aaa-browser.test is granted with no method/path rule, so
+  # splicing it cannot silently degrade a rule. It must stay spliceable.
+  printf 'unrestricted.aaa-browser.test\n' > "${PROJECTS_DIR}/proj-aaa111/skip-decryption.txt"
+  ask_skip_decryption proj-aaa111-browser unrestricted.aaa-browser.test
+  [ "$output" = "OK" ]
+}
+
+@test "browser: splice is refused when only a scoped browser entry grants the host" {
+  # cdn.aaa-browser.test is GET,HEAD-only. Splicing hides the inner request, so
+  # the method rule would degrade to host-level — refuse, as for the agent.
+  printf 'cdn.aaa-browser.test\n' > "${PROJECTS_DIR}/proj-aaa111/skip-decryption.txt"
+  ask_skip_decryption proj-aaa111-browser cdn.aaa-browser.test
+  [ "$output" = "ERR" ]
 }

@@ -6,6 +6,13 @@ Variables](environment-variables.md)). It finds those files, prints them, and ed
 place so you never open `allowed-domains.txt`, `skip-decryption.txt` or `docker-containers.txt` by
 hand.
 
+`cid` runs on the **host**, and refuses to run inside the container. In there it would derive the
+project key from `/home/dev/repo` — the path every session's repo is bind-mounted to, so every
+project would key identically — and resolve a config dir that is container-local and dies with the
+`--rm` container. The edit would be lost while reporting success, which is why this is a hard error
+rather than a warning. `CLAUDE_HOST_PROJECT_DIR` (set by `run.sh` inside the container, never on the
+host) is the marker; `CID_ALLOW_IN_CONTAINER=1` overrides it, and exists for the test suite.
+
 ## Commands
 
 ```bash
@@ -18,6 +25,8 @@ hand.
 ./cid domains add --for <dur> <host>...   # add, but the entry auto-expires after <dur>
 ./cid domains rm  <host>[/path]...        # remove entries from the egress allowlist
 ./cid domains prune              # drop expired --for entries (hygiene only)
+./cid domains --browser [...]    # any of the above, against the in-container browser's list
+./cid domains --browser add --denied   # add every host the browser has been refused
 ./cid skip-decryption [dir]               # hosts the proxy tunnels without decrypting TLS
 ./cid skip-decryption add|rm <host>...    # stop / resume decrypting a host
 ./cid ca                         # the egress CA: path, expiry, fingerprint, image copy status
@@ -31,6 +40,8 @@ hand.
 ./cid watch [status]             # egress alert watcher: running? notifier? recorded here?
 ./cid watch start|stop           # start / stop it (run.sh starts it on every run)
 ./cid watch log [n]              # the last n egress alerts (default 20)
+./cid vnc [start]                # watch the in-container browser: start noVNC, open the URL
+./cid vnc stop|status|url        # stop it / is it up / print the URL only
 ./cid hosts [dir]                # hosts this project has contacted; anything else alerts
 ./cid hosts forget               # clear that record, so every host alerts again
 ./cid env [filter]               # list the env vars you can set (current value / default)
@@ -44,6 +55,12 @@ Both edit an `allowed-domains.txt`, by default the **current project's**
 
 - `-g`, `--global` — target the shared **baseline** list applying to every project.
 - `-C`, `--dir <dir>` — select the project by directory (default: current). Ignored with `-g`.
+- `--browser` — target `browser-domains.txt` instead, which only the in-container browser reads.
+  Orthogonal to `-g`, so all four combinations work. Additive, so an entry here never widens what
+  the agent can reach, and `add` defaults it to `GET,HEAD`. See
+  [In-Container Browser](browser-vnc.md#the-browser-has-its-own-list).
+- `--denied` (`add` only) — add every host the proxy has refused for this project, as recorded by
+  the alert watcher. With `--browser`, the browser's refusals.
 
 An entry is a host — exact (`example.com`) or a **wildcard** with a leading dot
 (`.githubusercontent.com`) matching the apex and every subdomain — optionally narrowed by a path
@@ -65,6 +82,10 @@ cid domains add api.github.com/repos                    # /repos and anything un
 cid domains add 'api.github.com/repos*'                 # raw prefix (quote the *)
 cid domains add --method GET,HEAD api.github.com/repos  # ...read-only
 cid domains rm  --method GET,HEAD api.github.com/repos  # name it whole to remove it
+
+cid domains --browser add cdn.jsdelivr.net    # browser only, GET,HEAD by default
+cid domains --browser add --method ALL api.x  # ...opt out of that default
+cid domains --browser add --denied            # everything the browser was refused
 ```
 
 An entry and a narrower version of it are two entries, and they union — so adding
@@ -198,6 +219,25 @@ cid watch stop               # ...run.sh starts it again next session
 cid hosts                    # every host this project has contacted
 cid hosts forget             # clear it, so each host alerts on next contact
 ```
+
+### `vnc`
+
+Watch the browser running inside a `CLAUDE_BROWSER=1` session. Starts x11vnc and websockify in the
+container on demand, then prints and opens the noVNC URL. Like `watch`, every `docker` call lives in
+the delegated script ([`scripts/vnc.sh`](../scripts/vnc.sh)), not in `cid`. Full behaviour in
+[In-Container Browser](browser-vnc.md).
+
+```bash
+cid vnc                      # start noVNC and open it
+cid vnc url                  # just the URL (CLAUDE_VNC_OPEN=0 has the same effect on start)
+cid vnc status               # is the display up, is a browser on it, is noVNC up
+cid vnc stop                 # stop noVNC; the browser keeps running
+cid vnc --container claude-repo-1a2b3c4d   # pick between concurrent sessions
+```
+
+`start` and `status` print the project key and the directory they resolved from, since the
+container name is randomised. A blank VNC screen means no browser has been opened on the display
+yet, which both verbs say outright.
 
 ## Listing environment variables
 

@@ -6,7 +6,7 @@ XDG_CONFIG_HOME ?= $(HOME)/.config
 CLAUDE_DOCKER_CONFIG_DIR ?= $(XDG_CONFIG_HOME)/claude-in-docker
 CONFIG_DIR := $(CLAUDE_DOCKER_CONFIG_DIR)
 
-GLOBAL_CONFIG := settings.json claude.json mcp-servers.json container-CLAUDE.md allowed-domains.txt skip-decryption.txt .gitconfig .gitignore_global .env
+GLOBAL_CONFIG := settings.json claude.json mcp-servers.json container-CLAUDE.md allowed-domains.txt browser-domains.txt skip-decryption.txt .gitconfig .gitignore_global .env
 
 # Everything `make lint` shellchecks. Globbed per directory so a new script is
 # picked up automatically; extend the list when a new script *directory* appears.
@@ -20,7 +20,7 @@ SHELL_SOURCES := cid \
   $(wildcard sound-effects/*.sh) $(wildcard templates/*.sh) \
   $(wildcard skills/*/*.sh)
 
-.PHONY: init ca migrate bats test test-extra-mounts test-extra-ports test-path-volumes test-resource-limits test-run test-e2e test-ext-allowlist test-watch test-gen-ca test-chrome-devtools-mcp test-docker-bridge test-guards test-scan-settings test-cid test-colors test-sandbox-info test-release lint lockfile update-claude pin-digest proxy-up proxy-down release
+.PHONY: init ca migrate bats test test-extra-mounts test-extra-ports test-path-volumes test-resource-limits test-run test-e2e test-ext-allowlist test-watch test-gen-ca test-chrome-devtools-mcp test-docker-bridge test-guards test-scan-settings test-cid test-colors test-sandbox-info test-vnc test-playwright-wrapper test-release lint lockfile update-claude pin-digest proxy-up proxy-down release
 
 # install_additional_packages.sh and egress-ca.crt stay in the repo: both are
 # COPY'd into the base image at build time (build context = repo dir), so they
@@ -115,6 +115,12 @@ test-colors:
 
 test-sandbox-info:
 	bats test/sandbox-info.bats
+
+test-vnc:
+	bats test/vnc.bats
+
+test-playwright-wrapper:
+	bats test/playwright-wrapper.bats
 
 test-release:
 	bats test/release.bats

@@ -1,0 +1,24 @@
+# Extra egress hosts for the IN-CONTAINER BROWSER only (CLAUDE_BROWSER=1).
+#
+# Copy to browser-domains.txt in your config dir. Read live by the Squid proxy
+# (~2s cache) — no rebuild, no restart. Same grammar as allowed-domains.txt:
+#   [METHOD[,METHOD] ]<host>[/path]
+# See docs/egress-proxy.md#entry-syntax and docs/browser-vnc.md.
+#
+# This list is ADDITIVE and one-way. The browser logs in to Squid as
+# "<project-key>-browser" and gets the baseline + the project's
+# allowed-domains.txt + this file. The agent gets only the first two. So a CDN
+# you add here to make a page render can never be reached by the agent's own
+# curl, npm or uv.
+#
+# Entries here are GET,HEAD by default when added with `cid domains --browser
+# add`, because browsing is read-shaped and the hosts a page needs (wildcard
+# CDNs, telemetry endpoints) are exactly the ones not to hand a request body to.
+# Widen a specific entry by writing the methods yourself.
+#
+# Nothing is enabled by default: a project that never sets CLAUDE_BROWSER=1 is
+# unaffected by this file.
+
+# Add with:  cid domains --browser add <host>
+# Or in bulk, from what the browser was actually refused:
+#   cid domains --browser add --denied

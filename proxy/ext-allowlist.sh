@@ -13,6 +13,11 @@
 # in both modes, only the two filenames differ. Both external_acl_type lines in
 # squid.conf point here; see docs/tls-inspection.md for what splicing means.
 #
+# A login of "<project-key>-browser" is the in-container browser rather than the
+# agent, and adds two more files to the same OR: the browser baseline and the
+# project's browser-domains.txt. Strictly additive, so the agent's reach is
+# always a subset of the browser's. See docs/browser-vnc.md.
+#
 # POSIX sh, no bashisms: the ubuntu/squid base isn't guaranteed to ship bash, and
 # `#!/usr/bin/env bash` crash-loops the helper (exec ENOENT) at 100% CPU when it's
 # absent. auth-ok.sh is /bin/sh for the same reason. See docs/egress-proxy.md.
@@ -22,6 +27,7 @@ export LC_ALL=C   # locale-stable [a-z0-9] / [:space:] ranges
 # Overridable so the helper can be unit-tested against fixtures (see
 # test/ext-allowlist.bats). Squid never sets these; it uses the defaults.
 BASELINE="${BASELINE:-/etc/squid/baseline-domains.txt}"
+BROWSER_BASELINE="${BROWSER_BASELINE:-/etc/squid/baseline-browser-domains.txt}"
 SKIP_DECRYPTION_BASELINE="${SKIP_DECRYPTION_BASELINE:-/etc/squid/baseline-skip-decryption.txt}"
 PROJECTS_DIR="${PROJECTS_DIR:-/etc/squid/projects}"
 
@@ -165,6 +171,16 @@ while read -r key method host path _; do
     prep_path "$path"
   fi
 
+  # The in-container browser logs in as "<project-key>-browser" so its noisy web
+  # hosts can be allowed without widening what the agent's own curl/npm reach.
+  # Stripped BEFORE the key guard so both identities resolve to the one project
+  # dir. run.sh's project_key() always ends in 10 hex chars, and "browser" is not
+  # hex, so no real project can claim this suffix. See docs/browser-vnc.md.
+  is_browser=0
+  case "$key" in
+    *-browser) is_browser=1; key="${key%-browser}" ;;
+  esac
+
   # Defence in depth: the key indexes a directory path, so confine it to the
   # charset run.sh produces (^[a-z0-9][a-z0-9-]*$). First char must be alnum;
   # the tr check rejects any char outside [a-z0-9-]. Anything else matches only
@@ -182,6 +198,15 @@ while read -r key method host path _; do
       ;;
   esac
   allow_project="${project_dir}/allowed-domains.txt"
+  # Consulted only for the browser identity, and ADDITIVE: the browser gets the
+  # agent's lists plus these, never fewer. So the agent is always a subset, and
+  # a host added to render a page can never be reached by anything else.
+  browser_baseline='/nonexistent'
+  browser_project='/nonexistent'
+  if [ "$is_browser" = 1 ]; then
+    browser_baseline="$BROWSER_BASELINE"
+    browser_project="${project_dir}/browser-domains.txt"
+  fi
 
   if [ "$MODE" = skipdecrypt ]; then
     skip_project="${project_dir}/skip-decryption.txt"
@@ -192,9 +217,13 @@ while read -r key method host path _; do
       # through such a rule — otherwise the rule would silently degrade to
       # host-level. A host with a plain entry as well keeps today's answer, and so
       # does one that is not allowlisted at all (its CONNECT is denied anyway).
-      if match_in_file "$BASELINE" unrestricted || match_in_file "$allow_project" unrestricted; then
+      if match_in_file "$BASELINE" unrestricted || match_in_file "$allow_project" unrestricted \
+         || match_in_file "$browser_baseline" unrestricted \
+         || match_in_file "$browser_project" unrestricted; then
         echo "OK"
-      elif match_in_file "$BASELINE" restricted || match_in_file "$allow_project" restricted; then
+      elif match_in_file "$BASELINE" restricted || match_in_file "$allow_project" restricted \
+           || match_in_file "$browser_baseline" restricted \
+           || match_in_file "$browser_project" restricted; then
         echo "ERR"
       else
         echo "OK"
@@ -206,7 +235,9 @@ while read -r key method host path _; do
   fi
 
   if [ "$REQ_METHOD" = CONNECT ]; then mode=connect; else mode=grant; fi
-  if match_in_file "$BASELINE" "$mode" || match_in_file "$allow_project" "$mode"; then
+  if match_in_file "$BASELINE" "$mode" || match_in_file "$allow_project" "$mode" \
+     || match_in_file "$browser_baseline" "$mode" \
+     || match_in_file "$browser_project" "$mode"; then
     echo "OK"
   else
     echo "ERR"

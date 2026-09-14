@@ -30,6 +30,8 @@
 #   CONTAINER_MEMORY_LIMIT          --memory value, empty when uncapped
 #   CONTAINER_CPU_LIMIT             --cpus value, empty when uncapped
 #   CONTAINER_PIDS_LIMIT            --pids-limit value, empty when uncapped
+#   CONTAINER_BROWSER_DISPLAY       X display of the in-container browser, set
+#                                   only when CLAUDE_BROWSER is on
 set -euo pipefail
 
 REPO_IN_CONTAINER="${REPO_IN_CONTAINER:-/home/dev/repo}"
@@ -212,16 +214,66 @@ else
 fi
 echo
 
+echo "## Browser"
+echo
+# Two independent browsers may be available, and which to reach for is NOT
+# obvious from the tool list: the host one is an MCP server, so its tools are
+# always in front of you, while the in-container one is a CLI you have to choose
+# to run. State the rule wherever both are in play, or the salient one wins by
+# default rather than on merit.
+if [[ -n "${CONTAINER_BROWSER_DISPLAY:-}" ]]; then
+  echo "- A real Chromium runs HERE, on display \`${CONTAINER_BROWSER_DISPLAY}\`. Drive it with"
+  echo "  \`playwright-cli\` (\`playwright-cli --help\`; the installed playwright skill has"
+  echo "  the detail). It is already configured — do not pass \`--proxy-server\` or a"
+  echo "  \`--config\` of your own, a wrapper supplies both."
+  echo "- Its traffic goes through the egress allowlist like everything else, so a page"
+  echo "  that will not load is usually a blocked host, not a broken browser. Report the"
+  echo "  host; the browser has its own list, so the fix is \`cid domains --browser add\`."
+  echo "- \`localhost\` is exempt from the proxy, so your own dev server is reachable."
+  echo "- Files you write with \`--filename\` land in this container, visible to the user"
+  echo "  on the host wherever the repo is mounted. No path translation is involved."
+  echo "- The user can watch you, live, by running \`cid vnc\` on the host. You cannot"
+  echo "  start that yourself; suggest it when showing something is easier than saying it."
+  if [[ -n "$_chrome" ]]; then
+    echo "- The chrome-devtools MCP server is ALSO enabled, driving Chrome on the host."
+    echo "  Prefer \`playwright-cli\` — this is the default for anything about this project:"
+    echo "  the dev server, browser tests, reading docs, research."
+    echo "  Use chrome-devtools only when the task actually needs the host: the user's real"
+    echo "  profile (logged-in sessions, extensions), something only the host can reach (a"
+    echo "  VPN, a host-only port, the LAN), or watching it in their own window. Its files"
+    echo "  land on the HOST and its traffic skips the allowlist entirely, so it is the"
+    echo "  wrong default even when it would work."
+  fi
+elif [[ -n "$_chrome" ]]; then
+  echo "- No browser in this container, but the chrome-devtools MCP server is enabled and"
+  echo "  drives Chrome on the HOST. Remember which side it is on: its screenshots and"
+  echo "  traces land on the host filesystem, and a container port means nothing to it."
+  echo "- For project work an in-container browser is usually the better fit (files land"
+  echo "  here, traffic is filtered). The user enables it with \`CLAUDE_BROWSER=1\`."
+else
+  echo "- No browser available. If you need one, the user starts the session with"
+  echo "  \`CLAUDE_BROWSER=1\` (Chromium and playwright-cli, in here) or"
+  echo "  \`CLAUDE_CHROME_DEVTOOLS=1\` (their own Chrome, on the host)."
+  echo "  Do not try to install Chromium or Playwright yourself."
+fi
+echo
+
 echo "## Using this"
 echo
 echo "- Inside the container, reach your own server on its container port"
 echo "  (\`curl http://localhost:<cport>\`)."
+if [[ -n "${CONTAINER_BROWSER_DISPLAY:-}" ]]; then
+  echo "  — including \`playwright-cli\`, which runs in here, so point it at the CONTAINER"
+  echo "  port like anything else local."
+fi
 echo "- Anything running on the HOST must use the host endpoint above: the user's"
 # Name the chrome bridge only where it exists — run.sh labels its port solely when
 # the user opened it, so an unlabelled session has no such server to warn about.
 if [[ -n "$_chrome" ]]; then
   echo "  browser, and the chrome-devtools MCP server — it drives a browser on the host,"
   echo "  so navigating it to the container port hits the host's own port, not yours."
+  echo "  That asymmetry is the easiest way to mix the two browsers up: playwright-cli"
+  echo "  takes the container port, chrome-devtools takes the host one."
 else
   echo "  browser, and any other host-side tool — over there \`localhost:<cport>\` is the"
   echo "  host's own port, not yours."

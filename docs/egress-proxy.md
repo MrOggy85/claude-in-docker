@@ -42,7 +42,9 @@ and DNS closed to everything but Docker's resolver (Squid resolves upstream name
    receives `<project-key> <method> <host> <path>` and returns `OK` when an entry in the baseline list
    **or** in `<config-dir>/projects/<project-key>/allowed-domains.txt` grants that request.
    Everything else is denied (`http_access deny all`). The CONNECT is checked, then every decrypted
-   request inside it is checked again on its own.
+   request inside it is checked again on its own. A login of `<project-key>-browser` is the
+   [in-container browser](browser-vnc.md#the-browser-has-its-own-list) and gets two more lists on
+   top of those, so its extra hosts never widen what the agent itself can reach.
 3. **TLS is decrypted**, with a locally generated CA the containers trust, so Squid reads the full
    URL and validates the upstream certificate. Hosts on `skip-decryption.txt` are relayed
    undecrypted instead. See [TLS Inspection](tls-inspection.md).
@@ -113,13 +115,15 @@ running container pointed at a deleted file.
 | ------------------------------------------ | --------------------------------------------------------------- |
 | `<config-dir>/allowed-domains.txt`         | **baseline** — always allowed, every project (falls back to `templates/allowed-domains.txt` if absent) |
 | `<config-dir>/projects/<key>/allowed-domains.txt` | that project's full list (seeded by `run.sh` on first run) |
+| `<config-dir>/browser-domains.txt`, `projects/<key>/browser-domains.txt` | same grammar, read **only** for a `<key>-browser` login and **additive** on top of the two above ([In-Container Browser](browser-vnc.md#the-browser-has-its-own-list)) |
 | `<config-dir>/skip-decryption.txt`, `projects/<key>/skip-decryption.txt` | a different question — hosts **not** to decrypt — over the hostname half of the grammar below ([TLS Inspection](tls-inspection.md)) |
 
 All are bind-mounted read-only into the proxy and read live by the helper (2-second verdict cache),
-so **editing a list needs no proxy restart** — the change applies within ~2s. The two baseline
+so **editing a list needs no proxy restart** — the change applies within ~2s. The baseline
 files are mounted individually, so `cid` rewrites them in place (`_rewrite_in_place`) rather than
 renaming a temp file over them: a new inode would strand the proxy's mount and silently drop the
-baseline from every verdict.
+baseline from every verdict. Adding `browser-domains.txt` added a mount, so a proxy started before
+that feature needs `make proxy-down && make proxy-up` to see the baseline copy.
 
 ### Entry syntax
 
