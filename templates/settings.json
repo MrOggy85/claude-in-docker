@@ -1,6 +1,6 @@
 {
   "statusLine": {
     "type": "command",
-    "command": "printf '\\033[2m📁 %s\\033[0m' \"${CLAUDE_HOST_PROJECT_DIR:-$(pwd)}\""
+    "command": "printf '\\033[2m📁 %s\\033[0m' \"${CLAUDE_HOST_PROJECT_DIR:-$(pwd)}\"; if [ -n \"${CONTAINER_NAME:-}\" ]; then printf '\\033[2m  ⬢ %s\\033[0m' \"${CONTAINER_NAME##*-}\"; fi"
   }
 }

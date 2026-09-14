@@ -329,6 +329,40 @@ For the docker bridge, the residual risks after the token, allowlist, and fixed 
   `/var/run/docker.sock` instead would void essentially every invariant on this page at once. See
   [Not implemented: build and run](docker-bridge.md#not-implemented-build-and-run).
 
+## In-Container Browser and noVNC (Opt-In)
+
+`CLAUDE_BROWSER=1` adds a real Chromium and a published noVNC port
+([In-Container Browser](browser-vnc.md)). It is the inverse of the chrome bridge above: the browser
+runs **inside** the container, so its traffic crosses Squid under the project's allowlist and a
+browser exploit lands in the container rather than on the host as your user. That is the reason to
+prefer it. Three residual risks:
+
+- **noVNC is remote control, not a screen share.** The published port gives whoever reaches it full
+  keyboard and mouse input to a browser holding whatever the session logged into. Mitigated by
+  binding `127.0.0.1` by default and by a per-project password in `<projects-dir>/<key>/vnc.pass`
+  (mode 600), which x11vnc receives via `-storepasswd` so it never appears in the container's argv.
+  `CLAUDE_VNC_BIND=0.0.0.0` discards the first of those; `guards/browser.sh` warns rather than
+  refusing, because publishing to a LAN is sometimes the point. x11vnc itself binds loopback inside
+  the container, so websockify on the published port is the only door.
+- **`--no-sandbox` is required.** Chromium's renderer sandbox needs user namespaces the container
+  does not have, so a renderer compromise is code execution as the container user. The container,
+  its non-root UID, and the egress lock are the boundary — the same ones every other process here
+  runs behind.
+- **Allowlist erosion is contained, not eliminated.** The browser authenticates as
+  `<key>-browser` and reads `browser-domains.txt` on top of the agent's lists, so a CDN allowed to
+  render a page never becomes reachable by `curl`, `npm` or `uv`. Entries added with
+  `cid domains --browser add` default to `GET,HEAD`, which removes the request body from exactly
+  the hosts worth worrying about (a wildcard CDN domain is attacker-registrable; a telemetry
+  endpoint accepts arbitrary payloads). What remains: the browser's own list still grows, and the
+  browser is still a process the agent drives, so a host reachable by it is a host reachable by an
+  injected instruction. `--method ALL` discards the method mitigation for that entry.
+
+Page content the browser reads reaches the model as snapshot text, so a visited site is untrusted
+input on the same footing as a fetched URL — see the prompt-injection reasoning in
+[Threat Model](threat-model.md). That is the residual risk the split does not address: separating
+the identities bounds *what the agent can reach directly*, not what it can ask the browser to
+fetch.
+
 ## GitHub MCP Token Write Access (Accepted Trade-off)
 
 The GitHub MCP token (`MCP_GH_BEARER`) may hold **Issues** and **Pull requests** write access, so

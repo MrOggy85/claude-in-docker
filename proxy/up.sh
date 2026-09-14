@@ -47,6 +47,15 @@ if [[ ! -f "${BASELINE_DOMAINS_FILE}" ]]; then
   fail "${BASELINE_DOMAINS_FILE} not found — run: make init"
   exit 1
 fi
+# The in-container browser's extra hosts, consulted only for a "-browser" login
+# (see ext-allowlist.sh). Created empty if missing rather than fatal: it is
+# additive, so an absent file means "the browser gets exactly what the agent
+# gets" — the pre-feature behaviour, and a safe default for an old config dir.
+BASELINE_BROWSER_DOMAINS_FILE="${CONFIG_DIR}/browser-domains.txt"
+if [[ ! -f "${BASELINE_BROWSER_DOMAINS_FILE}" ]]; then
+  printf '# Extra hosts the in-container browser may reach; see docs/browser-vnc.md\n' \
+    > "${BASELINE_BROWSER_DOMAINS_FILE}"
+fi
 # Same for the skip-decryption list (hosts to relay undecrypted). Comment-only
 # when seeded.
 BASELINE_SKIP_DECRYPTION_FILE="${CONFIG_DIR}/skip-decryption.txt"
@@ -117,6 +126,7 @@ docker run -d \
   --pids-limit 512 \
   --volume "${SCRIPT_DIR}:${SRC_MOUNT}:ro" \
   --volume "${BASELINE_DOMAINS_FILE}:/etc/squid/baseline-domains.txt:ro" \
+  --volume "${BASELINE_BROWSER_DOMAINS_FILE}:/etc/squid/baseline-browser-domains.txt:ro" \
   --volume "${BASELINE_SKIP_DECRYPTION_FILE}:/etc/squid/baseline-skip-decryption.txt:ro" \
   --volume "${CA_DIR}:/etc/squid/ca-src:ro" \
   --volume "${PROJECTS_DIR}:/etc/squid/projects:ro" \

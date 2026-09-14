@@ -105,6 +105,19 @@ _process() {
       seen[key SUBSEP host] = 1
     }
 
+    # The hosts WE refused, kept apart from seen-hosts.txt so `cid domains add
+    # --denied` has an exact list to work from. The alert log cannot serve: it
+    # coalesces to five hosts plus a count, which is lossy exactly when a bulk
+    # add is wanted. Deduped in memory, so a retry loop appends once per run.
+    function record_denied(key, host,   f) {
+      if ((key SUBSEP host) in wrotedeny) return
+      wrotedeny[key SUBSEP host] = 1
+      f = projdir "/" key "/denied-hosts.txt"
+      system("mkdir -p \"$CID_PROJECTS_DIR/" key "\"")
+      print host >> f
+      close(f)
+    }
+
     function alert(urgency, key, host, reason) {
       printf "%s\t%s\t%s\t%s\n", urgency, key, host, reason
       fflush()   # the reader is a pipe; without this a burst sits in the buffer
@@ -157,6 +170,10 @@ _process() {
 
       loadseen(key)
       isnew = !((key SUBSEP host) in seen)
+      # Independent of the isnew/cooldown branches below: those decide whether to
+      # NOTIFY, this records the fact. A denial squelched by the cooldown is
+      # still a host the user may want to allow.
+      if (denied) record_denied(key, host)
 
       if (isnew) {
         record(key, host)

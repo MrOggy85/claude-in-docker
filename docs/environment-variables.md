@@ -37,6 +37,14 @@ CLAUDE_MOUNTS="$HOME/data:/data" ./run.sh
 | `DOCKER_BRIDGE_PORT` | `9334` | Port the docker bridge listens on. Read by **both** the bridge and `run.sh`, so it is auto-merged into the firewall when the bridge is on — keep it in sync with the `url` in `mcp-servers.json`. | [Host Docker Bridge](docker-bridge.md) |
 | `DOCKER_BRIDGE_BIND` | `0.0.0.0` | Address the docker bridge binds. `0.0.0.0` is required to be reachable over the Docker gateway; narrow it if you know your gateway address. Host-only. | [Host Docker Bridge](docker-bridge.md) |
 | `DOCKER_BRIDGE_DOCKER_CMD` | `docker` | Path to the `docker` CLI the bridge invokes (launchd's `PATH` is minimal). Host-only. | [Host Docker Bridge](docker-bridge.md) |
+| `CLAUDE_BROWSER` | _(unset)_ | `1`/`true`/`yes`/`on`. Builds Chromium, `playwright-cli`, Xvfb and noVNC into the image, starts the X display, publishes the noVNC port and generates the proxy config. Part of the build-context hash, so flipping it rebuilds. | [In-Container Browser](browser-vnc.md) |
+| `CLAUDE_BROWSER_HEADLESS` | _(unset)_ | `1`/`true`/`yes`/`on`. Runs the browser headless. Faster, but there is then nothing for `cid vnc` to show. | [In-Container Browser](browser-vnc.md) |
+| `CLAUDE_BROWSER_GEOMETRY` | `1280x800x24` | Xvfb screen geometry, `<width>x<height>x<depth>`. The Playwright viewport stays 1280×800 regardless. | [In-Container Browser](browser-vnc.md) |
+| `CLAUDE_BROWSER_DISPLAY` | `:99` | X display the browser, Xvfb and x11vnc share. | [In-Container Browser](browser-vnc.md) |
+| `CLAUDE_VNC_PORT` | `0` (Docker assigns a free one) | Host port for noVNC. Pin it for a stable URL, but only one session can then hold it — a second dies with "port is already allocated". `cid vnc` reads the real port either way. | [In-Container Browser](browser-vnc.md) |
+| `CLAUDE_VNC_BIND` | `127.0.0.1` | Host address noVNC is published on. `0.0.0.0` exposes full remote control of the browser to your LAN. | [In-Container Browser](browser-vnc.md) |
+| `CLAUDE_VNC_OPEN` | `1` | `0`/`false`/`no`/`off` prints the noVNC URL without opening a browser. Host-only. | [In-Container Browser](browser-vnc.md) |
+| `CLAUDE_VNC_OPEN_CMD` | _(unset)_ | Command used to open that URL, instead of `open`/`xdg-open`. Host-only. | [In-Container Browser](browser-vnc.md) |
 | `CLAUDE_SANDBOX_INFO` | `1` | `0`/`false`/`no`/`off` stops mounting the `sandbox` skill, so the session cannot look up its own ports, mounts and egress policy. The sandbox itself is unchanged. | [Sandbox Self-Awareness](sandbox-info.md) |
 | `CLAUDE_MEMORY` | 25% of the host's RAM, floor `2g` | Memory cap (`--memory`). `0`/`off`/`unlimited` removes it. | [Resource Limits](resource-limits.md) |
 | `CLAUDE_MEMORY_SWAP` | same as `CLAUDE_MEMORY` (swap off) | Memory+swap **total** (`--memory-swap`); must be ≥ `CLAUDE_MEMORY`. | [Resource Limits](resource-limits.md) |

@@ -130,6 +130,55 @@ RUN if ! getent passwd "${USER_ID}" >/dev/null 2>&1; then \
       echo "${USERNAME}:x:${GROUP_ID}:" >> /etc/group; \
     fi
 
+# In-container browser — OPT-IN, off by default (run.sh passes WITH_BROWSER=1 for
+# CLAUDE_BROWSER=1 and folds the flag into the context hash, so flipping it
+# rebuilds). Adds ~700 MB, hence the gate. Above install_additional_packages.sh
+# and the CA layer so neither is invalidated by a browser rebuild.
+#
+# Chromium comes from Playwright, not apt: --with-deps installs the exact shared
+# libraries and fonts that build needs, and the version always matches the driver.
+# `playwright` is installed globally alongside the CLI (rather than reached
+# through @playwright/cli's nested copy) so the `playwright` bin lands on PATH.
+# Both are pinned to the same version — the CLI depends on that exact build.
+# PLAYWRIGHT_BROWSERS_PATH puts the download in /opt, readable by any UID,
+# instead of root's ~/.cache where the runtime user could not reach it.
+# libnss3-tools is for certutil (see the NSS layer below); openbox is a window
+# manager, without which Chromium's window cannot be moved or resized over VNC.
+# See docs/browser-vnc.md.
+ARG WITH_BROWSER=0
+ARG PLAYWRIGHT_CLI_VERSION=0.1.19
+ARG PLAYWRIGHT_VERSION=1.63.0-alpha-2026-08-31
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+# X's socket directory, created HERE because this layer runs as root and Xvfb
+# wants it root-owned: created at runtime instead it works, but every start
+# prints "Owner of /tmp/.X11-unix should be set to root". entrypoint.sh still
+# creates it as a fallback, for the case where /tmp is a fresh mount.
+RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+RUN if [ "${WITH_BROWSER}" = "1" ]; then \
+      apt-get update \
+      && apt-get install -y --no-install-recommends \
+           xvfb x11vnc novnc websockify openbox libnss3-tools \
+      && npm install -g \
+           "@playwright/cli@${PLAYWRIGHT_CLI_VERSION}" \
+           "playwright@${PLAYWRIGHT_VERSION}" \
+      && playwright install --with-deps chromium \
+      && chmod -R a+rX /opt/ms-playwright \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# Wrapper so every playwright-cli call picks up the generated config (proxy
+# credentials — Squid requires auth and Chromium cannot carry it on the command
+# line; see docs/browser-vnc.md#egress). Its own dir, prepended to PATH: npm's
+# global bin is $NVM_DIR/default/bin, which already outranks /usr/local/bin, so a
+# wrapper there would be shadowed by the very binary it wraps. A real file rather
+# than a heredoc so `make lint` and test/playwright-wrapper.bats can reach it —
+# the flag it injects is only valid on two subcommands, which is exactly the kind
+# of thing that needs a test. Harmless when the browser layer is off: it exits
+# 127 with a pointer to CLAUDE_BROWSER=1.
+ENV PATH="/usr/local/claude-bin:${PATH}"
+COPY scripts/playwright-cli.sh /usr/local/claude-bin/playwright-cli
+RUN chmod 755 /usr/local/claude-bin/playwright-cli
+
 # Egress lock: the entrypoint applies these rules via a sudo rule scoped to only
 # this script (no other root escalation). Allowlist policy lives in Squid.
 COPY init-firewall.sh /usr/local/bin/init-firewall.sh
@@ -164,6 +213,21 @@ RUN if [ -s /tmp/egress-ca.crt ]; then \
       && update-ca-certificates; \
     fi; \
     rm -f /tmp/egress-ca.crt
+# Chromium is another runtime with its own store: it reads the NSS db at
+# ~/.pki/nssdb, not /etc/ssl/certs, so seed the CA there too or every bumped
+# HTTPS handshake fails with ERR_CERT_AUTHORITY_INVALID. Below the CA layer on
+# purpose — rotating the CA rebuilds from there down, re-seeding this db with it.
+# 777 afterwards for the same reason as the layer above: this runs as root but
+# the db is read (and locked) by the runtime user. See docs/tls-inspection.md.
+RUN if [ "${WITH_BROWSER}" = "1" ] \
+    && [ -s /usr/local/share/ca-certificates/claude-egress-ca.crt ]; then \
+      mkdir -p /home/dev/.pki/nssdb \
+      && certutil -N --empty-password -d sql:/home/dev/.pki/nssdb \
+      && certutil -A -n claude-egress-ca -t C,, -d sql:/home/dev/.pki/nssdb \
+           -i /usr/local/share/ca-certificates/claude-egress-ca.crt \
+      && chmod -R 777 /home/dev/.pki; \
+    fi
+
 # Runtimes carrying their own CA bundle instead of reading the system store: point
 # them at the merged system bundle (a superset — this never narrows trust). uv and
 # httpx read SSL_CERT_FILE, pip reads REQUESTS_CA_BUNDLE. Node reads neither.

@@ -20,6 +20,7 @@ _cid_files() {
   files=(
     settings.json claude.json mcp-servers.json container-CLAUDE.md
     .gitconfig .gitignore_global .credentials.json allowed-domains.txt
+    browser-domains.txt
     skip-decryption.txt docker-containers.txt trusted-settings-rules.txt .env
     install_additional_packages.sh
   )
@@ -40,7 +41,11 @@ _cid_envvars() {
     CHROME_DEVTOOLS_MCP_PROFILE_ROOT CHROME_DEVTOOLS_MCP_PROFILE
     CHROME_DEVTOOLS_MCP_MAX_SESSIONS
     CLAUDE_DOCKER_BRIDGE DOCKER_BRIDGE_PORT DOCKER_BRIDGE_BIND
-    DOCKER_BRIDGE_DOCKER_CMD CLAUDE_SANDBOX_INFO
+    DOCKER_BRIDGE_DOCKER_CMD
+    CLAUDE_BROWSER CLAUDE_BROWSER_HEADLESS CLAUDE_BROWSER_GEOMETRY
+    CLAUDE_BROWSER_DISPLAY CLAUDE_VNC_PORT CLAUDE_VNC_BIND CLAUDE_VNC_OPEN
+    CLAUDE_VNC_OPEN_CMD
+    CLAUDE_SANDBOX_INFO
     CLAUDE_MEMORY CLAUDE_MEMORY_SWAP CLAUDE_CPUS CLAUDE_PIDS_LIMIT CLAUDE_VOLUME
     CLAUDE_CONTAINER_NAME CLAUDE_EGRESS_NETWORK CLAUDE_EGRESS_PROXY_NAME
     CLAUDE_EGRESS_ALERTS CLAUDE_NOTIFY_CMD CLAUDE_DENY_ALERT_COOLDOWN
@@ -70,6 +75,33 @@ _cid_entries() {  # <basename> <tag> <description> [extra-sed]
 # The method list is offered by --method, so complete the host[/path] half only.
 _cid_hosts() {
   _cid_entries allowed-domains.txt hosts 'allowed host' 's/^[A-Za-z][A-Za-z,]* //'
+}
+
+# Same, for `domains --browser rm`: only this list's entries can be removed from
+# it, so offering the agent's would suggest removals that silently do nothing.
+_cid_browser_hosts() {
+  _cid_entries browser-domains.txt hosts 'browser-allowed host' 's/^[A-Za-z][A-Za-z,]* //'
+}
+
+# Running containers for the project being completed — the values that
+# `cid vnc --container` accepts. Goes through `cid`, which delegates to
+# scripts/vnc.sh, so docker stays in the one file that owns it (see CLAUDE.md)
+# and this does not have to guess where the scripts live relative to an installed
+# completion. That verb prints nothing and exits 0 when docker is absent or
+# nothing is running, so completion never errors at the user.
+_cid_vnc_containers() {
+  local -a names cdir
+  local i
+  # Honour a -C/--dir already on the line, so the offered containers match the
+  # project the command will actually resolve.
+  for (( i = 2; i < CURRENT; i++ )); do
+    case ${words[i]} in
+      -C|--dir|--project) [[ -n ${words[i+1]} ]] && cdir=(-C ${words[i+1]}) ;;
+    esac
+  done
+  names=(${(f)"$(cid vnc _containers $cdir 2>/dev/null)"})
+  names=(${names:#})   # drop the empty element an empty command output leaves
+  (( ${#names} )) && _describe -t containers 'running container' names
 }
 
 _cid_skip_decryption() {
@@ -106,6 +138,7 @@ _cid() {
     'containers:show or edit the docker-bridge container allowlist'
     'settings:what the project .claude/settings*.json grants'
     'watch:egress alert watcher status / start / stop / log'
+    'vnc:watch the in-container browser over noVNC'
     'hosts:hosts this project has already contacted'
     'env:list the environment variables you can set'
     'help:show usage'
@@ -137,6 +170,24 @@ _cid() {
             'log:show the most recent egress alerts'
           )
           _describe -t subcommands 'watch action' subs
+          ;;
+        vnc)
+          _arguments \
+            '(-C --dir --project)'{-C,--dir,--project}'[select project by directory]:dir:_files -/' \
+            '--container[pick the container when several run for one project]:name:_cid_vnc_containers' \
+            '1: :->sub'
+          case $state in
+            sub)
+              local -a subs
+              subs=(
+                'start:start noVNC, print and open the URL'
+                'stop:stop noVNC; the display and the browser keep running'
+                'status:is the display up, is noVNC up, what is the URL'
+                'url:print the URL only'
+              )
+              _describe -t subcommands 'vnc action' subs
+              ;;
+          esac
           ;;
         hosts)
           _arguments \
@@ -188,7 +239,9 @@ _cid() {
             if [[ $kind == domains ]]; then
               domains_flags=(
                 '--for[expire the entry after a duration, e.g. 15m/2h/1d]:duration:'
-                '--method[restrict the entry to these HTTP methods]:methods:(GET HEAD POST PUT PATCH DELETE OPTIONS GET,HEAD)'
+                '--method[restrict the entry to these HTTP methods]:methods:(GET HEAD POST PUT PATCH DELETE OPTIONS GET,HEAD ALL)'
+                '--browser[target the in-container browser list, not the agent one]'
+                '--denied[add every host the proxy has refused for this project]'
               )
             fi
             _arguments \
@@ -230,20 +283,32 @@ _cid() {
                 local verb=${line[1]} entries=''
                 local -a rest_flags method_flag
                 method_flag=(
-                  '--method[restrict the entry to these HTTP methods]:methods:(GET HEAD POST PUT PATCH DELETE OPTIONS GET,HEAD)'
+                  '--method[restrict the entry to these HTTP methods]:methods:(GET HEAD POST PUT PATCH DELETE OPTIONS GET,HEAD ALL)'
                 )
                 rest_flags=(
                   '(-g --global)'{-g,--global}'[target the shared baseline list]'
                   '(-C --dir --project)'{-C,--dir,--project}'[select project by directory]:dir:_files -/'
                 )
+                # --browser is orthogonal to -g (consumer vs scope), so it is
+                # offered alongside it rather than excluded by it.
                 case $kind:$verb in
                   domains:add)
                     rest_flags+=(
                       '--for[expire the entry after a duration, e.g. 15m/2h/1d]:duration:'
+                      '--browser[target the in-container browser list, not the agent one]'
+                      '--denied[add every host the proxy has refused for this project]'
                       "${method_flag[@]}"
                     ) ;;
                   domains:rm|domains:remove)
-                    rest_flags+=("${method_flag[@]}"); entries=_cid_hosts ;;
+                    rest_flags+=(
+                      '--browser[target the in-container browser list, not the agent one]'
+                      "${method_flag[@]}"
+                    )
+                    # Which list is being edited decides which entries can be
+                    # removed from it, so follow the flag already on the line.
+                    if (( ${words[(I)--browser]} )); then entries=_cid_browser_hosts
+                    else                                  entries=_cid_hosts
+                    fi ;;
                   skip-decryption:rm|skip-decryption:remove) entries=_cid_skip_decryption ;;
                   containers:rm|containers:remove)           entries=_cid_containers ;;
                 esac

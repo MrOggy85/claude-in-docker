@@ -23,6 +23,7 @@ render() {  # <VAR=VALUE>...
     -u REPO_IN_CONTAINER -u EGRESS_PROXY_HOST -u DOCKER_BRIDGE_TOKEN \
     -u CONTAINER_PROJECT_INSTALL_SCRIPT -u CONTAINER_PROJECT_IMAGE \
     -u CONTAINER_MEMORY_LIMIT -u CONTAINER_CPU_LIMIT -u CONTAINER_PIDS_LIMIT \
+    -u CONTAINER_BROWSER_DISPLAY \
     "$@" bash "${SANDBOX_INFO}"
 }
 
@@ -272,6 +273,70 @@ render() {  # <VAR=VALUE>...
   [ "$status" -eq 0 ]
   [[ "$output" == *"any other host-side tool"* ]]
   [[ "$output" != *"chrome-devtools MCP server"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# Browser
+# ---------------------------------------------------------------------------
+
+@test "browser present: names the display, playwright-cli and cid vnc" {
+  render CONTAINER_BROWSER_DISPLAY=":99"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"display \`:99\`"* ]]
+  [[ "$output" == *"playwright-cli"* ]]
+  [[ "$output" == *"cid vnc"* ]]
+}
+
+@test "browser present: warns off overriding the proxy config" {
+  render CONTAINER_BROWSER_DISPLAY=":99"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--proxy-server"* ]]
+  [[ "$output" == *"a wrapper supplies both"* ]]
+}
+
+@test "neither browser: names both switches, and says not to install one" {
+  render CONTAINER_PUBLISHED_PORTS="9345:3000/tcp"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No browser available"* ]]
+  [[ "$output" == *"CLAUDE_BROWSER=1"* ]]
+  [[ "$output" == *"CLAUDE_CHROME_DEVTOOLS=1"* ]]
+}
+
+# The reason this section exists: an MCP server's tools are always in the tool
+# list, a CLI is not, so "both enabled" must state the rule explicitly.
+@test "both browsers: says to prefer playwright-cli, and when not to" {
+  render CONTAINER_BROWSER_DISPLAY=":99" \
+         CONTAINER_HOST_OUTBOUND_PORTS="9333" \
+         CONTAINER_HOST_PORT_LABELS="9333=chrome-devtools MCP bridge (browser runs on the host)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ALSO enabled"* ]]
+  [[ "$output" == *"Prefer \`playwright-cli\`"* ]]
+  [[ "$output" == *"the user's real"* ]]
+  [[ "$output" == *"skips the allowlist"* ]]
+}
+
+@test "both browsers: names the container-vs-host port asymmetry" {
+  render CONTAINER_BROWSER_DISPLAY=":99" \
+         CONTAINER_PUBLISHED_PORTS="9345:3000/tcp" \
+         CONTAINER_HOST_OUTBOUND_PORTS="9333" \
+         CONTAINER_HOST_PORT_LABELS="9333=chrome-devtools MCP bridge (browser runs on the host)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"playwright-cli"*"container port"*"chrome-devtools takes the host one"* ]]
+}
+
+@test "host chrome only: points at the in-container browser as the better default" {
+  render CONTAINER_HOST_OUTBOUND_PORTS="9333" \
+         CONTAINER_HOST_PORT_LABELS="9333=chrome-devtools MCP bridge (browser runs on the host)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No browser in this container"* ]]
+  [[ "$output" == *"land on the host filesystem"* ]]
+  [[ "$output" == *"CLAUDE_BROWSER=1"* ]]
+}
+
+@test "in-container browser only: does not mention chrome-devtools at all" {
+  render CONTAINER_BROWSER_DISPLAY=":99" CONTAINER_HOST_OUTBOUND_PORTS="4767"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"chrome-devtools"* ]]
 }
 
 @test "writes nothing to stderr" {

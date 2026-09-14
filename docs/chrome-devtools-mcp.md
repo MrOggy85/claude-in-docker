@@ -1,8 +1,26 @@
 # Chrome DevTools MCP
 
-Let Claude Code drive a real Chrome through the
+Let Claude Code drive **your own Chrome, on the host**, through the
 [`chrome-devtools-mcp`](https://github.com/ChromeDevTools/chrome-devtools-mcp) server — navigate
 pages, run scripts, take screenshots, inspect the DOM and network.
+
+## Which browser do you want?
+
+Since the [in-container browser](browser-vnc.md) exists, this is no longer the default way to give
+a session a browser. Reach for it when the task needs **the host specifically**:
+
+- your real Chrome profile — logged-in sessions, extensions, saved state
+- something only the host can reach: a VPN'd service, a host-only port, another machine on the LAN
+- watching it in your own window rather than over `cid vnc`
+
+For everything else — the project's dev server, browser tests, reading docs, research — prefer
+`CLAUDE_BROWSER=1`. Its files land in the workspace instead of on the host, its traffic crosses the
+egress allowlist instead of bypassing it, and it needs no host daemon or launchd agent.
+
+Both can be on at once. When they are, the [`sandbox` skill](sandbox-info.md) tells the session
+which to use, which matters because this one's MCP tools are in the model's tool list while
+`playwright-cli` is a command it has to choose to run. If you want the in-container browser used,
+the surest thing is to leave `CLAUDE_CHROME_DEVTOOLS` unset for that session.
 
 ## Why a host-side server?
 

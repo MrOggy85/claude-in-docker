@@ -47,6 +47,7 @@ setup() {
   # Scratch space for the docker stub's output files
   STUB_DIR="$(mktemp -d)"
   DOCKER_RUN_ARGS="${STUB_DIR}/docker-run-args.txt"
+  DOCKER_BUILD_ARGS="${STUB_DIR}/docker-build-args.txt"
   DOCKER_ALL_CALLS="${STUB_DIR}/docker-all-calls.txt"
 
   # Point both the config dir and per-project config dirs at throwaway scratch so
@@ -84,6 +85,9 @@ case "\$1" in
     exit 1
     ;;
   build)
+    # One arg per line, like the run arm, so --build-arg values can be asserted
+    # exactly (the browser layer is gated on one).
+    printf '%s\n' "\$@" > "${DOCKER_BUILD_ARGS}"
     exit 0
     ;;
   container)
@@ -431,6 +435,181 @@ refute_run_arg() {
     bash "${RUN_SH}"
   [ "$status" -eq 0 ]
   grep -q "^CONTAINER_HOST_PORT_LABELS=.*9333=chrome-devtools MCP bridge" "${DOCKER_RUN_ARGS}"
+}
+
+# ---------------------------------------------------------------------------
+# In-container browser (CLAUDE_BROWSER)
+# ---------------------------------------------------------------------------
+
+# The browser's own switch, shared by the tests below.
+browser_run() {
+  env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_BROWSER=1 \
+    "$@" \
+    bash "${RUN_SH}"
+}
+
+@test "browser off by default: no display, no shm bump, no published VNC port" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  refute_run_arg "CLAUDE_BROWSER_ON=1"
+  refute_run_arg "--shm-size=512m"
+  refute_run_arg "--init"
+  refute_run_arg "127.0.0.1:0:6080"
+  [ ! -f "${PROJECT_CONFIG_DIR}/playwright-cli.config.json" ]
+}
+
+# The host port MUST default to 0. A fixed one makes the second browser-enabled
+# container anywhere on the machine die with "port is already allocated", which
+# defeats the randomized container name that exists to allow concurrent sessions.
+@test "browser on: the published host port is dynamic by default" {
+  cd "${TEST_PROJECT_DIR}"
+  run browser_run
+  [ "$status" -eq 0 ]
+  assert_run_arg "127.0.0.1:0:6080"
+  refute_run_arg "127.0.0.1:6080:6080"
+}
+
+@test "browser on: a dynamic port is not reported as a host endpoint" {
+  cd "${TEST_PROJECT_DIR}"
+  run browser_run
+  [ "$status" -eq 0 ]
+  # "127.0.0.1:0" is not somewhere the sandbox skill may send anyone.
+  refute_run_arg "CONTAINER_PUBLISHED_PORTS=127.0.0.1:0:6080/tcp"
+  # The firewall still has to open it, and the label still announces it.
+  grep -q "^CONTAINER_OPEN_PORTS=.*6080/tcp" "${DOCKER_RUN_ARGS}"
+  grep -q "^CONTAINER_HOST_PORT_LABELS=.*6080=noVNC" "${DOCKER_RUN_ARGS}"
+}
+
+@test "browser on: a pinned CLAUDE_VNC_PORT is reported as an endpoint" {
+  cd "${TEST_PROJECT_DIR}"
+  run browser_run CLAUDE_VNC_PORT=6080
+  [ "$status" -eq 0 ]
+  assert_run_arg "127.0.0.1:6080:6080"
+  grep -q "^CONTAINER_PUBLISHED_PORTS=.*127.0.0.1:6080:6080/tcp" "${DOCKER_RUN_ARGS}"
+}
+
+@test "browser on: publishes noVNC, sets DISPLAY, bumps shm, adds an init" {
+  cd "${TEST_PROJECT_DIR}"
+  run browser_run
+  [ "$status" -eq 0 ]
+  assert_run_arg "--publish"
+  assert_run_arg "CLAUDE_BROWSER_ON=1"
+  assert_run_arg "DISPLAY=:99"
+  assert_run_arg "--shm-size=512m"
+  assert_run_arg "--init"
+}
+
+@test "browser on: the container port is opened in the firewall too" {
+  cd "${TEST_PROJECT_DIR}"
+  run browser_run
+  [ "$status" -eq 0 ]
+  grep -q "^CONTAINER_OPEN_PORTS=.*6080/tcp" "${DOCKER_RUN_ARGS}"
+}
+
+@test "browser on: the noVNC port is labelled for the sandbox skill" {
+  cd "${TEST_PROJECT_DIR}"
+  run browser_run
+  [ "$status" -eq 0 ]
+  grep -q "^CONTAINER_HOST_PORT_LABELS=.*6080=noVNC" "${DOCKER_RUN_ARGS}"
+  assert_run_arg "CONTAINER_BROWSER_DISPLAY=:99"
+}
+
+@test "browser on: CLAUDE_PORTS entries survive alongside the VNC publish" {
+  cd "${TEST_PROJECT_DIR}"
+  run browser_run CLAUDE_PORTS="3000"
+  [ "$status" -eq 0 ]
+  assert_run_arg "3000:3000/tcp"
+  assert_run_arg "127.0.0.1:0:6080"
+  grep -q "^CONTAINER_OPEN_PORTS=3000/tcp,6080/tcp" "${DOCKER_RUN_ARGS}"
+}
+
+@test "browser on: CLAUDE_VNC_PORT and CLAUDE_VNC_BIND are honoured" {
+  cd "${TEST_PROJECT_DIR}"
+  run browser_run CLAUDE_VNC_PORT=7000 CLAUDE_VNC_BIND=0.0.0.0
+  [ "$status" -eq 0 ]
+  assert_run_arg "0.0.0.0:7000:6080"
+}
+
+@test "browser on: a playwright config is generated and mounted read-only" {
+  cd "${TEST_PROJECT_DIR}"
+  run browser_run
+  [ "$status" -eq 0 ]
+  local cfg="${PROJECT_CONFIG_DIR}/playwright-cli.config.json"
+  [ -f "${cfg}" ]
+  assert_run_arg "${cfg}:/etc/claude/playwright-cli.config.json:ro"
+  # Valid JSON carrying this project's Squid identity and the sandbox flags.
+  python3 -c "
+import json,sys
+c = json.load(open('${cfg}'))['browser']
+assert c['browserName'] == 'chromium', c
+assert c['launchOptions']['headless'] is False, c
+p = c['launchOptions']['proxy']
+assert p['server'] == 'http://squid:3128', p
+# The BROWSER identity, not the plain project key: that is what makes
+# browser-domains.txt apply without widening the agent's own reach.
+assert p['username'].startswith('${_SAFE_NAME}-'), p
+assert p['username'].endswith('-browser'), p
+assert 'localhost' in p['bypass'], p
+assert '--no-sandbox' in c['launchOptions']['args'], c
+"
+}
+
+@test "browser on: CLAUDE_BROWSER_HEADLESS flips headless in the config" {
+  cd "${TEST_PROJECT_DIR}"
+  run browser_run CLAUDE_BROWSER_HEADLESS=1
+  [ "$status" -eq 0 ]
+  python3 -c "
+import json
+c = json.load(open('${PROJECT_CONFIG_DIR}/playwright-cli.config.json'))
+assert c['browser']['launchOptions']['headless'] is True, c
+"
+}
+
+@test "browser on: the build gets WITH_BROWSER=1; off gets 0" {
+  cd "${TEST_PROJECT_DIR}"
+  run browser_run
+  [ "$status" -eq 0 ]
+  grep -qxF "WITH_BROWSER=1" "${DOCKER_BUILD_ARGS}"
+}
+
+# The sandbox skill's nested bind makes docker create ~/.claude/skills as root, so
+# entrypoint.sh's `playwright-cli install --skills` — which runs as the host UID —
+# gets EACCES on a sibling dir unless run.sh claims the parent first.
+@test "browser on: the session volume's skills dir is claimed for the host UID" {
+  cd "${TEST_PROJECT_DIR}"
+  run browser_run
+  [ "$status" -eq 0 ]
+  grep -q -- "--volume claude-${_SAFE_NAME}-${_PATH_HASH}:/v" "${DOCKER_ALL_CALLS}"
+  grep -q -- 'mkdir -p /v/skills' "${DOCKER_ALL_CALLS}"
+}
+
+@test "browser off: the skills dir is left alone" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  ! grep -q -- 'mkdir -p /v/skills' "${DOCKER_ALL_CALLS}"
+}
+
+# A skill is not worth a session: unlike the path-volume pass, this one warns.
+@test "browser on: a failed skills-dir claim still starts the container" {
+  cd "${TEST_PROJECT_DIR}"
+  run browser_run STUB_CHOWN_FAIL=1
+  [ "$status" -eq 0 ]
+  [ -f "${DOCKER_RUN_ARGS}" ]
+}
+
+@test "the project-key label is set whether or not the browser is on" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--label"
+  grep -q "^cid.project-key=${_SAFE_NAME}-" "${DOCKER_RUN_ARGS}"
 }
 
 @test "CLAUDE_MOUNTS: the mount is reported to the sandbox skill as target=host:mode" {

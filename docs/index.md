@@ -18,7 +18,8 @@
 - [Cutting a Release](releasing.md) — `make release` derives the version from Conventional Commits, writes CHANGELOG.md and tags; pushing the tag publishes the GitHub Release
 - [Host Path in the Status Line](host-path-statusline.md) — show which host folder a session belongs to
 - [Sound Effects](sound-effects.md) — play host sounds on Claude Code events
-- [Chrome DevTools MCP](chrome-devtools-mcp.md) — run `chrome-devtools-mcp` on the host and reach it from the container, so Claude can drive a real browser
+- [Chrome DevTools MCP](chrome-devtools-mcp.md) — drive your own Chrome on the host; for the cases that need the host specifically, since the in-container browser below is the default
+- [In-Container Browser](browser-vnc.md) — Chromium + `playwright-cli` inside the container, behind the egress proxy on its own additive allowlist, watchable live over noVNC with `cid vnc`; off by default
 - [Host Docker Bridge](docker-bridge.md) — read-only `docker ps` / `logs` / `stats` for allowlisted host containers, without a Docker socket; off by default
 - [Devcontainers Alternative](devcontainers.md) — Dev Containers / Codespaces with a squid sidecar instead of `run.sh`
 - [How This Compares to Alternatives](comparison.md) — versus the devcontainer convention, lightweight recipes, and claudebox

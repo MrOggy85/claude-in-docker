@@ -33,6 +33,13 @@
 #                              (default) or, with -g, the shared baseline list.
 #   cid domains prune          Drop expired --for entries from the list (hygiene
 #                              only — the proxy already ignores them).
+#   cid domains --browser […]  Every form above, but against the IN-CONTAINER
+#                              BROWSER's own list. Additive, so allowing a CDN
+#                              to render a page never widens what the agent's
+#                              curl or npm can reach. See docs/browser-vnc.md.
+#   cid domains --browser add --denied
+#                              Add every host the browser has actually been
+#                              refused — the practical way to make a page load.
 #   cid skip-decryption [dir]           Show which hosts the proxy tunnels WITHOUT
 #                              decrypting TLS (baseline + per-project).
 #   cid skip-decryption add <host>...   Stop decrypting a host — for a client that pins
@@ -54,6 +61,9 @@
 #                              it uses, and what it has recorded here.
 #   cid watch start|stop       Start / stop it (run.sh starts it automatically).
 #   cid watch log [n]          The last n egress alerts (default 20).
+#   cid vnc [start]            Watch the in-container browser: start noVNC, print
+#                              and open the URL. Needs CLAUDE_BROWSER=1.
+#   cid vnc stop|status|url    Stop it / is it up / print the URL only.
 #   cid hosts [dir]            Hosts this project has already contacted — anything
 #                              else alerts on first contact.
 #   cid hosts forget           Clear that record, so every host alerts again.
@@ -71,6 +81,16 @@
 #                              <duration> (digits + optional s/m/h/d suffix).
 #   --method <list>            domains add|rm only: restrict the entry to these
 #                              HTTP methods (comma-separated, e.g. GET,HEAD).
+#                              ALL removes the restriction.
+#   --browser                  domains only: the IN-CONTAINER BROWSER's list,
+#                              not the agent's. Orthogonal to -g, so all four
+#                              combinations work. Additive: the browser gets the
+#                              agent's lists plus this one, so adding a CDN to
+#                              render a page never widens curl/npm. Entries
+#                              default to GET,HEAD. See docs/browser-vnc.md.
+#   --denied                   domains add only: add every host the proxy has
+#                              refused for this project (with --browser, the
+#                              browser's refusals). Recorded by proxy/watch.sh.
 #
 # The domain and skip-decryption lists are read live by the Squid proxy (2s cache),
 # so
@@ -89,6 +109,29 @@ while [[ -L "${SOURCE}" ]]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "${SOURCE}")" && pwd)"
 source "${SCRIPT_DIR}/scripts/paths.sh"
+
+# cid is a HOST tool, and inside the container it is wrong twice over: it derives
+# the project key from $PWD, which every session bind-mounts to the same
+# /home/dev/repo, and it resolves a config dir that is container-local rather than
+# the host's. So an edit would go to the wrong project, on a disk that vanishes
+# with the --rm container, while printing "added". Silent success is the worst
+# failure mode there is, and the likeliest caller is the agent itself: `./cid` sits
+# in the mounted repo, one command away from a model trying to be helpful.
+#
+# CLAUDE_HOST_PROJECT_DIR is an exact marker — run.sh exports it into the
+# container and nothing sets it on the host. Reads are refused too: in here they
+# report an empty allowlist for a project that does not exist, which reads as
+# "nothing is allowed" rather than "wrong machine". CID_ALLOW_IN_CONTAINER=1 is
+# the escape hatch for the test suite, which must exercise cid from inside one.
+if [[ -n "${CLAUDE_HOST_PROJECT_DIR:-}" && -z "${CID_ALLOW_IN_CONTAINER:-}" ]]; then
+  printf 'ERROR: cid cannot run inside the container — run it on the host.\n' >&2
+  printf '  In here it would use the project key for %s, not %s,\n' \
+    "$(pwd)" "${CLAUDE_HOST_PROJECT_DIR}" >&2
+  printf '  and write to a config dir that vanishes with this container.\n' >&2
+  printf '  Nothing would read it. If you are the agent: report what you need\n' >&2
+  printf '  to the user and let them run it on the host.\n' >&2
+  exit 2
+fi
 
 CONFIG_DIR="$(config_dir)"
 PROJECTS_DIR="$(projects_dir)"
@@ -154,7 +197,11 @@ cmd_list() {
   head_ "Per-project config"
   printf '  projects dir: %s\n' "${PROJECTS_DIR}"
   if [[ -d "${PROJECTS_DIR}" ]]; then
-    local n; n="$(find "${PROJECTS_DIR}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+    # "<key>-browser" dirs hold the browser identity's seen/denied records, not a
+    # project's config, so they must not be counted as projects. A real key ends
+    # in a path hash, never in a word. See docs/browser-vnc.md.
+    local n; n="$(find "${PROJECTS_DIR}" -mindepth 1 -maxdepth 1 -type d \
+      ! -name '*-browser' 2>/dev/null | wc -l | tr -d ' ')"
     printf '  %s project dir(s). Inspect one with: cid project [dir]\n' "${n}"
   else
     printf '  (none yet — created on first run in a project)\n'
@@ -401,6 +448,17 @@ _resolve_target() {  # <global?0|1> <dir> <kind: domains|containers|rules>
       TARGET_HINT="not a valid allowlist entry ('[METHOD[,METHOD] ]<host>[/path]'; leading '.' = wildcard host, trailing '*' = raw path prefix)"
       TARGET_APPLIES='applies within ~2s, no restart'
       ;;
+    browserdomains)
+      # Same grammar as domains, different consumer: only the in-container
+      # browser's "<key>-browser" Squid login reads this, and additively, so a
+      # CDN added to render a page never widens the agent's own reach. See
+      # docs/browser-vnc.md.
+      name='browser-domains.txt'
+      TARGET_VALIDATOR='_valid_domain_entry'
+      TARGET_NORMALIZER='_norm_domain_entry'
+      TARGET_HINT="not a valid allowlist entry ('[METHOD[,METHOD] ]<host>[/path]'; leading '.' = wildcard host, trailing '*' = raw path prefix)"
+      TARGET_APPLIES='applies within ~2s, no restart'
+      ;;
     skipdecrypt)
       # Hosts the proxy must NOT decrypt. A pre-interception decision, so unlike
       # domains it is hostname-only — see docs/tls-inspection.md.
@@ -539,8 +597,8 @@ _fmt_epoch() {  # <epoch>
 # expiry, replacing any prior line (temporary or permanent) for that host. The
 # proxy (proxy/ext-allowlist.sh) is what actually enforces the expiry; this
 # only writes it.
-_domains_add_temp() {  # <global> <dir> <for_dur> <host>...
-  local is_global="$1" dir="$2" for_dur="$3"; shift 3
+_domains_add_temp() {  # <kind> <global> <dir> <for_dur> <host>...
+  local kind="$1" is_global="$2" dir="$3" for_dur="$4"; shift 4
   local secs
   secs="$(_parse_duration "${for_dur}")" || {
     err "bad --for duration '${for_dur}' (want e.g. 30s, 15m, 2h, 1d)"; return 2
@@ -548,7 +606,7 @@ _domains_add_temp() {  # <global> <dir> <for_dur> <host>...
   local expiry=$(( $(date +%s) + secs ))
 
   local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_PARSER TARGET_HINT TARGET_APPLIES TARGET_NORMALIZER
-  _resolve_target "${is_global}" "${dir}" domains || return 1
+  _resolve_target "${is_global}" "${dir}" "${kind}" || return 1
 
   local entry added=0
   for entry in "$@"; do
@@ -577,30 +635,32 @@ _with_methods() {  # <methods> <entry>...
   done
 }
 
-cmd_domains_add() {  # <global> <dir> <for_dur> <methods> <entry>...
-  local is_global="$1" dir="$2" for_dur="$3" methods="$4"; shift 4
-  [[ $# -ge 1 ]] || { err "usage: cid domains add [-g] [-C dir] [--for <dur>] [--method <list>] <host>[/path]..."; return 2; }
+# <kind> is 'domains' or 'browserdomains' — same grammar and same handling, only
+# the file differs (see _resolve_target).
+cmd_domains_add() {  # <kind> <global> <dir> <for_dur> <methods> <entry>...
+  local kind="$1" is_global="$2" dir="$3" for_dur="$4" methods="$5"; shift 5
+  [[ $# -ge 1 ]] || { err "usage: cid domains add [-g] [--browser] [-C dir] [--for <dur>] [--method <list>] <host>[/path]..."; return 2; }
   local e; local -a entries=()
   while IFS= read -r e; do entries+=("${e}"); done < <(_with_methods "${methods}" "$@")
   if [[ -z "${for_dur}" ]]; then
-    _entries_add domains "${is_global}" "${dir}" "${entries[@]}"
+    _entries_add "${kind}" "${is_global}" "${dir}" "${entries[@]}"
   else
-    _domains_add_temp "${is_global}" "${dir}" "${for_dur}" "${entries[@]}"
+    _domains_add_temp "${kind}" "${is_global}" "${dir}" "${for_dur}" "${entries[@]}"
   fi
 }
 
-cmd_domains_rm() {  # <global> <dir> <methods> <entry>...
-  local is_global="$1" dir="$2" methods="$3"; shift 3
-  [[ $# -ge 1 ]] || { err "usage: cid domains rm [-g] [-C dir] [--method <list>] <host>[/path]..."; return 2; }
+cmd_domains_rm() {  # <kind> <global> <dir> <methods> <entry>...
+  local kind="$1" is_global="$2" dir="$3" methods="$4"; shift 4
+  [[ $# -ge 1 ]] || { err "usage: cid domains rm [-g] [--browser] [-C dir] [--method <list>] <host>[/path]..."; return 2; }
   local e; local -a entries=()
   while IFS= read -r e; do entries+=("${e}"); done < <(_with_methods "${methods}" "$@")
-  _entries_rm domains "${is_global}" "${dir}" "${entries[@]}"
+  _entries_rm "${kind}" "${is_global}" "${dir}" "${entries[@]}"
 }
 
-cmd_domains_prune() {  # <global> <dir>
-  local is_global="$1" dir="$2"
+cmd_domains_prune() {  # <global> <dir> [kind]
+  local is_global="$1" dir="$2" kind="${3:-domains}"
   local TARGET_FILE TARGET_LABEL TARGET_VALIDATOR TARGET_PARSER TARGET_HINT TARGET_APPLIES TARGET_NORMALIZER
-  _resolve_target "${is_global}" "${dir}" domains || return 1
+  _resolve_target "${is_global}" "${dir}" "${kind}" || return 1
   if [[ ! -f "${TARGET_FILE}" ]]; then
     note "no ${TARGET_LABEL} allowlist yet (${TARGET_FILE}); nothing to prune"
     return 0
@@ -674,6 +734,25 @@ cmd_domains_show() {  # [dir]
   printf '("GET,HEAD api.example.com/v1"). See docs/egress-proxy.md#entry-syntax.\n'
   _dump_list "Baseline" "${CONFIG_DIR}/allowed-domains.txt" "${TEMPLATES_DIR}/allowed-domains.txt"
   _dump_list "Per-project additions" "${pdir}/allowed-domains.txt"
+}
+
+cmd_browserdomains_show() {  # [dir]
+  local dir; dir="$(cd "${1:-$PWD}" 2>/dev/null && pwd)" || { err "no such dir: ${1:-$PWD}"; return 1; }
+  local key pdir
+  key="$(project_key "${dir}")"
+  pdir="${PROJECTS_DIR}/${key}"
+  head_ "Effective egress allowlist for the BROWSER in ${key}"
+  printf 'The in-container browser logs in as %s-browser and gets all four\n' "${key}"
+  printf 'lists; the agent gets only the first two. So adding here never widens what\n'
+  printf 'curl, npm or uv can reach. See docs/browser-vnc.md.\n'
+  _dump_list "Baseline (shared with the agent)" \
+    "${CONFIG_DIR}/allowed-domains.txt" "${TEMPLATES_DIR}/allowed-domains.txt"
+  _dump_list "Per-project (shared with the agent)" "${pdir}/allowed-domains.txt"
+  # No template fallback, unlike the two above: proxy/up.sh creates this file
+  # empty when absent rather than falling back, so naming the template here
+  # would claim the proxy reads something it does not.
+  _dump_list "Browser baseline" "${CONFIG_DIR}/browser-domains.txt"
+  _dump_list "Browser per-project additions" "${pdir}/browser-domains.txt"
 }
 
 cmd_skipdecrypt_show() {  # [dir]
@@ -808,7 +887,7 @@ cmd_settings() {
       forget)          if [[ -z "${sub}" ]]; then sub='forget';  else items+=("${a}"); fi ;;
       ls|show|list)    if [[ -z "${sub}" ]]; then sub='show';    else items+=("${a}"); fi ;;
       -h|--help)       cmd_help; return 0 ;;
-      -*)              err "unknown flag: ${a}"; return 2 ;;
+      -*)              _unknown_flag "${a}" --global --dir --project; return 2 ;;
       *)               items+=("${a}") ;;
     esac
   done
@@ -821,12 +900,45 @@ cmd_settings() {
   esac
 }
 
+# Hosts the proxy refused for this project, recorded by proxy/watch.sh (see its
+# record_denied). <browser> picks the browser identity's record instead of the
+# agent's. Already-allowlisted entries are not filtered out here — _entries_add
+# reports them as duplicates, which is the more informative outcome.
+# Reject an unrecognised flag, suggesting the double-dash spelling when that is
+# what was meant. `-browser` for `--browser` is the obvious slip, because the
+# flags it sits beside (-g, -C) are single-dash — so the shape of the CLI invites
+# it. Callers pass the long flags THEY accept, so the hint is never for a flag
+# that would be rejected a second time by the next check.
+_unknown_flag() {  # <flag> <accepted-long-flag>...
+  local flag="$1"; shift
+  local guess="--${flag#-}" k
+  for k in "$@"; do
+    if [[ "${k}" == "${guess}" ]]; then
+      err "unknown flag: ${flag} — did you mean ${guess}?"
+      return 2
+    fi
+  done
+  err "unknown flag: ${flag}"
+  return 2
+}
+
+_denied_hosts() {  # <dir> <browser?0|1>
+  local dir="$1" browser="$2" rdir key f
+  rdir="$(cd "${dir}" 2>/dev/null && pwd)" || return 0
+  key="$(project_key "${rdir}")"
+  [[ "${browser}" == 1 ]] && key="${key}-browser"
+  f="${PROJECTS_DIR}/${key}/denied-hosts.txt"
+  [[ -f "${f}" ]] || return 0
+  # Sorted-unique: the file is append-only across watcher restarts.
+  grep -v '^[[:space:]]*#' "${f}" 2>/dev/null | tr -d '[:blank:]' | grep -v '^$' | sort -u
+}
+
 # Shared dispatcher for `cid domains` / `cid containers`: parse the optional
 # sub-verb (add/rm/ls) and its -g / -C flags, then hand off. With no sub-verb it
 # shows the effective list.
 _cmd_allowlist() {  # <kind: domains|containers> [args...]
   local kind="$1"; shift
-  local sub="" is_global=0 dir="${PWD}" for_dur="" methods=""
+  local sub="" is_global=0 dir="${PWD}" for_dur="" methods="" browser=0 denied=0
   local -a items=()
   local a
   while [[ $# -gt 0 ]]; do
@@ -836,43 +948,84 @@ _cmd_allowlist() {  # <kind: domains|containers> [args...]
       -C|--dir|--project) dir="${1:?-C needs a directory}"; shift ;;
       --for)              for_dur="${1:?--for needs a duration}"; shift ;;
       --method|--methods) methods="${1:?--method needs a method or comma-separated list}"; shift ;;
+      # Orthogonal to -g: -g picks the scope (baseline vs project), --browser
+      # picks the consumer (agent vs in-container browser). All four combine.
+      --browser)          browser=1 ;;
+      --denied)           denied=1 ;;
       add)             if [[ -z "${sub}" ]]; then sub='add';   else items+=("${a}"); fi ;;
       rm|remove)       if [[ -z "${sub}" ]]; then sub='rm';    else items+=("${a}"); fi ;;
       prune)           if [[ -z "${sub}" ]]; then sub='prune'; else items+=("${a}"); fi ;;
       ls|show|list)    if [[ -z "${sub}" ]]; then sub='show';  else items+=("${a}"); fi ;;
       -h|--help)       cmd_help; return 0 ;;
-      -*)              err "unknown flag: ${a}"; return 2 ;;
+      -*)              _unknown_flag "${a}" --global --browser --denied --for \
+                         --method --methods --dir --project; return 2 ;;
       *)               items+=("${a}") ;;
     esac
   done
 
-  if [[ -n "${for_dur}" && ( "${kind}" != domains || "${sub}" != add ) ]]; then
+  if [[ "${browser}" == 1 && "${kind}" != domains ]]; then
+    err "--browser is only valid for 'cid domains'"; return 2
+  fi
+  if [[ "${denied}" == 1 && ( "${kind}" != domains || "${sub}" != add ) ]]; then
+    err "--denied is only valid for 'cid domains add'"; return 2
+  fi
+  # From here on the browser list is just another domains-shaped kind.
+  [[ "${browser}" == 1 ]] && kind='browserdomains'
+
+  if [[ -n "${for_dur}" && ( "${kind}" != domains && "${kind}" != browserdomains || "${sub}" != add ) ]]; then
     err "--for is only valid for 'cid domains add'"; return 2
   fi
   # rm takes it too: a method-scoped line can only be removed by naming it whole.
-  if [[ -n "${methods}" && ( "${kind}" != domains || ( "${sub}" != add && "${sub}" != rm ) ) ]]; then
+  if [[ -n "${methods}" \
+        && ( ( "${kind}" != domains && "${kind}" != browserdomains ) \
+             || ( "${sub}" != add && "${sub}" != rm ) ) ]]; then
     err "--method is only valid for 'cid domains add' / 'cid domains rm'"; return 2
   fi
-  if [[ "${sub}" == prune && "${kind}" != domains ]]; then
+  if [[ "${sub}" == prune && "${kind}" != domains && "${kind}" != browserdomains ]]; then
     err "'prune' is only valid for 'cid domains'"; return 2
+  fi
+
+  # Browsing is read-shaped, and the hosts a page needs (wildcard CDNs, telemetry
+  # endpoints) are exactly the ones worth denying a request body to. So the
+  # browser list defaults to GET,HEAD where the agent's does not; --method ALL
+  # opts out. Deliberately asymmetric — see docs/browser-vnc.md#methods.
+  if [[ "${kind}" == browserdomains && "${sub}" == add && -z "${methods}" ]]; then
+    methods='GET,HEAD'
+  fi
+  if [[ "${methods}" == ALL || "${methods}" == all ]]; then
+    methods=''
+  fi
+
+  if [[ "${denied}" == 1 ]]; then
+    local -a found=()
+    while IFS= read -r a; do [[ -n "${a}" ]] && found+=("${a}"); done \
+      < <(_denied_hosts "${dir}" "${browser}")
+    if [[ "${#found[@]}" -eq 0 ]]; then
+      note "no denied hosts recorded for this project — nothing to add"
+      note "(the watcher logs them: cid watch log)"
+      return 0
+    fi
+    items+=("${found[@]}")
   fi
 
   case "${sub}" in
     add)
-      if [[ "${kind}" == domains ]]; then
-        cmd_domains_add "${is_global}" "${dir}" "${for_dur}" "${methods}" "${items[@]+"${items[@]}"}"
+      if [[ "${kind}" == domains || "${kind}" == browserdomains ]]; then
+        cmd_domains_add "${kind}" "${is_global}" "${dir}" "${for_dur}" "${methods}" \
+          "${items[@]+"${items[@]}"}"
       else
         "cmd_${kind}_add" "${is_global}" "${dir}" "${items[@]+"${items[@]}"}"
       fi
       ;;
     rm)
-      if [[ "${kind}" == domains ]]; then
-        cmd_domains_rm "${is_global}" "${dir}" "${methods}" "${items[@]+"${items[@]}"}"
+      if [[ "${kind}" == domains || "${kind}" == browserdomains ]]; then
+        cmd_domains_rm "${kind}" "${is_global}" "${dir}" "${methods}" \
+          "${items[@]+"${items[@]}"}"
       else
         "cmd_${kind}_rm" "${is_global}" "${dir}" "${items[@]+"${items[@]}"}"
       fi
       ;;
-    prune) cmd_domains_prune "${is_global}" "${dir}" ;;
+    prune) cmd_domains_prune "${is_global}" "${dir}" "${kind}" ;;
     show|"") "cmd_${kind}_show" "${items[0]:-${dir}}" ;;
   esac
 }
@@ -919,19 +1072,51 @@ cmd_hosts_show() {  # [dir]
   printf 'notification the first time this project reaches it. Being listed says the\n'
   printf 'host was seen, not that it is allowed — see: cid domains\n'
   _dump_list "Recorded" "${pdir}/seen-hosts.txt"
+  _dump_list "Refused" "${pdir}/denied-hosts.txt"
+  # The in-container browser is a separate Squid identity, so it keeps its own
+  # record. Shown only when it exists — most projects never enable the browser.
+  if [[ -d "${pdir}-browser" ]]; then
+    _dump_list "Recorded (browser)" "${pdir}-browser/seen-hosts.txt"
+    _dump_list "Refused (browser)" "${pdir}-browser/denied-hosts.txt"
+    printf 'Allow a refused browser host WITHOUT widening the agent:\n'
+    printf '  cid domains --browser add --denied\n'
+  fi
 }
 
 cmd_hosts_forget() {  # <global-ignored> <dir>
   local dir; dir="$(cd "${2:-$PWD}" 2>/dev/null && pwd)" || { err "no such dir: ${2:-$PWD}"; return 1; }
-  local f; f="${PROJECTS_DIR}/$(project_key "${dir}")/seen-hosts.txt"
-  if [[ -f "${f}" ]]; then
-    rm -f "${f}"
-    note "forgot every recorded host: ${f}"
+  local base; base="${PROJECTS_DIR}/$(project_key "${dir}")"
+  # Both records, and both identities: the browser logs in as "<key>-browser"
+  # and so keeps its own pair. Forgetting half would leave the other half
+  # silently suppressing alerts.
+  local f removed=0
+  for f in "${base}/seen-hosts.txt" "${base}/denied-hosts.txt" \
+           "${base}-browser/seen-hosts.txt" "${base}-browser/denied-hosts.txt"; do
+    if [[ -f "${f}" ]]; then
+      rm -f "${f}"
+      note "forgot: ${f}"
+      removed=$((removed + 1))
+    fi
+  done
+  if [[ "${removed}" -gt 0 ]]; then
     note "the next contact with each will alert again"
   else
-    note "nothing to forget (${f} does not exist)"
+    note "nothing to forget (no records under ${base})"
   fi
 }
+
+# ---- in-container browser --------------------------------------------------
+#
+# The user-facing side of scripts/vnc.sh: watching the browser that runs inside
+# the container. Every docker call lives in that script, not here, the same split
+# `watch` makes with proxy/watch.sh. See docs/browser-vnc.md.
+
+_vnc_sh() { "${SCRIPT_DIR}/scripts/vnc.sh" "$@"; }
+
+# Everything is forwarded verbatim — the verb, -C dir and --container all parse
+# in scripts/vnc.sh, which defaults to `start` and already exits 2 on an unknown
+# verb. Mirroring that parsing here would only give it somewhere to drift.
+cmd_vnc() { _vnc_sh "$@"; }
 
 # Dispatcher for `cid hosts`, shaped like cmd_settings.
 cmd_hosts() {
@@ -945,7 +1130,7 @@ cmd_hosts() {
       forget)          if [[ -z "${sub}" ]]; then sub='forget'; else items+=("${a}"); fi ;;
       ls|show|list)    if [[ -z "${sub}" ]]; then sub='show';   else items+=("${a}"); fi ;;
       -h|--help)       cmd_help; return 0 ;;
-      -*)              err "unknown flag: ${a}"; return 2 ;;
+      -*)              _unknown_flag "${a}" --dir --project; return 2 ;;
       *)               items+=("${a}") ;;
     esac
   done
@@ -1028,6 +1213,14 @@ ENV_VARS=(
   "Configuration|DOCKER_BRIDGE_PORT|9334|Host port for the read-only docker bridge"
   "Configuration|DOCKER_BRIDGE_BIND|0.0.0.0|Address the docker bridge listens on (host-only)"
   "Configuration|DOCKER_BRIDGE_DOCKER_CMD|docker|Path to the docker CLI the bridge runs (host-only)"
+  "Configuration|CLAUDE_BROWSER|(unset)|Set 1 for Chromium + playwright-cli inside the container (off by default)"
+  "Configuration|CLAUDE_BROWSER_HEADLESS|(unset)|Set 1 to run that browser headless (nothing to see over VNC)"
+  "Configuration|CLAUDE_BROWSER_GEOMETRY|1280x800x24|Size and depth of the container's X display"
+  "Configuration|CLAUDE_BROWSER_DISPLAY|:99|X display the browser and VNC use"
+  "Configuration|CLAUDE_VNC_PORT|0 (Docker picks)|Host port for noVNC; pinning it blocks concurrent browser sessions"
+  "Configuration|CLAUDE_VNC_BIND|127.0.0.1|Address noVNC is published on"
+  "Configuration|CLAUDE_VNC_OPEN|1|Set 0 to print the noVNC URL without opening a browser (host-only)"
+  "Configuration|CLAUDE_VNC_OPEN_CMD|(unset)|Command used to open that URL, instead of open/xdg-open (host-only)"
   "Configuration|CLAUDE_SANDBOX_INFO|1|Set 0 to skip the sandbox skill (session can't look up its ports/mounts)"
   "Configuration|CLAUDE_MEMORY|25% of host RAM, min 2g|Memory cap for the container (0/off/unlimited removes it)"
   "Configuration|CLAUDE_MEMORY_SWAP|= CLAUDE_MEMORY|Memory+swap total; equal to the cap means no swap"
@@ -1113,6 +1306,10 @@ Commands:
                           Remove entries from the per-project list (-g for the baseline)
   domains prune           Drop expired --for entries (hygiene only; the proxy already
                           ignores them)
+  domains --browser ...   Any of the above against the in-container browser's own
+                          list. Additive, so it never widens the agent's reach
+  domains --browser add --denied
+                          Add every host the browser has been refused
   skip-decryption [dir]   Hosts the proxy relays without decrypting TLS
   skip-decryption add <host>...  Stop decrypting a host (-g for the baseline)
   skip-decryption rm  <host>...  Decrypt it again (-g for the baseline)
@@ -1128,16 +1325,23 @@ Commands:
   watch [status]          Egress alert watcher: running? notifier? recorded here?
   watch start|stop        Start / stop it (run.sh starts it on every run)
   watch log [n]           The last n egress alerts (default 20)
+  vnc [start]             Watch the in-container browser: start noVNC, open the URL
+  vnc stop|status|url     Stop it / is it up / print the URL only
   hosts [dir]             Hosts this project has contacted; anything else alerts
                           on first contact
   hosts forget            Clear that record, so every host alerts again
   env [filter]            List the env vars you can set (current value / default)
   help                    This help
 
-domains|skip-decryption|containers|settings|hosts sub-verb flags:
+domains|skip-decryption|containers|settings|hosts|vnc sub-verb flags:
   -g, --global            Target the shared baseline list (not the current project)
   -C, --dir <dir>         Select the project by directory (default: current dir)
-  --method <list>         domains add|rm only: restrict to these HTTP methods (GET,HEAD)
+  --method <list>         domains add|rm only: restrict to these HTTP methods (GET,HEAD);
+                          ALL removes the restriction
+  --browser               domains only: the in-container browser's list. Orthogonal
+                          to -g. Entries default to GET,HEAD
+  --denied                domains add only: add every host the proxy refused
+  --container <name>      vnc only: pick the container when several run for one project
 
 Examples:
   cid domains add example.com              # allow example.com for THIS project
@@ -1149,6 +1353,9 @@ Examples:
   cid domains add --method GET,HEAD api.github.com/repos   # ...and read-only
   cid domains rm  example.com              # remove from this project's list
   cid domains prune                        # drop expired --for entries
+  cid domains --browser add cdn.jsdelivr.net   # browser only; agent unaffected
+  cid domains --browser add --denied       # everything the browser was refused
+  cid domains --browser                    # what the browser can reach vs the agent
   cid skip-decryption add api.example.com           # stop decrypting it (a pinning client)
   cid ca                                   # is the CA valid, and does the image have it
   cid containers add myapp-web             # let the bridge read this container
@@ -1158,6 +1365,8 @@ Examples:
   cid settings trust -g 'Bash(npx *)'      # ...in every project
   cid watch                                # is first-time-host alerting running
   cid watch log 50                         # the last 50 alerts, oldest first
+  cid vnc                                  # watch the in-container browser (CLAUDE_BROWSER=1)
+  cid vnc url                              # just print the noVNC URL
   cid hosts                                # every host this project has contacted
 
 Domain edits apply within ~2s (Squid re-reads the lists live — no rebuild/restart);
@@ -1178,6 +1387,7 @@ main() {
     ca)          cmd_ca ;;
     settings)    cmd_settings "$@" ;;
     watch)       cmd_watch "$@" ;;
+    vnc)         cmd_vnc "$@" ;;
     hosts)       cmd_hosts "$@" ;;
     env)         cmd_env "$@" ;;
     help|-h|--help) cmd_help ;;
