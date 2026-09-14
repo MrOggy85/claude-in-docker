@@ -33,6 +33,18 @@
 # so a relocated CLAUDE_PROJECTS_DIR can't leak one into a commit.
 docker-bridge.token
 
+# playwright-cli's output dir (snapshots, screenshots, traces), created in the
+# working directory the moment the in-container browser is used. Also in
+# templates/.gitignore_global, but that only seeds NEW config dirs, so existing
+# users need it here too.
+.playwright-cli/
+
+# Core dumps. `claude` itself has dumped one here — 6 GB of process memory, which
+# means credentials and conversation text — and it landed untracked in the repo
+# root, one `git add -A` away from a commit. Never committable, never wanted.
+/core
+/core.*
+
 # npm install artifact from `make lockfile`; only package-lock.json is committed.
 /node_modules/
 
