@@ -1071,6 +1071,8 @@ cmd_hosts_show() {  # [dir]
   printf 'Recorded by the egress alert watcher. Anything NOT listed here raises a\n'
   printf 'notification the first time this project reaches it. Being listed says the\n'
   printf 'host was seen, not that it is allowed — see: cid domains\n'
+  printf 'A trailing comment names the entry that permitted it at first contact.\n'
+  printf '"(baseline wildcard)" means nobody approved that exact host.\n'
   _dump_list "Recorded" "${pdir}/seen-hosts.txt"
   _dump_list "Refused" "${pdir}/denied-hosts.txt"
   # The in-container browser is a separate Squid identity, so it keeps its own

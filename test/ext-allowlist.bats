@@ -87,6 +87,17 @@ ask_skip_decryption() {  # <project-key> <host>
   run sh "${HELPER}" --skip-decryption <<< "$1 CONNECT $2 - -"
 }
 
+# Same, in --explain mode: "which entry covers this host, from which list?".
+# Host-level, so always asked as a CONNECT. Answers with four tab-separated
+# fields; exp() spells the expectation so the tabs stay visible in the diff.
+ask_explain() {  # <project-key> <host>
+  run sh "${HELPER}" --explain <<< "$1 CONNECT $2 - -"
+}
+
+exp() {  # <source> <kind> <entry-host> <entry>
+  printf '%s\t%s\t%s\t%s' "$1" "$2" "$3" "$4"
+}
+
 # ---------------------------------------------------------------------------
 # Baseline matching (applies to every project)
 # ---------------------------------------------------------------------------
@@ -670,4 +681,153 @@ EOF
   printf 'cdn.aaa-browser.test\n' > "${PROJECTS_DIR}/proj-aaa111/skip-decryption.txt"
   ask_skip_decryption proj-aaa111-browser cdn.aaa-browser.test
   [ "$output" = "ERR" ]
+}
+
+# ---------------------------------------------------------------------------
+# --explain — WHICH entry covers a host, for the first-time-host alert
+#
+# Not a decision: proxy/watch.sh calls this on the host to say why a new host was
+# allowed. It reuses match_in_file, so the matching itself is already covered
+# above; what needs pinning here is the reporting — the source label, the
+# exact/wildcard split, the two halves of the entry, and that "no idea" is
+# reported as such rather than guessed. The OK/ERR modes are asserted unchanged
+# throughout the rest of this file; nothing here should be able to move them.
+# ---------------------------------------------------------------------------
+
+@test "explain: a baseline exact entry names itself" {
+  ask_explain proj-aaa111 api.anthropic.com
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(exp baseline exact api.anthropic.com api.anthropic.com)" ]
+}
+
+@test "explain: a subdomain reached through a wildcard says wildcard" {
+  # The case the whole feature exists for: nobody approved THIS host.
+  ask_explain proj-aaa111 cdn-metrics-7f3a.example.com
+  [ "$output" = "$(exp baseline wildcard .example.com .example.com)" ]
+}
+
+@test "explain: the apex of a wildcard still reads as wildcard" {
+  # .example.com covers the apex too (host_matches), so example.com is reported
+  # wildcard even though that exact host is spelled in the file. Two piles, not
+  # three — documented in docs/egress-alerts.md rather than special-cased.
+  ask_explain proj-aaa111 example.com
+  [ "$output" = "$(exp baseline wildcard .example.com .example.com)" ]
+}
+
+@test "explain: a project entry is labelled project, not baseline" {
+  ask_explain proj-aaa111 internal.aaa.test
+  [ "$output" = "$(exp project exact internal.aaa.test internal.aaa.test)" ]
+}
+
+@test "explain: a project wildcard is labelled on both axes" {
+  ask_explain proj-aaa111 img.cdn.aaa.test
+  [ "$output" = "$(exp project wildcard .cdn.aaa.test .cdn.aaa.test)" ]
+}
+
+@test "explain: another project's entry explains nothing" {
+  ask_explain proj-bbb222 internal.aaa.test
+  [ "$output" = "$(exp none none - -)" ]
+}
+
+@test "explain: an unlisted host explains nothing" {
+  ask_explain proj-aaa111 nope.test
+  [ "$output" = "$(exp none none - -)" ]
+}
+
+@test "explain: the baseline wins when both lists cover the host" {
+  # Pins the file order to the real decision's four-way OR. Reporting the
+  # project entry here would understate the reach: the baseline grants it to
+  # EVERY project.
+  printf 'api.anthropic.com\n' >> "${PROJECTS_DIR}/proj-aaa111/allowed-domains.txt"
+  ask_explain proj-aaa111 api.anthropic.com
+  [ "$output" = "$(exp baseline exact api.anthropic.com api.anthropic.com)" ]
+}
+
+@test "explain: a scoped entry reports the bare host and the whole entry" {
+  # Field 3 is what an alert shows (comma-free, so it survives the watcher's
+  # CSV); field 4 is what seen-hosts.txt records.
+  setup_scoped
+  ask_explain proj-aaa111 readonly.aaa.test
+  [ "$output" = "$(exp project exact readonly.aaa.test "GET,HEAD readonly.aaa.test")" ]
+}
+
+@test "explain: a path rule is carried whole into the entry field" {
+  setup_scoped
+  ask_explain proj-aaa111 api.aaa.test
+  [ "$output" = "$(exp project exact api.aaa.test api.aaa.test/repos)" ]
+}
+
+@test "explain: an unexpired entry explains, without its annotation" {
+  printf 'temp.aaa.test  # expires=%s\n' "$(( $(date +%s) + 3600 ))" \
+    >> "${PROJECTS_DIR}/proj-aaa111/allowed-domains.txt"
+  ask_explain proj-aaa111 temp.aaa.test
+  [ "$output" = "$(exp project exact temp.aaa.test temp.aaa.test)" ]
+}
+
+@test "explain: an expired entry explains nothing" {
+  # The TOCTOU case: the watcher may ask long after the request. Saying nothing
+  # beats naming a line that no longer grants anything.
+  printf 'temp.aaa.test  # expires=100\n' \
+    >> "${PROJECTS_DIR}/proj-aaa111/allowed-domains.txt"
+  ask_explain proj-aaa111 temp.aaa.test
+  [ "$output" = "$(exp none none - -)" ]
+}
+
+@test "explain: a malformed expiry fails closed here too" {
+  printf 'temp.aaa.test  # expires=soon\n' \
+    >> "${PROJECTS_DIR}/proj-aaa111/allowed-domains.txt"
+  ask_explain proj-aaa111 temp.aaa.test
+  [ "$output" = "$(exp none none - -)" ]
+}
+
+@test "explain: an expired line does not shadow a valid one below it" {
+  printf 'temp.aaa.test  # expires=100\ntemp.aaa.test\n' \
+    >> "${PROJECTS_DIR}/proj-aaa111/allowed-domains.txt"
+  ask_explain proj-aaa111 temp.aaa.test
+  [ "$output" = "$(exp project exact temp.aaa.test temp.aaa.test)" ]
+}
+
+@test "explain: the browser baseline is labelled as its own source" {
+  ask_explain proj-aaa111-browser fonts.gstatic.com
+  [ "$output" = "$(exp browser-baseline exact fonts.gstatic.com "GET,HEAD fonts.gstatic.com")" ]
+}
+
+@test "explain: the browser project list is labelled as its own source" {
+  ask_explain proj-aaa111-browser unrestricted.aaa-browser.test
+  [ "$output" = \
+    "$(exp browser-project exact unrestricted.aaa-browser.test unrestricted.aaa-browser.test)" ]
+}
+
+@test "explain: the agent is told nothing about the browser's lists" {
+  # Mirrors the one-way split the allow mode enforces: the agent never reached
+  # this host, so no entry explains it for the agent.
+  ask_explain proj-aaa111 fonts.gstatic.com
+  [ "$output" = "$(exp none none - -)" ]
+}
+
+@test "explain: a key the guard rejects still gets the baseline answer" {
+  ask_explain ../../etc api.anthropic.com
+  [ "$output" = "$(exp baseline exact api.anthropic.com api.anthropic.com)" ]
+}
+
+@test "explain: a key the guard rejects reaches no project list" {
+  ask_explain ../../etc internal.aaa.test
+  [ "$output" = "$(exp none none - -)" ]
+}
+
+@test "explain: answers every line, in order" {
+  run sh "${HELPER}" --explain <<EOF
+proj-aaa111 CONNECT api.anthropic.com - -
+proj-bbb222 CONNECT internal.aaa.test - -
+proj-aaa111 CONNECT internal.aaa.test - -
+EOF
+  [ "${#lines[@]}" -eq 3 ]
+  [ "${lines[0]}" = "$(exp baseline exact api.anthropic.com api.anthropic.com)" ]
+  [ "${lines[1]}" = "$(exp none none - -)" ]
+  [ "${lines[2]}" = "$(exp project exact internal.aaa.test internal.aaa.test)" ]
+}
+
+@test "explain: never answers OK, so a squid.conf typo naming it would deny" {
+  ask_explain proj-aaa111 api.anthropic.com
+  [[ "$output" != OK* ]]
 }

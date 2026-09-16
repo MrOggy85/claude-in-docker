@@ -65,10 +65,17 @@ COALESCE=2
 # is field 1, the log's own timestamp — systime() is a gawk extension absent from
 # mawk and BSD awk, and a log-derived clock also makes the tests deterministic.
 _process() {
-  # Read by the system() call in record(): passing the path through the
-  # environment means the shell expands it, so a config dir containing spaces or
-  # quotes needs no escaping here.
+  # Read by the system() call in record() and the pipe in explain(): passing the
+  # path through the environment means the shell expands it, so a config dir
+  # containing spaces or quotes needs no escaping here.
   export CID_PROJECTS_DIR="${PROJECTS_DIR}"
+  # The same files proxy/up.sh mounts into the proxy, named on this side. up.sh
+  # fails outright without the first and creates the second, so both exist
+  # whenever a proxy is up. CID_HELPER is a test-only override, like the helper's
+  # own BASELINE/PROJECTS_DIR — deliberately undocumented in `cid env`.
+  export CID_BASELINE="${CONFIG_DIR}/allowed-domains.txt"
+  export CID_BROWSER_BASELINE="${CONFIG_DIR}/browser-domains.txt"
+  export CID_HELPER="${CID_HELPER:-${SCRIPT_DIR}/ext-allowlist.sh}"
   awk -v projdir="${PROJECTS_DIR}" -v cooldown="${COOLDOWN}" '
     function seenfile(key) { return projdir "/" key "/seen-hosts.txt" }
 
@@ -80,8 +87,13 @@ _process() {
       loaded[key] = 1
       f = seenfile(key)
       while ((rc = (getline line < f)) > 0) {
+        # Strip the comment FIRST: a recorded host carries its provenance as a
+        # trailing one, and squeezing that into the key would make every host
+        # read as unseen and alert forever. Doing it here also handles the
+        # whole-line comments in the header, so no substr() test is needed.
+        sub(/#.*/, "", line)
         gsub(/[ \t\r]/, "", line)
-        if (line != "" && substr(line, 1, 1) != "#") seen[key SUBSEP line] = 1
+        if (line != "") seen[key SUBSEP line] = 1
       }
       close(f)
       fresh[key] = (rc < 0)
@@ -90,7 +102,7 @@ _process() {
     # Append a host to the project s record. mkdir -p because a project that has
     # never run still has no config dir, and awk cannot create one. close() after
     # every write: it is the portable flush (fflush(file) is not universal).
-    function record(key, host,   f) {
+    function record(key, host, why,   f) {
       f = seenfile(key)
       if (fresh[key]) {
         # key is guarded to [a-z0-9-] below, so it is safe unquoted; the dir
@@ -100,15 +112,60 @@ _process() {
         print "# Delete a line (or the file) to be alerted about it again: cid hosts forget" >> f
         fresh[key] = 0
       }
-      print host >> f
+      # With no provenance, a bare host — byte-identical to what this wrote
+      # before the entry was ever reported, so old files and new ones interleave.
+      if (why == "") print host >> f
+      else           printf "%-38s # allowed by: %s\n", host, why >> f
       close(f)
       seen[key SUBSEP host] = 1
+    }
+
+    # WHICH allowlist entry makes this host reachable, for the alert below. Asks
+    # proxy/ext-allowlist.sh rather than matching anything here: the leading-dot
+    # wildcard, "# expires=" and the method/path grammar all live in its
+    # match_in_file, and a second copy would drift into reporting the WRONG
+    # reason — worse than reporting none. Fills two globals because awk cannot
+    # return a pair, and that keeps it to one fork per host.
+    #
+    # Only the paths travel through the environment, so the shell quotes them;
+    # key and host are interpolated, safe because both cleared the charset gates
+    # below before anything used them. The helper reads the printf, never awk s
+    # own stdin — which is the docker logs stream, so dropping that prefix would
+    # silently eat the log.
+    function explain(key, host,   cmd, line, n, a) {
+      EXPLAIN_WHY = ""
+      EXPLAIN_FULL = ""
+      # echo, not printf: this whole awk program is single-quoted in the shell,
+      # so a literal quote here would end it. key and host cleared the charset
+      # gates below, so neither can carry a $, a backtick or a backslash out of
+      # these double quotes.
+      cmd = "echo \"" key " CONNECT " host " - -\" | " \
+            "BASELINE=\"$CID_BASELINE\" BROWSER_BASELINE=\"$CID_BROWSER_BASELINE\" " \
+            "PROJECTS_DIR=\"$CID_PROJECTS_DIR\" sh \"$CID_HELPER\" --explain 2>/dev/null"
+      if ((cmd | getline line) <= 0) line = ""
+      close(cmd)   # unconditional: mawk and BSD awk cap concurrently open pipes
+      # A missing, old or broken helper lands here as an empty or short line, and
+      # "none" means the lists no longer explain the host (it may have been
+      # allowed by an entry since removed or expired). All of them report NO
+      # reason rather than a wrong one, which leaves the output byte-identical
+      # to a watcher without this feature.
+      n = split(line, a, "\t")
+      if (n < 4 || a[1] == "none" || a[1] == "") return
+      EXPLAIN_FULL = a[4] " (" a[1] " " a[2] ")"
+      # The alert gets the entry s HOST, not the whole entry: _flush joins hosts
+      # with commas and a method list carries its own. It is also why no "*" can
+      # reach notify() — that lives in the path half, which stays in the file.
+      EXPLAIN_WHY = a[3] " (" a[1] " " a[2] ")"
+      gsub(/[,\t]/, " ", EXPLAIN_WHY)
     }
 
     # The hosts WE refused, kept apart from seen-hosts.txt so `cid domains add
     # --denied` has an exact list to work from. The alert log cannot serve: it
     # coalesces to five hosts plus a count, which is lossy exactly when a bulk
     # add is wanted. Deduped in memory, so a retry loop appends once per run.
+    # Bare hosts ONLY, unlike seen-hosts.txt: cid feeds these lines straight to
+    # `domains add`, so a trailing comment would corrupt the entry written. A
+    # denial has no permitting entry to name anyway.
     function record_denied(key, host,   f) {
       if ((key SUBSEP host) in wrotedeny) return
       wrotedeny[key SUBSEP host] = 1
@@ -118,8 +175,12 @@ _process() {
       close(f)
     }
 
-    function alert(urgency, key, host, reason) {
-      printf "%s\t%s\t%s\t%s\n", urgency, key, host, reason
+    # The 5th field is present only when an entry was named. Keeping it optional
+    # rather than writing "-" means every line this produced before still looks
+    # exactly the same, hand-run or piped.
+    function alert(urgency, key, host, reason, why) {
+      if (why == "") printf "%s\t%s\t%s\t%s\n", urgency, key, host, reason
+      else           printf "%s\t%s\t%s\t%s\t%s\n", urgency, key, host, reason, why
       fflush()   # the reader is a pipe; without this a burst sits in the buffer
     }
 
@@ -176,10 +237,14 @@ _process() {
       if (denied) record_denied(key, host)
 
       if (isnew) {
-        record(key, host)
+        # Only the allowed case: a denial has no matching entry by definition, so
+        # asking would be a guaranteed-empty fork on the noisy path.
+        EXPLAIN_WHY = ""; EXPLAIN_FULL = ""
+        if (!denied) explain(key, host)
+        record(key, host, EXPLAIN_FULL)
         if (byrule)     alert("alert", key, host, "denied-by-rule")
         else if (denied) alert("alert", key, host, "new-host-denied")
-        else             alert("info",  key, host, "new-host")
+        else             alert("info",  key, host, "new-host", EXPLAIN_WHY)
         if (denied) lastdeny[key SUBSEP host] = ts
       } else if (denied) {
         if (!((key SUBSEP host) in lastdeny) || ts - lastdeny[key SUBSEP host] >= cooldown) {
@@ -208,8 +273,8 @@ _process() {
 # notify loop — coalesce alert lines into notifications
 # ---------------------------------------------------------------------------
 
-# Buffer of pending "urgency<TAB>key<TAB>host<TAB>reason" lines. A global because
-# bash 3.2 has no namerefs.
+# Buffer of pending "urgency<TAB>key<TAB>host<TAB>reason[<TAB>why]" lines. A
+# global because bash 3.2 has no namerefs.
 _BUF=()
 
 # Turn the buffer into one notification per (project, urgency, fix), listing the
@@ -227,7 +292,12 @@ _flush() {
       k = $1 "\t" $2 "\t" fix
       if (!((k SUBSEP $3) in seen)) {
         seen[k SUBSEP $3] = 1
-        hosts[k] = hosts[k] (hosts[k] == "" ? "" : ",") $3
+        # Provenance rides with its host, NOT in the grouping key: a first
+        # session legitimately reaches a dozen hosts through a dozen entries, and
+        # grouping on it would bring back the banner storm coalescing prevents.
+        item = $3
+        if ($5 != "") item = item " via " $5
+        hosts[k] = hosts[k] (hosts[k] == "" ? "" : ",") item
         n[k]++
       } }
     END { for (k in hosts) printf "%s\t%d\t%s\n", k, n[k], hosts[k] }')"

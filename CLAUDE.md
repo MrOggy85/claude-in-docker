@@ -81,7 +81,8 @@ wrapped bullets.
   shared baseline, `-C dir` to pick the project; all four share `_resolve_target` +
   `_entries_add`/`_entries_rm`, so add a kind there rather than duplicating).
   `watch` operates `proxy/watch.sh` and reads its alert log; `hosts` shows and
-  clears one project's `seen-hosts.txt`; `vnc` delegates wholesale to
+  clears one project's `seen-hosts.txt`, including why each host was allowed
+  (the file carries it, so there is no second formatter here); `vnc` delegates wholesale to
   `scripts/vnc.sh`. `cid` itself never calls `docker` — anything that must goes
   in a delegated sibling script, and that is the rule, not an accident. It also
   refuses to run INSIDE the container (`CLAUDE_HOST_PROJECT_DIR` is the marker,
@@ -112,7 +113,13 @@ wrapped bullets.
   plain `squid` rejects `ssl_bump`, so `squid-openssl` it is) and brings it up;
   `squid.conf` + `ext-allowlist.sh` enforce each project's `allowed-domains.txt`
   by hostname — and, for a decrypted request, by path and method too — and decide
-  whether to decrypt. `watch.sh` is the detection half and
+  whether to decrypt. `ext-allowlist.sh` has a third mode, `--explain`, which
+  Squid never calls: it reports WHICH entry covers a host, from which list, exact
+  or wildcard, over the same `match_in_file`, so the grammar keeps one
+  implementation. `watch.sh` shells out to it from the host, once per newly-seen
+  host, with `BASELINE`/`BROWSER_BASELINE`/`PROJECTS_DIR` aimed at the config dir
+  — which is why `squid.conf` needs no `logformat` and the request path is
+  untouched. See docs/egress-alerts.md. `watch.sh` is the detection half and
   the only host-side file here: `run.sh` starts it per run, it tails
   `docker logs -f` on the proxy and notifies on a first-time or denied host. Its
   `process` verb is the whole classifier — access-log lines in, alert lines out,
@@ -150,6 +157,11 @@ wrapped bullets.
   `proxy/watch.sh`) record what has been contacted and what was refused, not what
   is permitted — `denied-hosts.txt` is what `cid domains add --denied` reads,
   since the alert log coalesces to five hosts plus a count and so cannot serve.
+  A `seen-hosts.txt` line carries the entry that permitted it as a trailing `#`
+  comment (so `loadseen` strips the comment before keying, or every host would
+  re-alert forever); bare lines stay valid. `denied-hosts.txt` stays BARE hosts —
+  `cid` feeds those lines straight to `domains add`, so a comment would corrupt
+  the entry written, and a denial has no entry to name anyway.
   Both are keyed by Squid login, so the browser's land in a SIBLING
   `<key>-browser/` dir holding records only, never config — `cid list` excludes
   it from the project count and `cid hosts` shows both.

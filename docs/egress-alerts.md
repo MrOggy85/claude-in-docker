@@ -28,6 +28,40 @@ outlives the session. `CLAUDE_EGRESS_ALERTS=0` skips it.
 
 "New" means this project has never contacted it before.
 
+### Why it was allowed
+
+An allowed first-time host is reported with the allowlist entry that permitted it:
+
+```
+New egress host: myrepo-a1b2c3d4e5
+cdn-metrics-7f3a.githubusercontent.com via .githubusercontent.com (baseline wildcard)
+Review: cid hosts
+```
+
+That sorts alerts into two piles. An **exact** entry is a host you typed in yourself. A **wildcard**
+(`.githubusercontent.com`) covers the apex and every subdomain, so nobody ever approved *this*
+host — the only case where traffic left the box without a host-by-host authorisation behind it.
+The source is one of `baseline`, `project`, `browser-baseline` or `browser-project`, matching the
+four lists in [egress-proxy.md](egress-proxy.md#allowlists).
+
+The answer comes from `proxy/ext-allowlist.sh --explain`, the same file and the same `match_in_file`
+Squid asks for the allow/deny decision, so the grammar has one implementation and cannot drift into
+reporting a wrong reason. `watch.sh` calls it on the host, once per newly-seen host: nothing is
+added to the request path and `proxy/squid.conf` is untouched.
+
+Three limits, all of them "say nothing" rather than "guess":
+
+- **It is asked after the fact.** A log can be replayed days later, and `--explain` answers from the
+  lists as they are *now*. If the entry has since been removed or its
+  [`# expires=`](egress-proxy.md#temporary-entries) has lapsed, the alert names nothing.
+- **It is host-level.** It reports what makes the host reachable at all. Where several entries cover
+  one host, that is the first match in list order, which need not be the entry that authorised any
+  particular request.
+- **A denial carries none**, by definition — nothing matched.
+
+With provenance available, the watcher could go quiet for exact-entry hosts and speak up only for
+wildcard ones. It deliberately does not: that changes what fires, and is its own decision.
+
 ### Three 403s, three fixes
 
 A `403` reaching the watcher is one of three things, and the suggested fix differs every time, so
@@ -92,8 +126,17 @@ cid watch stop         # ...and start
 
 ## The record
 
-Each project's hosts live in `<config-dir>/projects/<key>/seen-hosts.txt`, one per line. The
-watcher appends to it; nothing else reads it.
+Each project's hosts live in `<config-dir>/projects/<key>/seen-hosts.txt`, one per line, with the
+entry that permitted it as a trailing comment. The watcher appends to it; nothing else reads it.
+
+```
+api.anthropic.com                      # allowed by: api.anthropic.com (baseline exact)
+cdn-metrics-7f3a.githubusercontent.com # allowed by: .githubusercontent.com (baseline wildcard)
+169.254.169.254
+```
+
+A bare line is a host with no reason to give — denied, or recorded before this was added. Both forms
+read the same, so an existing file keeps working and is never rewritten.
 
 ```bash
 cid hosts              # what this project has contacted
@@ -120,8 +163,9 @@ edit its own record.
   docker) and it gives up, logging why to `<config-dir>/watcher.log` — a watcher that cannot read
   the proxy is better reported absent by `cid watch status` than left spinning. `run.sh` starts a
   fresh one next session.
-- **No allow-provenance.** The alert says the host is new, not that a broad `.example.com` wildcard
-  is what let it through — the case worth the most attention. Check with `cid domains`.
+- **Provenance is best-effort.** It is derived when the alert fires, not when the request was made,
+  so a lapsed or deleted entry leaves the host unexplained rather than misattributed. See [Why it
+  was allowed](#why-it-was-allowed).
 - **Attribution is self-asserted.** The project key in each log line is the proxy username the
   container sends, and `proxy/auth-ok.sh` accepts any credentials (see
   [egress-proxy.md](egress-proxy.md)). A container could tag its traffic as another project.
@@ -133,10 +177,14 @@ notifications:
 
 ```bash
 docker logs claude-egress-proxy | proxy/watch.sh process
-# info   myrepo-a1b2c3d4e5   cdn.assets.example.com   new-host
+# info   myrepo-a1b2c3d4e5   cdn.assets.example.com   new-host   .example.com (baseline wildcard)
 # alert  myrepo-a1b2c3d4e5   169.254.169.254          new-host-denied
 # info   myrepo-a1b2c3d4e5   api.example.com          upstream-403
 ```
+
+A fifth field appears only where an entry was named, so it reads the same as before for the rest.
+Provenance comes from the host's own allowlists, so `CLAUDE_DOCKER_CONFIG_DIR` decides which ones a
+hand-run reads.
 
 It reads Squid's built-in log format positionally: timestamp, result/status, method, URL, username,
 hierarchy. Adding a `logformat` directive to `proxy/squid.conf` would break it.
