@@ -8,6 +8,10 @@
 api.anthropic.com
 platform.claude.com
 
+# Remote Control — wss bridge letting claude.ai/code and the Claude mobile app
+# drive a session (/remote-control)
+bridge.claudeusercontent.com
+
 # Statsig (feature flags / telemetry)
 statsig.anthropic.com
 statsig.com
