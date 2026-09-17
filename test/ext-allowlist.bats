@@ -52,6 +52,19 @@ EOF
 pinned.aaa.test
 EOF
 
+  # Mute lists (--muted mode): hosts the alert watcher must not notify about.
+  # Disjoint from every list above, so a mode reading the wrong file shows up —
+  # and deliberately NOT in the allowlists, since muting must not allow anything.
+  export MUTED_BASELINE="${BATS_TEST_TMPDIR}/baseline-muted-hosts.txt"
+  cat > "${MUTED_BASELINE}" <<'XEOFX'
+# Baseline — never alerted about, for every project
+noisy.example.net
+.telemetry.example.net
+XEOFX
+  cat > "${PROJECTS_DIR}/proj-aaa111/muted-hosts.txt" <<'XEOFX'
+muted.aaa.test
+XEOFX
+
   # The in-container browser's extra lists, reached only by a "-browser" login.
   # Disjoint from everything above, so a leak in either direction is visible.
   export BROWSER_BASELINE="${BATS_TEST_TMPDIR}/baseline-browser-domains.txt"
@@ -96,6 +109,17 @@ ask_explain() {  # <project-key> <host>
 
 exp() {  # <source> <kind> <entry-host> <entry>
   printf '%s\t%s\t%s\t%s' "$1" "$2" "$3" "$4"
+}
+
+# Same, in --muted mode: "has the user told the watcher to stay quiet about this
+# host?". Host-level like --explain, and answers in the same four fields, led by
+# a positive verdict token.
+ask_muted() {  # <project-key> <host>
+  run sh "${HELPER}" --muted <<< "$1 CONNECT $2 - -"
+}
+
+mexp() {  # <source> <kind> <entry>
+  printf 'muted\t%s\t%s\t%s' "$1" "$2" "$3"
 }
 
 # ---------------------------------------------------------------------------
@@ -829,5 +853,86 @@ EOF
 
 @test "explain: never answers OK, so a squid.conf typo naming it would deny" {
   ask_explain proj-aaa111 api.anthropic.com
+  [[ "$output" != OK* ]]
+}
+
+# ---------------------------------------------------------------------------
+# --muted — should the watcher stay quiet about this host?
+#
+# Not a decision either: proxy/watch.sh asks before it raises an alert, and a
+# muted host is allowed or denied exactly as it was. The matching is match_in_file
+# again, already covered above; what needs pinning here is that this reads its own
+# file, that the verdict token is POSITIVE (so anything unexpected fails toward
+# alerting), and that muting neither grants nor is granted by the allowlist.
+# ---------------------------------------------------------------------------
+
+@test "muted: a baseline entry mutes the host for every project" {
+  ask_muted proj-bbb222 noisy.example.net
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(mexp baseline exact noisy.example.net)" ]
+}
+
+@test "muted: a wildcard covers the subdomain the telemetry actually uses" {
+  ask_muted proj-aaa111 http-intake.logs.telemetry.example.net
+  [ "$output" = "$(mexp baseline wildcard .telemetry.example.net)" ]
+}
+
+@test "muted: a project entry mutes only that project" {
+  ask_muted proj-aaa111 muted.aaa.test
+  [ "$output" = "$(mexp project exact muted.aaa.test)" ]
+  ask_muted proj-bbb222 muted.aaa.test
+  [ "$output" = "$(exp none none - -)" ]
+}
+
+@test "muted: an unlisted host is not muted" {
+  ask_muted proj-aaa111 api.anthropic.com
+  [ "$output" = "$(exp none none - -)" ]
+}
+
+@test "muted: the browser shares the project mute list" {
+  # The "-browser" suffix is stripped before the project dir is resolved, so one
+  # mute covers both identities. There is no browser mute list to widen.
+  ask_muted proj-aaa111-browser muted.aaa.test
+  [ "$output" = "$(mexp project exact muted.aaa.test)" ]
+}
+
+@test "muted: an expired entry stops muting" {
+  printf 'temporarily.aaa.test  # expires=100\n' >> "${PROJECTS_DIR}/proj-aaa111/muted-hosts.txt"
+  ask_muted proj-aaa111 temporarily.aaa.test
+  [ "$output" = "$(exp none none - -)" ]
+}
+
+@test "muted: with no baseline set at all, nothing is muted" {
+  # Unset, the default is a path that does not exist: the failure mode is a
+  # spurious alert, never a silent one.
+  unset MUTED_BASELINE
+  ask_muted proj-bbb222 noisy.example.net
+  [ "$output" = "$(exp none none - -)" ]
+}
+
+@test "muted: muting a host does not allow it" {
+  ask proj-bbb222 noisy.example.net
+  [ "$output" = "ERR" ]
+}
+
+@test "muted: allowing a host does not mute it" {
+  ask_muted proj-aaa111 internal.aaa.test
+  [ "$output" = "$(exp none none - -)" ]
+}
+
+@test "muted: answers every line, in order" {
+  run sh "${HELPER}" --muted <<XEOFX
+proj-aaa111 CONNECT noisy.example.net - -
+proj-bbb222 CONNECT muted.aaa.test - -
+proj-aaa111 CONNECT muted.aaa.test - -
+XEOFX
+  [ "${#lines[@]}" -eq 3 ]
+  [ "${lines[0]}" = "$(mexp baseline exact noisy.example.net)" ]
+  [ "${lines[1]}" = "$(exp none none - -)" ]
+  [ "${lines[2]}" = "$(mexp project exact muted.aaa.test)" ]
+}
+
+@test "muted: never answers OK, so a squid.conf typo naming it would deny" {
+  ask_muted proj-aaa111 muted.aaa.test
   [[ "$output" != OK* ]]
 }

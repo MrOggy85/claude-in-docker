@@ -25,6 +25,7 @@ outlives the session. `CLAUDE_EGRESS_ALERTS=0` skips it.
 | Request denied by a path/method rule | `alert`, titled *DENIED by rule* — same cooldown |
 | Origin returned the 403, proxy allowed it | `info`, titled *Upstream refused* — its own cooldown |
 | Recorded host, allowed | silent |
+| Any of the above, host muted | silent — see [Muting a host](#muting-a-host) |
 
 "New" means this project has never contacted it before.
 
@@ -92,6 +93,43 @@ Alerts arriving within 2 seconds of each other are coalesced into one notificati
 urgency and suggested fix, listing up to five hosts. Without that, the first session in a new project — which
 legitimately contacts a dozen hosts — would fire a dozen banners.
 
+## Muting a host
+
+Some traffic is neither wanted nor stoppable: telemetry a tool sends with no way to turn it off. The
+allowlist already has the right answer — keep denying it — but the denial repeats, and so does the
+alert. `cid mute` silences the alert without touching the decision.
+
+```bash
+cid mute add http-intake.logs.us5.datadoghq.com   # this project
+cid mute add -g .datadoghq.com                    # every project (baseline)
+cid mute rm  http-intake.logs.us5.datadoghq.com   # alert about it again
+cid mute                                          # the effective list
+```
+
+A muted host raises **no** notification of any kind — new, denied, denied by rule, or upstream 403.
+What it does not change:
+
+- **The proxy.** `muted-hosts.txt` never leaves the host; Squid does not read it and is not
+  restarted. A muted host that was denied stays denied, and one that was allowed stays allowed.
+  Muting is not allowing.
+- **The record.** It is still appended to `seen-hosts.txt`, so `cid hosts` still shows every host the
+  project reached.
+
+One thing it does change: a muted denial is kept out of `denied-hosts.txt`, so
+[`cid domains add --denied`](config-cli.md#domains-add--domains-rm) never offers to allow it. Muting
+a host is the statement that you do not want it allowed.
+
+The list is `<config-dir>/muted-hosts.txt` plus `projects/<key>/muted-hosts.txt`, one host per line,
+a leading `.` matching the apex and every subdomain, `#` comments, and the same
+[`# expires=`](egress-proxy.md#temporary-entries) annotation. The
+[in-container browser](browser-vnc.md) shares its project's list — there is no separate browser mute
+list, since there is nothing here to widen.
+
+The matching is `proxy/ext-allowlist.sh --muted`, the same file and the same `match_in_file` as every
+other list, asked once per host per cooldown. So an edit takes effect on a running watcher without a
+restart, and a missing or broken helper reads as *not* muted: a failure costs a spurious alert, never
+a silent one.
+
 ## Notifiers
 
 | Platform | `info` | `alert` |
@@ -151,6 +189,8 @@ edit its own record.
 
 ## What this does not do
 
+- **Muting is per host, not per reason.** A muted host is silent for every class of event above.
+  There is no way to keep the denial alert and drop the upstream 403, or the reverse.
 - **It notifies, it does not block.** The request has already been allowed or denied by the time you
   see the alert. Gating a first-time host on your approval would mean stalling a Squid ACL helper on
   human input — a different and riskier feature.

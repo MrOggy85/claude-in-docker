@@ -21,7 +21,8 @@ _cid_files() {
     settings.json claude.json mcp-servers.json container-CLAUDE.md
     .gitconfig .gitignore_global .credentials.json allowed-domains.txt
     browser-domains.txt
-    skip-decryption.txt docker-containers.txt trusted-settings-rules.txt .env
+    skip-decryption.txt muted-hosts.txt docker-containers.txt
+    trusted-settings-rules.txt .env
     install_additional_packages.sh
   )
   _describe -t files 'config file' files
@@ -108,6 +109,10 @@ _cid_skip_decryption() {
   _cid_entries skip-decryption.txt hosts 'host that is not decrypted'
 }
 
+_cid_muted() {
+  _cid_entries muted-hosts.txt hosts 'muted host'
+}
+
 _cid_containers() {
   _cid_entries docker-containers.txt containers 'allowed container'
 }
@@ -134,6 +139,7 @@ _cid() {
     'project:per-project key, config dir, and overrides'
     'domains:show or edit the egress allowlist'
     'skip-decryption:show or edit the hosts whose TLS is not decrypted'
+    'mute:show or edit the hosts the egress alert watcher stays quiet about'
     'ca:show the egress CA (path, expiry, fingerprint)'
     'containers:show or edit the docker-bridge container allowlist'
     'settings:what the project .claude/settings*.json grants'
@@ -228,7 +234,7 @@ _cid() {
               ;;
           esac
           ;;
-        project|domains|skip-decryption|containers)
+        project|domains|skip-decryption|mute|containers)
           # Second word: for the list commands, the add/rm/ls verbs; then
           # flags/entries. `project` just takes a directory.
           if [[ ${line[1]} == project ]]; then
@@ -265,6 +271,12 @@ _cid() {
                     'add:stop decrypting host(s)'
                     'rm:decrypt host(s) again'
                     'ls:show which hosts are not decrypted'
+                  )
+                elif [[ $kind == mute ]]; then
+                  subs=(
+                    'add:stop notifying about host(s) — they stay denied'
+                    'rm:notify about host(s) again'
+                    'ls:show which hosts are muted'
                   )
                 else
                   subs=(
@@ -310,6 +322,7 @@ _cid() {
                     else                                  entries=_cid_hosts
                     fi ;;
                   skip-decryption:rm|skip-decryption:remove) entries=_cid_skip_decryption ;;
+                  mute:rm|mute:remove)                       entries=_cid_muted ;;
                   containers:rm|containers:remove)           entries=_cid_containers ;;
                 esac
                 _arguments "${rest_flags[@]}" "*:entry:${entries}"

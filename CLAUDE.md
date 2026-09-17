@@ -73,13 +73,14 @@ wrapped bullets.
   headed for an AppleScript string, so that sanitisation stays HERE, not at the
   call sites. Only `proxy/watch.sh` sources it. See docs/egress-alerts.md.
 - `cid` — the config CLI. Read-only viewers (`list` / `show` / `project` /
-  `domains` / `skip-decryption` / `containers` / `settings` / `ca` / `watch` /
-  `hosts` / `env` / `vnc`) plus
+  `domains` / `skip-decryption` / `mute` / `containers` / `settings` / `ca` /
+  `watch` / `hosts` / `env` / `vnc`) plus
   in-place allowlist editing (`domains add|rm <host>`,
-  `skip-decryption add|rm <host>`,
+  `skip-decryption add|rm <host>`, `mute add|rm <host>`,
   `containers add|rm <name>`, `settings trust|untrust <rule>`, `-g` for the
-  shared baseline, `-C dir` to pick the project; all four share `_resolve_target` +
-  `_entries_add`/`_entries_rm`, so add a kind there rather than duplicating).
+  shared baseline, `-C dir` to pick the project; all five share
+  `_resolve_target` + `_entries_add`/`_entries_rm`, so add a kind there rather
+  than duplicating).
   `watch` operates `proxy/watch.sh` and reads its alert log; `hosts` shows and
   clears one project's `seen-hosts.txt`, including why each host was allowed
   (the file carries it, so there is no second formatter here); `vnc` delegates wholesale to
@@ -113,13 +114,18 @@ wrapped bullets.
   plain `squid` rejects `ssl_bump`, so `squid-openssl` it is) and brings it up;
   `squid.conf` + `ext-allowlist.sh` enforce each project's `allowed-domains.txt`
   by hostname — and, for a decrypted request, by path and method too — and decide
-  whether to decrypt. `ext-allowlist.sh` has a third mode, `--explain`, which
-  Squid never calls: it reports WHICH entry covers a host, from which list, exact
-  or wildcard, over the same `match_in_file`, so the grammar keeps one
-  implementation. `watch.sh` shells out to it from the host, once per newly-seen
-  host, with `BASELINE`/`BROWSER_BASELINE`/`PROJECTS_DIR` aimed at the config dir
-  — which is why `squid.conf` needs no `logformat` and the request path is
-  untouched. See docs/egress-alerts.md. `watch.sh` is the detection half and
+  whether to decrypt. `ext-allowlist.sh` has two more modes Squid never calls,
+  both host-side and both over the same `match_in_file`, so the grammar keeps
+  one implementation: `--explain` reports WHICH entry covers a host, from which
+  list, exact or wildcard; `--muted` answers whether the user has silenced the
+  alert for it. Neither can print `OK`, so a squid.conf typo naming one denies
+  rather than opens. `watch.sh` shells out to it from the host — once per
+  newly-seen host for the first, once per host per alert cooldown for the
+  second — with `BASELINE`/`BROWSER_BASELINE`/`MUTED_BASELINE`/`PROJECTS_DIR`
+  aimed at the config dir, which is why `squid.conf` needs no `logformat` and
+  the request path is untouched. Asking per alert rather than caching is what
+  lets `cid mute add` reach a running watcher. See docs/egress-alerts.md.
+  `watch.sh` is the detection half and
   the only host-side file here: `run.sh` starts it per run, it tails
   `docker logs -f` on the proxy and notifies on a first-time or denied host. Its
   `process` verb is the whole classifier — access-log lines in, alert lines out,
@@ -149,6 +155,13 @@ wrapped bullets.
   `skip-decryption.txt` has the same layout and TTL but only
   the hostname half of the grammar, and answers a different question: which hosts
   Squid must NOT decrypt.
+  `muted-hosts.txt` is that layout and that hostname-only grammar again, and is
+  the one list nothing container-facing reads at all: `proxy/watch.sh` asks it,
+  on the host, whether to raise the alert it was about to raise. Muting is not
+  allowing — a muted host is allowed or denied exactly as before and is still
+  written to `seen-hosts.txt`; it is kept out of `denied-hosts.txt` only because
+  that file feeds `cid domains add --denied`, and muting a host says you do not
+  want it allowed. See docs/egress-alerts.md.
   `docker-containers.txt` follows the same baseline+per-project layout for the
   docker bridge, read per call instead of on a TTL, and so does
   `trusted-settings-rules.txt` (permission rules the settings guard must not

@@ -45,6 +45,12 @@
 #   cid skip-decryption add <host>...   Stop decrypting a host — for a client that pins
 #                              certificates (-g: baseline).
 #   cid skip-decryption rm  <host>...   Decrypt it again (-g: baseline).
+#   cid mute [dir]             Show which hosts the egress alert watcher stays
+#                              quiet about (baseline + per-project).
+#   cid mute add <host>...     Stop notifying about a host. It is NOT allowed by
+#                              this — a denied host stays denied, silently
+#                              (-g: baseline).
+#   cid mute rm  <host>...     Alert about it again (-g: baseline).
 #   cid ca                     Show the egress CA the proxy signs intercepted TLS
 #                              with: path, expiry, fingerprint, image copy status.
 #   cid containers [dir]       Show which Docker containers the host docker bridge
@@ -91,6 +97,9 @@
 #   --denied                   domains add only: add every host the proxy has
 #                              refused for this project (with --browser, the
 #                              browser's refusals). Recorded by proxy/watch.sh.
+#
+# The mute list is read by proxy/watch.sh on the host, never by Squid: it silences
+# the alert, it changes no decision.
 #
 # The domain and skip-decryption lists are read live by the Squid proxy (2s cache),
 # so
@@ -150,6 +159,7 @@ GLOBAL_FILES=(
   ".credentials.json|Claude auth token (secret; not printed by 'show')"
   "allowed-domains.txt|Baseline egress allowlist enforced by the Squid proxy"
   "skip-decryption.txt|Hosts the proxy tunnels WITHOUT decrypting TLS (bump exceptions)"
+  "muted-hosts.txt|Hosts the egress alert watcher never notifies about (optional)"
   "docker-containers.txt|Baseline container allowlist for the docker bridge (optional)"
   "trusted-settings-rules.txt|permissions.allow rules the settings guard should not flag (optional)"
   ".env|Arbitrary KEY=VALUE env vars injected via --env-file"
@@ -256,7 +266,7 @@ cmd_project() {
 
   head_ "Overrides (fall back to the global file when absent)"
   local f
-  for f in allowed-domains.txt skip-decryption.txt docker-containers.txt .env container-CLAUDE.md mcp-servers.json claude.json install_additional_packages.sh; do
+  for f in allowed-domains.txt skip-decryption.txt muted-hosts.txt docker-containers.txt .env container-CLAUDE.md mcp-servers.json claude.json install_additional_packages.sh; do
     if [[ -f "${pdir}/${f}" ]]; then
       printf '  [override] %s\n' "${f}"
     else
@@ -467,6 +477,16 @@ _resolve_target() {  # <global?0|1> <dir> <kind: domains|containers|rules>
       TARGET_NORMALIZER='_norm_lower'
       TARGET_HINT="not a valid hostname (letters, digits, '.', '-'; leading '.' = wildcard)"
       TARGET_APPLIES='applies within ~2s, no restart'
+      ;;
+    muted)
+      # Hosts the alert watcher must stay quiet about. Not policy — Squid never
+      # reads this — so it is hostname-only, like skip-decryption. See
+      # docs/egress-alerts.md.
+      name='muted-hosts.txt'
+      TARGET_VALIDATOR='_valid_host'
+      TARGET_NORMALIZER='_norm_lower'
+      TARGET_HINT="not a valid hostname (letters, digits, '.', '-'; leading '.' = wildcard)"
+      TARGET_APPLIES='applies to the next alert, no restart'
       ;;
     containers)
       name='docker-containers.txt'
@@ -698,6 +718,16 @@ cmd_skipdecrypt_rm() {  # <global> <dir> <host>...
   _entries_rm skipdecrypt "$@"
 }
 
+cmd_muted_add() {  # <global> <dir> <host>...
+  [[ $# -ge 3 ]] || { err "usage: cid mute add [-g] [-C dir] <host>..."; return 2; }
+  _entries_add muted "$@"
+}
+
+cmd_muted_rm() {  # <global> <dir> <host>...
+  [[ $# -ge 3 ]] || { err "usage: cid mute rm [-g] [-C dir] <host>..."; return 2; }
+  _entries_rm muted "$@"
+}
+
 cmd_containers_add() {  # <global> <dir> <name>...
   [[ $# -ge 3 ]] || { err "usage: cid containers add [-g] [-C dir] <name>..."; return 2; }
   _entries_add containers "$@"
@@ -765,6 +795,20 @@ cmd_skipdecrypt_show() {  # [dir]
   printf 'has to be in the egress allowlist to be reachable). See docs/tls-inspection.md.\n'
   _dump_list "Baseline" "${CONFIG_DIR}/skip-decryption.txt" "${TEMPLATES_DIR}/skip-decryption.txt"
   _dump_list "Per-project additions" "${pdir}/skip-decryption.txt"
+}
+
+cmd_muted_show() {  # [dir]
+  local dir; dir="$(cd "${1:-$PWD}" 2>/dev/null && pwd)" || { err "no such dir: ${1:-$PWD}"; return 1; }
+  local key pdir
+  key="$(project_key "${dir}")"
+  pdir="${PROJECTS_DIR}/${key}"
+  head_ "Hosts the egress alert watcher stays quiet about for ${key}"
+  printf 'Muting changes nothing the proxy does: a muted host is allowed or denied\n'
+  printf 'exactly as before, and is still recorded by "cid hosts". It only stops the\n'
+  printf 'notification. For telemetry you cannot turn off at the source and do not\n'
+  printf 'want to allow. See docs/egress-alerts.md.\n'
+  _dump_list "Baseline" "${CONFIG_DIR}/muted-hosts.txt" "${TEMPLATES_DIR}/muted-hosts.txt"
+  _dump_list "Per-project additions" "${pdir}/muted-hosts.txt"
 }
 
 cmd_containers_show() {  # [dir]
@@ -1315,6 +1359,10 @@ Commands:
   skip-decryption [dir]   Hosts the proxy relays without decrypting TLS
   skip-decryption add <host>...  Stop decrypting a host (-g for the baseline)
   skip-decryption rm  <host>...  Decrypt it again (-g for the baseline)
+  mute [dir]              Hosts the egress alert watcher never notifies about
+  mute add <host>...      Stop notifying about a host — it stays denied, just
+                          silently (-g for the baseline)
+  mute rm  <host>...      Alert about it again (-g for the baseline)
   ca                      The egress CA: path, expiry, fingerprint, image copy status
   containers [dir]        Containers the docker bridge may inspect (baseline + per-project)
   containers add <name>...  Allow container(s) for this project (-g for the baseline)
@@ -1335,7 +1383,7 @@ Commands:
   env [filter]            List the env vars you can set (current value / default)
   help                    This help
 
-domains|skip-decryption|containers|settings|hosts|vnc sub-verb flags:
+domains|skip-decryption|mute|containers|settings|hosts|vnc sub-verb flags:
   -g, --global            Target the shared baseline list (not the current project)
   -C, --dir <dir>         Select the project by directory (default: current dir)
   --method <list>         domains add|rm only: restrict to these HTTP methods (GET,HEAD);
@@ -1359,6 +1407,7 @@ Examples:
   cid domains --browser add --denied       # everything the browser was refused
   cid domains --browser                    # what the browser can reach vs the agent
   cid skip-decryption add api.example.com           # stop decrypting it (a pinning client)
+  cid mute add telemetry.example.com       # keep denying it, stop being told
   cid ca                                   # is the CA valid, and does the image have it
   cid containers add myapp-web             # let the bridge read this container
   cid containers add 'myapp-*'             # trailing '*' = prefix glob (quote it)
@@ -1372,7 +1421,7 @@ Examples:
   cid hosts                                # every host this project has contacted
 
 Domain edits apply within ~2s (Squid re-reads the lists live — no rebuild/restart);
-container edits apply to the next bridge call.
+container edits apply to the next bridge call; mute edits apply to the next alert.
 Seed the config dir with 'make init'; migrate an old repo-root config with 'make migrate'.
 EOF
 }
@@ -1385,6 +1434,7 @@ main() {
     project)     cmd_project "$@" ;;
     domains)     _cmd_allowlist domains "$@" ;;
     skip-decryption) _cmd_allowlist skipdecrypt "$@" ;;
+    mute)        _cmd_allowlist muted "$@" ;;
     containers)  _cmd_allowlist containers "$@" ;;
     ca)          cmd_ca ;;
     settings)    cmd_settings "$@" ;;

@@ -661,3 +661,149 @@ seed_project() {  # <project-key> <entry>...
   run cat "${NOTIFY_LOG}"
   [[ "$output" == *"cdn-metrics-7f3a.example.com via .example.com (baseline wildcard)"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# Muting — a host the user has told the watcher to stop notifying about
+#
+# The answer to telemetry that cannot be turned off at the source and should
+# stay denied. Nothing about the classification changes: the same line is still
+# a denial, still recorded in seen-hosts.txt, only silent. Muting is asked of
+# proxy/ext-allowlist.sh --muted, so the matching itself is covered in
+# test/ext-allowlist.bats; what is pinned here is WHICH lines go quiet and what
+# still gets written.
+# ---------------------------------------------------------------------------
+
+mute_baseline() {  # <entry>...
+  mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}"
+  printf '%s\n' "$@" > "${CLAUDE_DOCKER_CONFIG_DIR}/muted-hosts.txt"
+}
+
+mute_project() {  # <project-key> <entry>...
+  local key="$1"; shift
+  mkdir -p "${CLAUDE_PROJECTS_DIR}/${key}"
+  printf '%s\n' "$@" > "${CLAUDE_PROJECTS_DIR}/${key}/muted-hosts.txt"
+}
+
+denied_file() {  # <project-key>
+  printf '%s' "${CLAUDE_PROJECTS_DIR}/$1/denied-hosts.txt"
+}
+
+@test "mute: a denial inside the tunnel goes quiet — the case this exists for" {
+  # http-intake.logs.us5.datadoghq.com: the host is allowlisted, a path rule
+  # refuses the POST, and nothing can turn the telemetry off at the source.
+  mute_project proj-aaa111 http-intake.logs.us5.datadoghq.com
+  add_req 1000.0 TCP_DENIED/403 POST \
+    http://http-intake.logs.us5.datadoghq.com/api/v2/logs proj-aaa111 NONE/-
+  proc
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "mute: a new allowed host goes quiet too" {
+  mute_project proj-aaa111 telemetry.example.net
+  add 1000.0 TCP_TUNNEL/200 telemetry.example.net:443 proj-aaa111
+  proc
+  [ -z "$output" ]
+}
+
+@test "mute: an upstream 403 goes quiet too" {
+  mute_project proj-aaa111 api.example.com
+  add_req 1000.0 TCP_MISS/403 GET http://api.example.com/v1 proj-aaa111
+  proc
+  [ -z "$output" ]
+}
+
+@test "mute: a repeated denial stays quiet past the cooldown" {
+  # The cooldown is what makes a muted host cheap to keep muted: it is stamped
+  # whether or not an alert follows, so the helper is asked once per window.
+  mute_project proj-aaa111 noisy.aaa.test
+  add 1000.0 TCP_DENIED/403 noisy.aaa.test:443 proj-aaa111 NONE/-
+  add 2000.0 TCP_DENIED/403 noisy.aaa.test:443 proj-aaa111 NONE/-
+  add 3000.0 TCP_DENIED/403 noisy.aaa.test:443 proj-aaa111 NONE/-
+  proc
+  [ -z "$output" ]
+}
+
+@test "mute: the host is still recorded as contacted" {
+  # Muting silences the alert; it does not edit the history. `cid hosts` must
+  # still show what the project reached.
+  mute_project proj-aaa111 noisy.aaa.test
+  add 1000.0 TCP_DENIED/403 noisy.aaa.test:443 proj-aaa111 NONE/-
+  proc
+  run grep -Fx 'noisy.aaa.test' "$(seen_file proj-aaa111)"
+  [ "$status" -eq 0 ]
+}
+
+@test "mute: a muted denial is kept out of denied-hosts.txt" {
+  # That file is what `cid domains add --denied` reads. Muting a host is the
+  # statement that it should NOT be allowed, so offering it there would be wrong.
+  mute_project proj-aaa111 noisy.aaa.test
+  add 1000.0 TCP_DENIED/403 noisy.aaa.test:443 proj-aaa111 NONE/-
+  add 1001.0 TCP_DENIED/403 other.aaa.test:443 proj-aaa111 NONE/-
+  proc
+  run cat "$(denied_file proj-aaa111)"
+  [ "$output" = "other.aaa.test" ]
+}
+
+@test "mute: everything else still alerts" {
+  mute_project proj-aaa111 noisy.aaa.test
+  add 1000.0 TCP_DENIED/403 noisy.aaa.test:443 proj-aaa111 NONE/-
+  add 1001.0 TCP_DENIED/403 evil.test:443 proj-aaa111 NONE/-
+  proc
+  [ "$output" = "alert"$'\t'"proj-aaa111"$'\t'"evil.test"$'\t'"new-host-denied" ]
+}
+
+@test "mute: a baseline entry mutes every project, a wildcard its subdomains" {
+  mute_baseline .datadoghq.com
+  add 1000.0 TCP_DENIED/403 http-intake.logs.us5.datadoghq.com:443 proj-aaa111 NONE/-
+  add 1001.0 TCP_DENIED/403 http-intake.logs.us5.datadoghq.com:443 proj-bbb222 NONE/-
+  proc
+  [ -z "$output" ]
+}
+
+@test "mute: another project is not muted by this one's list" {
+  mute_project proj-aaa111 noisy.test
+  add 1000.0 TCP_DENIED/403 noisy.test:443 proj-bbb222 NONE/-
+  proc
+  [[ "$output" == "alert"$'\t'"proj-bbb222"$'\t'"noisy.test"$'\t'"new-host-denied" ]]
+}
+
+@test "mute: an empty or absent list changes nothing" {
+  # The property that makes this additive: with no mute list, byte-identical
+  # output to a watcher without the feature.
+  mute_baseline '# nothing muted'
+  add 1000.0 TCP_TUNNEL/200 api.anthropic.com:443 proj-aaa111
+  proc
+  [ "$output" = "info"$'\t'"proj-aaa111"$'\t'"api.anthropic.com"$'\t'"new-host" ]
+}
+
+@test "mute: a broken helper alerts rather than silently muting" {
+  # Fail toward the alert. A missing or wrong helper must never be able to
+  # silence the watcher.
+  mute_project proj-aaa111 noisy.aaa.test
+  export CID_HELPER="${BATS_TEST_TMPDIR}/nope/ext-allowlist.sh"
+  add 1000.0 TCP_DENIED/403 noisy.aaa.test:443 proj-aaa111 NONE/-
+  proc
+  [ "$output" = "alert"$'\t'"proj-aaa111"$'\t'"noisy.aaa.test"$'\t'"new-host-denied" ]
+}
+
+@test "mute: an alert names the command that silences it" {
+  pipe_notify "alert"$'\t'"proj-aaa111"$'\t'"noisy.test"$'\t'"denied"
+  run cat "${NOTIFY_LOG}"
+  [[ "$output" == *"cid mute add noisy.test"* ]]
+}
+
+@test "mute: a rule denial offers muting alongside the review command" {
+  pipe_notify "alert"$'\t'"proj-aaa111"$'\t'"noisy.test"$'\t'"denied-by-rule"
+  run cat "${NOTIFY_LOG}"
+  [[ "$output" == *"cid domains"* ]]
+  [[ "$output" == *"cid mute add noisy.test"* ]]
+}
+
+@test "mute: a multi-host burst suggests no single host to mute" {
+  # The hint names a host only when there is exactly one — otherwise it would be
+  # a command that mutes the wrong thing.
+  pipe_notify "alert"$'\t'"proj-aaa111"$'\t'"a.test"$'\t'"denied"$'\n'"alert"$'\t'"proj-aaa111"$'\t'"b.test"$'\t'"denied"
+  run cat "${NOTIFY_LOG}"
+  [[ "$output" != *"cid mute add"* ]]
+}

@@ -11,6 +11,11 @@
 # project: run.sh authenticates to Squid as the project key, which Squid logs as
 # the username field.
 #
+# A host on the project's mute list is classified exactly as before and recorded
+# exactly as before, but raises no notification: the answer for telemetry that
+# cannot be turned off at the source, and that the allowlist should keep refusing.
+# See `cid mute` and docs/egress-alerts.md.
+#
 # Verbs:
 #   start (default)  idempotent — start the daemon unless it is already running
 #   stop             kill it
@@ -75,6 +80,9 @@ _process() {
   # own BASELINE/PROJECTS_DIR — deliberately undocumented in `cid env`.
   export CID_BASELINE="${CONFIG_DIR}/allowed-domains.txt"
   export CID_BROWSER_BASELINE="${CONFIG_DIR}/browser-domains.txt"
+  # The one list nothing in the proxy reads: muting is a property of the ALERT,
+  # not of the decision, so it never leaves the host. Absent = nothing is muted.
+  export CID_MUTED_BASELINE="${CONFIG_DIR}/muted-hosts.txt"
   export CID_HELPER="${CID_HELPER:-${SCRIPT_DIR}/ext-allowlist.sh}"
   awk -v projdir="${PROJECTS_DIR}" -v cooldown="${COOLDOWN}" '
     function seenfile(key) { return projdir "/" key "/seen-hosts.txt" }
@@ -159,6 +167,32 @@ _process() {
       gsub(/[,\t]/, " ", EXPLAIN_WHY)
     }
 
+    # Has the user muted this host — "I know, stop telling me"? Same helper and
+    # the same match_in_file as everything else, so the wildcard and expiry
+    # grammar keeps one implementation here too. Only a clean "muted" counts: a
+    # missing, old or broken helper reads as NOT muted, so a failure costs a
+    # spurious alert rather than a silent one. See docs/egress-alerts.md.
+    #
+    # Guarded by the same gates that decide whether anything is said at all (see
+    # mayalert below), so a retry loop forks this once per cooldown, not once per
+    # request — and asking per alert rather than caching is what lets `cid mute
+    # add` take effect on a running watcher.
+    function muted(key, host,   cmd, line) {
+      cmd = "echo \"" key " CONNECT " host " - -\" | " \
+            "MUTED_BASELINE=\"$CID_MUTED_BASELINE\" " \
+            "PROJECTS_DIR=\"$CID_PROJECTS_DIR\" sh \"$CID_HELPER\" --muted 2>/dev/null"
+      if ((cmd | getline line) <= 0) line = ""
+      close(cmd)
+      return (line ~ /^muted\t/)
+    }
+
+    # Is <map>[k] past its cooldown (or unset)? The three per-host rate limits
+    # below all ask this; the caller stamps the map, because a muted host must be
+    # stamped without alerting.
+    function due(map, k, now) {
+      return (!(k in map) || now - map[k] >= cooldown)
+    }
+
     # The hosts WE refused, kept apart from seen-hosts.txt so `cid domains add
     # --denied` has an exact list to work from. The alert log cannot serve: it
     # coalesces to five hosts plus a count, which is lossy exactly when a bulk
@@ -231,25 +265,43 @@ _process() {
 
       loadseen(key)
       isnew = !((key SUBSEP host) in seen)
+      # Would this line produce anything at all — an alert, or a first record of
+      # a refusal? Only then is the mute list worth a fork, and only then does
+      # the answer change what happens. Every arm here is itself rate-limited, so
+      # a tight retry loop asks once per cooldown.
+      mayalert = isnew \
+        || (denied && !((key SUBSEP host) in wrotedeny)) \
+        || (denied && due(lastdeny, key SUBSEP host, ts)) \
+        || (upstream && due(lastup, key SUBSEP host, ts))
+      ismuted = mayalert ? muted(key, host) : 0
       # Independent of the isnew/cooldown branches below: those decide whether to
       # NOTIFY, this records the fact. A denial squelched by the cooldown is
-      # still a host the user may want to allow.
-      if (denied) record_denied(key, host)
+      # still a host the user may want to allow. A MUTED one is not — this file
+      # is what `cid domains add --denied` reads, and the user muting a host is
+      # the statement that they do not want it allowed.
+      if (denied && !ismuted) record_denied(key, host)
 
       if (isnew) {
         # Only the allowed case: a denial has no matching entry by definition, so
         # asking would be a guaranteed-empty fork on the noisy path.
         EXPLAIN_WHY = ""; EXPLAIN_FULL = ""
         if (!denied) explain(key, host)
+        # Recorded even when muted: seen-hosts.txt is the record of what was
+        # contacted, not of what was reported. Muting silences the alert, it does
+        # not edit the history.
         record(key, host, EXPLAIN_FULL)
-        if (byrule)     alert("alert", key, host, "denied-by-rule")
-        else if (denied) alert("alert", key, host, "new-host-denied")
-        else             alert("info",  key, host, "new-host", EXPLAIN_WHY)
+        if (!ismuted) {
+          if (byrule)      alert("alert", key, host, "denied-by-rule")
+          else if (denied) alert("alert", key, host, "new-host-denied")
+          else             alert("info",  key, host, "new-host", EXPLAIN_WHY)
+        }
         if (denied) lastdeny[key SUBSEP host] = ts
       } else if (denied) {
-        if (!((key SUBSEP host) in lastdeny) || ts - lastdeny[key SUBSEP host] >= cooldown) {
+        # Stamped before the mute test, so a muted host in a retry loop asks the
+        # helper once per cooldown rather than once per request.
+        if (due(lastdeny, key SUBSEP host, ts)) {
           lastdeny[key SUBSEP host] = ts
-          alert("alert", key, host, byrule ? "denied-by-rule" : "denied")
+          if (!ismuted) alert("alert", key, host, byrule ? "denied-by-rule" : "denied")
         }
       }
 
@@ -260,9 +312,9 @@ _process() {
       # being denied that host, which is the one that matters. Independent of the
       # isnew branch above, so a first contact that is refused says both things.
       if (upstream) {
-        if (!((key SUBSEP host) in lastup) || ts - lastup[key SUBSEP host] >= cooldown) {
+        if (due(lastup, key SUBSEP host, ts)) {
           lastup[key SUBSEP host] = ts
-          alert("info", key, host, "upstream-403")
+          if (!ismuted) alert("info", key, host, "upstream-403")
         }
       }
     }
@@ -326,11 +378,14 @@ _emit() {  # <urgency> <key> <fix: host|rule|upstream> <count> <csv-hosts>
     # tunnel. Suggesting `domains add HOST` here would undo that rule, so don't.
     title="Egress DENIED by rule: ${key}"
     hint="The host is allowed, a path or method rule refused it. Review: cid domains"
+    (( count == 1 )) && hint="${hint} (or silence it: cid mute add ${csv})"
   elif [[ "${urgency}" == alert ]]; then
     title="Egress DENIED: ${key}"
     # Name the host in the fix when there is exactly one — that is the command
-    # to paste, not a template to fill in.
-    if (( count == 1 )); then hint="Allow it: cid domains add ${csv}"
+    # to paste, not a template to fill in. The second half is the other answer to
+    # a repeating denial: keep denying it, stop saying so. Only on the two alert
+    # classes — an info banner is not what anyone wants silenced.
+    if (( count == 1 )); then hint="Allow it: cid domains add ${csv} (or silence it: cid mute add ${csv})"
     else                      hint="Allow one: cid domains add HOST"
     fi
   elif (( count > 1 )); then
