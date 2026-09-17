@@ -16,6 +16,7 @@
 - [Installing Additional Packages](installing-packages.md) — add tools (e.g. Deno) at image build time
 - [Updating Claude Code](updating-claude-code.md) — bump the pinned `@anthropic-ai/claude-code` version and rebuild
 - [Cutting a Release](releasing.md) — `make release` derives the version from Conventional Commits, writes CHANGELOG.md and tags; pushing the tag publishes the GitHub Release
+- [Remote Sessions](remote-sessions.md) — `CLAUDE_REMOTE=1` detaches the container and hands the session to claude.ai/code or the Claude mobile app, freeing your terminal
 - [Host Path in the Status Line](host-path-statusline.md) — show which host folder a session belongs to
 - [Sound Effects](sound-effects.md) — play host sounds on Claude Code events
 - [Chrome DevTools MCP](chrome-devtools-mcp.md) — drive your own Chrome on the host; for the cases that need the host specifically, since the in-container browser below is the default

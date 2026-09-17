@@ -52,6 +52,7 @@ CLAUDE_MOUNTS="$HOME/data:/data" ./run.sh
 | `CLAUDE_PIDS_LIMIT` | `2048` | Max processes/threads (`--pids-limit`). | [Resource Limits](resource-limits.md) |
 | `CLAUDE_VOLUME` | `claude-<project>-<hash>` | Override the per-project session volume name. | — |
 | `CLAUDE_CONTAINER_NAME` | `claude-<project>-<random>` | Pin a container name instead of the randomized default. | — |
+| `CLAUDE_REMOTE` | _(unset)_ | `1`/`true`/`yes`/`on`. Detaches the container and adds `--remote-control <container-name>`, so the session is driven from claude.ai/code or the Claude mobile app. Guards still prompt first. Skips the usage sync. | [Remote Sessions](remote-sessions.md) |
 
 ### Egress proxy
 

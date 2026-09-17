@@ -262,6 +262,69 @@ refute_run_arg() {
 }
 
 # ---------------------------------------------------------------------------
+# CLAUDE_REMOTE integration
+# ---------------------------------------------------------------------------
+
+@test "without CLAUDE_REMOTE the container is attached and gets no bridge flag" {
+  cd "${TEST_PROJECT_DIR}"
+  run "${RUN_CMD[@]}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--interactive"
+  refute_run_arg "--detach"
+  refute_run_arg "--remote-control"
+}
+
+@test "CLAUDE_REMOTE=1: --detach is added to -i and -t, never swapped for them" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_REMOTE=1 \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--detach"
+  # -t gives the TUI its pty; -i keeps stdin open. Without -i the TUI reads EOF
+  # and exits at once, and `docker attach` could only watch.
+  assert_run_arg "--tty"
+  assert_run_arg "--interactive"
+}
+
+@test "CLAUDE_REMOTE=1 names the remote session after the container" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_REMOTE=1 \
+    CLAUDE_CONTAINER_NAME=claude-pinned \
+    bash "${RUN_SH}"
+  [ "$status" -eq 0 ]
+  assert_run_arg "--remote-control"
+  # Twice: once as --name, once as the injected session name.
+  [ "$(grep -xcF -- "claude-pinned" "${DOCKER_RUN_ARGS}")" -eq 2 ]
+}
+
+@test "CLAUDE_REMOTE=1 does not override a caller-supplied --remote-control" {
+  cd "${TEST_PROJECT_DIR}"
+  run env \
+    SKIP_CLAUDE_VOLUME_PATHS=1 \
+    CLAUDE_AUTO_USAGE=0 \
+    CLAUDE_EGRESS_ALERTS=0 \
+    MCP_GH_BEARER="" \
+    CLAUDE_REMOTE=1 \
+    CLAUDE_CONTAINER_NAME=claude-pinned \
+    bash "${RUN_SH}" --remote-control mine
+  [ "$status" -eq 0 ]
+  assert_run_arg "mine"
+  # Exactly one bridge flag, and the container name stays only on --name.
+  [ "$(grep -xcF -- "--remote-control" "${DOCKER_RUN_ARGS}")" -eq 1 ]
+  [ "$(grep -xcF -- "claude-pinned" "${DOCKER_RUN_ARGS}")" -eq 1 ]
+}
+
+# ---------------------------------------------------------------------------
 # CLAUDE_PORTS integration
 # ---------------------------------------------------------------------------
 

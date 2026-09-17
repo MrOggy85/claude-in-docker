@@ -1230,6 +1230,7 @@ ENV_VARS=(
   "Configuration|CLAUDE_PIDS_LIMIT|2048|Max processes/threads in the container"
   "Configuration|CLAUDE_VOLUME|claude-<project>-<hash>|Override the per-project session volume name"
   "Configuration|CLAUDE_CONTAINER_NAME|claude-<project>-<random>|Pin the container name instead of the random default"
+  "Configuration|CLAUDE_REMOTE|(unset)|Set 1 to detach and drive the session from claude.ai/code or the mobile app"
   "Egress proxy|CLAUDE_EGRESS_NETWORK|claude-egress|Docker network shared by the proxy and containers"
   "Egress proxy|CLAUDE_EGRESS_PROXY_NAME|claude-egress-proxy|Name of the long-running Squid container"
   "Egress proxy|CLAUDE_EGRESS_IMAGE|claude-egress-squid:local|Squid image proxy/up.sh runs (set to skip building proxy/Dockerfile)"

@@ -688,10 +688,36 @@ esac
 #    makes the label self-cleaning. The name also goes IN as an env var, so the
 #    status line can tell one terminal from another — see
 #    docs/host-path-statusline.md.
+#
+# 4a. Remote session — OPT-IN, off by default. Detaching and handing the session
+#     to claude.ai/code are one switch because they are useless apart: nothing
+#     reads a detached pty. `--detach` is ADDED to `--interactive --tty`, not
+#     swapped for them: -t gives the TUI its pty, and -i keeps stdin open. Drop
+#     -i and stdin is closed, so the TUI reads EOF and exits at once and
+#     `docker attach` can only watch. The guards above have already run in YOUR
+#     terminal, which is the point: they prompt on /dev/tty and would block
+#     unseen if the whole run were backgrounded.
+REMOTE_ON=0
+case "${CLAUDE_REMOTE:-}" in 1|true|yes|on|TRUE|YES|ON) REMOTE_ON=1 ;; esac
+REMOTE_ARGS=()
+if [[ "${REMOTE_ON}" == 1 ]]; then
+  RUN_MODE_ARGS=(--detach --interactive --tty)
+  # Name the remote session after the container so the name in the Claude app,
+  # in `docker ps` and in the status line is one string. Skipped when the caller
+  # named it themselves. Safe to inject: a bridge that cannot start only prints
+  # a notice, it never costs the session. See docs/remote-sessions.md.
+  case " $* " in
+    *" --remote-control "*) ;;
+    *) REMOTE_ARGS=(--remote-control "${CONTAINER_NAME}") ;;
+  esac
+else
+  RUN_MODE_ARGS=(--interactive --tty)
+fi
+
 STATUS=0
 docker run \
   --name "${CONTAINER_NAME}" \
-  --interactive --tty --rm \
+  "${RUN_MODE_ARGS[@]}" --rm \
   --user "$(id -u):$(id -g)" \
   --cap-add=NET_ADMIN \
   --label "cid.project-key=${PROJECT_KEY}" \
@@ -717,14 +743,25 @@ docker run \
   ${RO_MOUNTS[@]+"${RO_MOUNTS[@]}"} \
   --workdir "${REPO_IN_CONTAINER}" \
   "${IMAGE}" \
-  claude --mcp-config "${HOME_IN_CONTAINER}/.mcp-servers.json" "$@" || STATUS=$?
+  claude --mcp-config "${HOME_IN_CONTAINER}/.mcp-servers.json" \
+    ${REMOTE_ARGS[@]+"${REMOTE_ARGS[@]}"} "$@" || STATUS=$?
 
 # 5. Copy this session's usage records into the shared archive so `ccusage` can
 #    read them from the host. The transform lives in sync-volume.sh (shared with
 #    usage.sh): an allowlist keeping only the cost fields, cwd relabeled to
 #    /home/dev/<PROJ> — conversation text, tool I/O, and attachments never leave
 #    the volume. Set CLAUDE_AUTO_USAGE=0 (or false/no/off) to skip.
+#
+#    A detached run reaches here with the session still starting, so there is
+#    nothing to copy — and --rm removes the container before there ever is. The
+#    records survive in the session VOLUME either way, so usage.sh recovers them
+#    whenever you ask; that is the trade, and docs/remote-sessions.md says so.
 case "${CLAUDE_AUTO_USAGE:-1}" in 0|false|no|off|FALSE|NO|OFF) AUTO_USAGE=0 ;; *) AUTO_USAGE=1 ;; esac
+if [[ "${REMOTE_ON}" == 1 ]]; then
+  kv "container" "${CONTAINER_NAME}" "docker stop ${CONTAINER_NAME}"
+  [[ "${AUTO_USAGE}" == "1" ]] && kv "usage sync" "skipped — run ${SCRIPT_DIR}/usage.sh later"
+  AUTO_USAGE=0
+fi
 if [[ "${AUTO_USAGE}" == "1" ]]; then
   ARCHIVE="${CLAUDE_USAGE_DIR:-${HOME}/.claude-docker-usage}"
   if ! IMAGE="${IMAGE}" "${SCRIPT_DIR}/sync-volume.sh" "${VOLUME}" "${SAFE_NAME:-repo}" "${ARCHIVE}"; then

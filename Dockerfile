@@ -93,9 +93,10 @@ RUN cd /usr/local \
  && npm ci \
  && find /usr/local/node_modules -type f -path '*@ccusage/*/bin/*' -exec chmod a+rx {} +
 ENV DISABLE_AUTOUPDATER=1
-# Suppress the feedback survey and non-essential telemetry/traffic.
-ENV CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 \
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+# Suppress the feedback survey. Deliberately NOT setting
+# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: it also disables feature-flag
+# evaluation, which /remote-control needs (`claude doctor` names it).
+ENV CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1
 # npm puts dep bin symlinks in node_modules/.bin/; add to PATH so `claude`,
 # `ccusage`, `tsc`, etc. resolve without a full path.
 ENV PATH="/usr/local/node_modules/.bin:${PATH}"
