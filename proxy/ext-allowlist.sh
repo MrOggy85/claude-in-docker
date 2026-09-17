@@ -1,9 +1,16 @@
 #!/bin/sh
-# Squid external_acl helper, in two modes over one grammar:
+# Squid external_acl helper, in three modes over one grammar:
 #
 #   (no argument)  may this project make this request?  -> allowed-domains.txt
 #   --skip-decryption       should this host be tunnelled WITHOUT decryption, instead of
 #                  bumped?                            -> skip-decryption.txt
+#   --explain      which entry covers this host, from which list, exact or
+#                  wildcard? Squid never calls this one: proxy/watch.sh does, on
+#                  the HOST, to say WHY a first-time host was allowed. It decides
+#                  nothing — it reports, host-level, over the same match_in_file,
+#                  so the grammar keeps exactly one implementation. Its output
+#                  can never begin with "OK", so a squid.conf typo naming it
+#                  denies rather than opens. See docs/egress-alerts.md.
 #
 # Per line on stdin Squid sends "<project-key> <method> <host> <path> -" (the
 # format is "%LOGIN %METHOD %DST %PATH"; Squid substitutes "-" for an empty value
@@ -20,7 +27,8 @@
 #
 # POSIX sh, no bashisms: the ubuntu/squid base isn't guaranteed to ship bash, and
 # `#!/usr/bin/env bash` crash-loops the helper (exec ENOENT) at 100% CPU when it's
-# absent. auth-ok.sh is /bin/sh for the same reason. See docs/egress-proxy.md.
+# absent. auth-ok.sh is /bin/sh for the same reason. --explain also runs on the
+# HOST (macOS, Linux), so the constraint binds there too. See docs/egress-proxy.md.
 set -u
 export LC_ALL=C   # locale-stable [a-z0-9] / [:space:] ranges
 
@@ -31,6 +39,13 @@ BROWSER_BASELINE="${BROWSER_BASELINE:-/etc/squid/baseline-browser-domains.txt}"
 SKIP_DECRYPTION_BASELINE="${SKIP_DECRYPTION_BASELINE:-/etc/squid/baseline-skip-decryption.txt}"
 PROJECTS_DIR="${PROJECTS_DIR:-/etc/squid/projects}"
 
+# Written by match_in_file on a match, read only by --explain: the entry that
+# matched, and its host token alone (leading '.' iff it is a wildcard). Cleared
+# at the top of every match_in_file call, so a failed arm of the four-file OR
+# can never leave a stale value for the arm that follows it.
+MATCH_ENTRY=''
+MATCH_EHOST=''
+
 # Mode: which question this process answers. An unknown argument is a squid.conf
 # typo — refuse rather than silently answering with the allowlist (which, in
 # skip-decryption mode, would mean "never decrypt anything").
@@ -38,8 +53,9 @@ MODE='allow'
 case "${1:-}" in
   '') ;;
   --skip-decryption) MODE='skipdecrypt' ;;
+  --explain) MODE='explain' ;;
   *)
-    echo "ext-allowlist.sh: unknown mode '$1' (expected --skip-decryption or no argument)" >&2
+    echo "ext-allowlist.sh: unknown mode '$1' (expected --skip-decryption, --explain or no argument)" >&2
     exit 2
     ;;
 esac
@@ -96,6 +112,8 @@ prep_path() {  # <raw %PATH>
 #
 # _-prefixed vars (no `local`) avoid clobbering the caller's state, portably.
 match_in_file() {  # <file> <mode>
+  MATCH_ENTRY=''   # before the -f bail below: a no-match must report nothing
+  MATCH_EHOST=''
   _file="$1"
   _mode="$2"
   [ -f "$_file" ] || return 1
@@ -129,6 +147,13 @@ match_in_file() {  # <file> <mode>
     esac
     [ -n "$_ehost" ] || continue
     host_matches "$_ehost" || continue
+    # Every `return 0` below is downstream of here, and neither value changes
+    # again this iteration — so on a match these name the winning line. A line
+    # that host-matches then fails the method/path rules overwrites them and
+    # falls through, which is unreachable as a READ: only a caller that got
+    # `return 0` looks, and there the last write is by definition the winner.
+    MATCH_ENTRY="$_entry"
+    MATCH_EHOST="$_ehost"
 
     case "$_mode" in
       connect)      return 0 ;;   # tunnel setup; the inner request is checked on its own
@@ -230,6 +255,39 @@ while read -r key method host path _; do
       fi
     else
       echo "ERR"
+    fi
+    continue
+  fi
+
+  # Not a decision: which entry makes this host reachable at all, for the alert
+  # proxy/watch.sh raises on a first-time host. Always `connect` (host-level),
+  # because seen-hosts.txt and the alert are both keyed by host — and because
+  # under `grant` a method-scoped entry ("GET,HEAD fonts.gstatic.com") would
+  # fail the method compare against the CONNECT and report a plainly-allowed
+  # host as unexplained. Same four files in the SAME order as the real decision
+  # below, so the entry named is the one Squid actually used. MATCH_* survive
+  # the winning arm untouched: `||` short-circuits, so no later call clears them.
+  if [ "$MODE" = explain ]; then
+    if   match_in_file "$BASELINE"         connect; then _src=baseline
+    elif match_in_file "$allow_project"    connect; then _src=project
+    elif match_in_file "$browser_baseline" connect; then _src=browser-baseline
+    elif match_in_file "$browser_project"  connect; then _src=browser-project
+    else _src=none
+    fi
+    if [ "$_src" = none ]; then
+      printf 'none\tnone\t-\t-\n'
+    else
+      # The one-character test host_matches branches on, so it cannot drift.
+      case "$MATCH_EHOST" in
+        .*) _kind=wildcard ;;
+        *)  _kind=exact ;;
+      esac
+      # Both halves, so the caller never re-splits "methods, then host, then
+      # path" — that would be a second implementation of this grammar. Field 3
+      # is what an alert shows, field 4 what seen-hosts.txt records. Tab-safe by
+      # construction: the comment is stripped and whitespace squeezed to single
+      # spaces above, so neither can hold a tab or a newline.
+      printf '%s\t%s\t%s\t%s\n' "$_src" "$_kind" "$MATCH_EHOST" "$MATCH_ENTRY"
     fi
     continue
   fi

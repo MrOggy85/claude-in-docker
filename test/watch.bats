@@ -484,3 +484,180 @@ info	proj-aaa111	api.example.com	upstream-403"
   [ "$status" -eq 2 ]
   [[ "$output" == *"unknown verb"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# Why it was allowed — the provenance of a first-time host
+#
+# The classifier asks proxy/ext-allowlist.sh --explain which entry covers a new
+# host, and carries the answer into the alert line and the record. Note what
+# setup() does NOT do: seed an allowlist. Every test above therefore runs with
+# nothing to explain, which is how "no reason" is pinned as byte-identical to a
+# watcher without this feature — the property that makes the whole thing
+# additive. Tests here opt in with seed_baseline / seed_project.
+# ---------------------------------------------------------------------------
+
+seed_baseline() {  # <entry>...
+  mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}"
+  printf '%s\n' "$@" > "${CLAUDE_DOCKER_CONFIG_DIR}/allowed-domains.txt"
+}
+
+seed_project() {  # <project-key> <entry>...
+  local key="$1"; shift
+  mkdir -p "${CLAUDE_PROJECTS_DIR}/${key}"
+  printf '%s\n' "$@" > "${CLAUDE_PROJECTS_DIR}/${key}/allowed-domains.txt"
+}
+
+@test "provenance: an exact baseline entry is named in the alert and the record" {
+  seed_baseline api.anthropic.com
+  add 1000.0 TCP_TUNNEL/200 api.anthropic.com:443 proj-aaa111
+  proc
+  [[ "$output" == "info"$'\t'"proj-aaa111"$'\t'"api.anthropic.com"$'\t'"new-host"$'\t'"api.anthropic.com (baseline exact)" ]]
+  # Host column is padded to a fixed width, so match the two ends, not the gap.
+  run grep -E '^api\.anthropic\.com +# allowed by: api\.anthropic\.com \(baseline exact\)$' \
+    "$(seen_file proj-aaa111)"
+  [ "$status" -eq 0 ]
+}
+
+@test "provenance: a wildcard is called out as one" {
+  # The case the feature exists for: nobody approved this exact host.
+  seed_baseline .example.com
+  add 1000.0 TCP_TUNNEL/200 cdn-metrics-7f3a.example.com:443 proj-aaa111
+  proc
+  [[ "$output" == *$'\t'".example.com (baseline wildcard)" ]]
+}
+
+@test "provenance: a project entry is distinguished from the baseline" {
+  seed_baseline api.anthropic.com
+  seed_project proj-aaa111 internal.aaa.test
+  add 1000.0 TCP_TUNNEL/200 internal.aaa.test:443 proj-aaa111
+  proc
+  [[ "$output" == *$'\t'"internal.aaa.test (project exact)" ]]
+}
+
+@test "provenance: the browser identity gets its own lists and its own record" {
+  seed_baseline api.anthropic.com
+  mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}"
+  printf 'GET,HEAD fonts.gstatic.com\n' > "${CLAUDE_DOCKER_CONFIG_DIR}/browser-domains.txt"
+  add 1000.0 TCP_TUNNEL/200 fonts.gstatic.com:443 proj-aaa111-browser
+  proc
+  [[ "$output" == *$'\t'"fonts.gstatic.com (browser-baseline exact)" ]]
+  run grep -F 'fonts.gstatic.com' "$(seen_file proj-aaa111-browser)"
+  [ "$status" -eq 0 ]
+}
+
+@test "provenance: a method list in the entry never reaches the alert field" {
+  # _flush joins hosts with commas, so "GET,HEAD host" in the alert would split
+  # into two items. The alert gets the entry's HOST; the record gets it whole.
+  seed_project proj-aaa111 'GET,HEAD scoped.aaa.test'
+  add 1000.0 TCP_TUNNEL/200 scoped.aaa.test:443 proj-aaa111
+  proc
+  [[ "$output" == *$'\t'"scoped.aaa.test (project exact)" ]]
+  [[ "$output" != *","* ]]
+  run grep -F 'allowed by: GET,HEAD scoped.aaa.test (project exact)' "$(seen_file proj-aaa111)"
+  [ "$status" -eq 0 ]
+}
+
+@test "provenance: an entry that has since expired reports nothing, not a guess" {
+  # The watcher may replay a log days later. Naming a line that no longer grants
+  # anything would be a wrong reason, which is worse than none.
+  seed_baseline 'gone.test  # expires=100'
+  add 1000.0 TCP_TUNNEL/200 gone.test:443 proj-aaa111
+  proc
+  [[ "$output" == "info"$'\t'"proj-aaa111"$'\t'"gone.test"$'\t'"new-host" ]]
+  run grep -Fx 'gone.test' "$(seen_file proj-aaa111)"
+  [ "$status" -eq 0 ]
+}
+
+@test "provenance: with no allowlist at all the output is exactly as before" {
+  add 1000.0 TCP_TUNNEL/200 api.anthropic.com:443 proj-aaa111
+  proc
+  [[ "$output" == "info"$'\t'"proj-aaa111"$'\t'"api.anthropic.com"$'\t'"new-host" ]]
+  run grep -Fx 'api.anthropic.com' "$(seen_file proj-aaa111)"
+  [ "$status" -eq 0 ]
+}
+
+@test "provenance: a missing helper degrades to no reason, silently" {
+  seed_baseline api.anthropic.com
+  export CID_HELPER="${BATS_TEST_TMPDIR}/nope/ext-allowlist.sh"
+  add 1000.0 TCP_TUNNEL/200 api.anthropic.com:443 proj-aaa111
+  proc
+  [ "$status" -eq 0 ]
+  [[ "$output" == "info"$'\t'"proj-aaa111"$'\t'"api.anthropic.com"$'\t'"new-host" ]]
+}
+
+@test "provenance: a helper answering garbage degrades to no reason" {
+  seed_baseline api.anthropic.com
+  export CID_HELPER="${BATS_TEST_TMPDIR}/junk.sh"
+  printf '#!/bin/sh\necho hello\n' > "${CID_HELPER}"
+  chmod +x "${CID_HELPER}"
+  add 1000.0 TCP_TUNNEL/200 api.anthropic.com:443 proj-aaa111
+  proc
+  [[ "$output" == "info"$'\t'"proj-aaa111"$'\t'"api.anthropic.com"$'\t'"new-host" ]]
+}
+
+@test "provenance: a denial is never explained, even if the host is allowlisted" {
+  # Contrived — the proxy would not deny an allowlisted host — but it pins that
+  # the denial paths carry no 5th field for _emit to render.
+  seed_baseline evil.test
+  add 1000.0 TCP_DENIED/403 evil.test:443 proj-aaa111 NONE/-
+  proc
+  [[ "$output" == "alert"$'\t'"proj-aaa111"$'\t'"evil.test"$'\t'"new-host-denied" ]]
+}
+
+@test "provenance: a recorded host with a reason still dedupes on replay" {
+  # The regression the comment-strip in loadseen exists for: without it the
+  # trailing reason becomes part of the key and every host alerts forever.
+  seed_baseline api.anthropic.com
+  add 1000.0 TCP_TUNNEL/200 api.anthropic.com:443 proj-aaa111
+  proc
+  [ -n "$output" ]
+  LOG=''
+  add 1001.0 TCP_TUNNEL/200 api.anthropic.com:443 proj-aaa111
+  proc
+  [ -z "$output" ]
+  [ "$(grep -c 'api.anthropic.com' "$(seen_file proj-aaa111)")" -eq 1 ]
+}
+
+@test "provenance: a host recorded bare by an older watcher still dedupes" {
+  mkdir -p "${CLAUDE_PROJECTS_DIR}/proj-aaa111"
+  printf '# Hosts this project has contacted, recorded by proxy/watch.sh.\napi.anthropic.com\n' \
+    > "$(seen_file proj-aaa111)"
+  seed_baseline api.anthropic.com
+  add 1000.0 TCP_TUNNEL/200 api.anthropic.com:443 proj-aaa111
+  proc
+  [ -z "$output" ]
+}
+
+@test "provenance: the notification says what allowed the host" {
+  pipe_notify "info"$'\t'"proj-aaa111"$'\t'"cdn.x.test"$'\t'"new-host"$'\t'".x.test (baseline wildcard)"
+  run cat "${NOTIFY_LOG}"
+  [[ "$output" == *"New egress host: proj-aaa111"* ]]
+  [[ "$output" == *"cdn.x.test via .x.test (baseline wildcard)"* ]]
+  [[ "$output" == *"Review: cid hosts"* ]]
+}
+
+@test "provenance: a burst stays one notification, each host with its own reason" {
+  # Provenance must not enter the grouping key, or a first session's dozen hosts
+  # would become a dozen banners.
+  pipe_notify "info"$'\t'"proj-aaa111"$'\t'"a.x.test"$'\t'"new-host"$'\t'".x.test (baseline wildcard)"$'\n'"info"$'\t'"proj-aaa111"$'\t'"b.y.test"$'\t'"new-host"$'\t'"b.y.test (project exact)"
+  [ "$(grep -c . "${NOTIFY_LOG}")" -eq 1 ]
+  run cat "${NOTIFY_LOG}"
+  [[ "$output" == *"2 new egress hosts: proj-aaa111"* ]]
+  [[ "$output" == *"a.x.test via .x.test (baseline wildcard)"* ]]
+  [[ "$output" == *"b.y.test via b.y.test (project exact)"* ]]
+}
+
+@test "provenance: a notification without a reason reads exactly as before" {
+  pipe_notify "info"$'\t'"proj-aaa111"$'\t'"cdn.x.test"$'\t'"new-host"
+  run cat "${NOTIFY_LOG}"
+  [[ "$output" == *"cdn.x.test"* ]]
+  [[ "$output" != *"via"* ]]
+}
+
+@test "provenance: end to end, classifier into notifier" {
+  seed_baseline .example.com
+  add 1000.0 TCP_TUNNEL/200 cdn-metrics-7f3a.example.com:443 proj-aaa111
+  pipe_all "${LOG}"
+  run cat "${NOTIFY_LOG}"
+  [[ "$output" == *"cdn-metrics-7f3a.example.com via .example.com (baseline wildcard)"* ]]
+}

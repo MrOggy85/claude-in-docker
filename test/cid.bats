@@ -847,6 +847,16 @@ proj_containers() { echo "${CLAUDE_PROJECTS_DIR}"/*/docker-containers.txt; }
   [[ "$output" == *"cdn.example.com"* ]]
 }
 
+@test "hosts: shows why each host was allowed" {
+  "${CID}" domains add placeholder.test -C "${PROJ}"
+  local dir; dir="$(dirname "$(proj_file)")"
+  printf 'cdn.example.com   # allowed by: .example.com (baseline wildcard)\n' \
+    > "${dir}/seen-hosts.txt"
+  run "${CID}" hosts -C "${PROJ}"
+  [[ "$output" == *"cdn.example.com"* ]]
+  [[ "$output" == *"allowed by: .example.com (baseline wildcard)"* ]]
+}
+
 @test "hosts forget: removes the record so it alerts again" {
   "${CID}" domains add placeholder.test -C "${PROJ}"
   local dir; dir="$(dirname "$(proj_file)")"

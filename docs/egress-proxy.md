@@ -169,6 +169,23 @@ cid domains add --method GET,HEAD api.example.com/v1
 cid domains rm  --method GET,HEAD api.example.com/v1   # name it whole to remove it
 ```
 
+### Which entry matched
+
+`--explain` answers the other question about this grammar — *which* entry covers a host, from which
+list, exact or wildcard — over the same `match_in_file`, so there is no second implementation to
+drift. It decides nothing; [`proxy/watch.sh`](../proxy/watch.sh) calls it on the host to say why a
+first-time host was allowed ([Egress Alerts](egress-alerts.md#why-it-was-allowed)). Squid never does,
+and its output can never begin with `OK`, so a `squid.conf` typo naming it denies rather than opens.
+
+```bash
+printf 'KEY CONNECT raw.githubusercontent.com - -\n' \
+  | BASELINE=<config-dir>/allowed-domains.txt PROJECTS_DIR=<config-dir>/projects \
+    proxy/ext-allowlist.sh --explain
+# baseline	wildcard	.githubusercontent.com	.githubusercontent.com
+```
+
+The answer is host-level: where several entries cover one host it reports the first in list order.
+
 ### Temporary entries
 
 `cid domains add --for <duration> <host>` (`15m`, `2h`, `1d`, …) appends the host with an
@@ -177,7 +194,8 @@ checks that timestamp on every lookup — past it, the line stops matching, on t
 propagation window as any other allowlist edit. No daemon sweeps it; enforcement is just "is this
 still in the future" at read time. `cid domains prune` drops stale expired lines for hygiene only —
 an unpruned expired line is already ignored. Re-running `add --for` on the same host replaces its
-expiry; a later plain `add` (no `--for`) promotes it to permanent. See [The `cid` config
+expiry; a later plain `add` (no `--for`) promotes it to permanent. An expired line stops explaining
+a host as well as stops granting it. See [The `cid` config
 CLI](config-cli.md#domains-add--domains-rm).
 
 ## Trust model / limitations
@@ -203,7 +221,7 @@ CLI](config-cli.md#domains-add--domains-rm).
 ## Files
 
 - [`proxy/squid.conf`](../proxy/squid.conf) — proxy config (auth + external ACL + default-deny + `ssl_bump`)
-- [`proxy/ext-allowlist.sh`](../proxy/ext-allowlist.sh) — per-project allowlist decision helper; `--skip-decryption` answers the decrypt-or-not question
+- [`proxy/ext-allowlist.sh`](../proxy/ext-allowlist.sh) — per-project allowlist decision helper; `--skip-decryption` answers the decrypt-or-not question, `--explain` names the matching entry (see below)
 - [`proxy/auth-ok.sh`](../proxy/auth-ok.sh) — basic-auth helper accepting any credentials (username = project key)
 - [`proxy/Dockerfile`](../proxy/Dockerfile), [`proxy/entrypoint.sh`](../proxy/entrypoint.sh) — the `squid-openssl` image and its CA / cert-DB setup
 - [`proxy/up.sh`](../proxy/up.sh) — build the image, create the network, (re)start the proxy
