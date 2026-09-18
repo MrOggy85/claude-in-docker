@@ -1,0 +1,16 @@
+# Hosts the egress alert watcher never notifies about.
+#
+# This changes NOTHING the proxy does. A host listed here is allowed or denied
+# exactly as it was, and proxy/watch.sh still records it in seen-hosts.txt — only
+# the desktop notification is suppressed. It is the answer to telemetry you
+# cannot turn off at the source and do not want to allow: the request keeps being
+# refused, you just stop being told about it.
+#
+# A muted host is also kept out of denied-hosts.txt, so `cid domains add --denied`
+# never offers to allow it.
+#
+# Same grammar as skip-decryption.txt: one host per line, a leading '.' matches
+# the apex and every subdomain, '#' comments. Read on the host, per alert.
+# Add entries with: cid mute add <host>                    (see docs/egress-alerts.md)
+
+# (empty — every host is alerted about)

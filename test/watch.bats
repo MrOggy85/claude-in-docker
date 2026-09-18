@@ -661,3 +661,313 @@ seed_project() {  # <project-key> <entry>...
   run cat "${NOTIFY_LOG}"
   [[ "$output" == *"cdn-metrics-7f3a.example.com via .example.com (baseline wildcard)"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# Muting — a host the user has told the watcher to stop notifying about
+#
+# The answer to telemetry that cannot be turned off at the source and should
+# stay denied. Nothing about the classification changes: the same line is still
+# a denial, still recorded in seen-hosts.txt, only silent. Muting is asked of
+# proxy/ext-allowlist.sh --muted, so the matching itself is covered in
+# test/ext-allowlist.bats; what is pinned here is WHICH lines go quiet and what
+# still gets written.
+# ---------------------------------------------------------------------------
+
+mute_baseline() {  # <entry>...
+  mkdir -p "${CLAUDE_DOCKER_CONFIG_DIR}"
+  printf '%s\n' "$@" > "${CLAUDE_DOCKER_CONFIG_DIR}/muted-hosts.txt"
+}
+
+mute_project() {  # <project-key> <entry>...
+  local key="$1"; shift
+  mkdir -p "${CLAUDE_PROJECTS_DIR}/${key}"
+  printf '%s\n' "$@" > "${CLAUDE_PROJECTS_DIR}/${key}/muted-hosts.txt"
+}
+
+denied_file() {  # <project-key>
+  printf '%s' "${CLAUDE_PROJECTS_DIR}/$1/denied-hosts.txt"
+}
+
+@test "mute: a denial inside the tunnel goes quiet — the case this exists for" {
+  # http-intake.logs.us5.datadoghq.com: the host is allowlisted, a path rule
+  # refuses the POST, and nothing can turn the telemetry off at the source.
+  mute_project proj-aaa111 http-intake.logs.us5.datadoghq.com
+  add_req 1000.0 TCP_DENIED/403 POST \
+    http://http-intake.logs.us5.datadoghq.com/api/v2/logs proj-aaa111 NONE/-
+  proc
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "mute: a new allowed host goes quiet too" {
+  mute_project proj-aaa111 telemetry.example.net
+  add 1000.0 TCP_TUNNEL/200 telemetry.example.net:443 proj-aaa111
+  proc
+  [ -z "$output" ]
+}
+
+@test "mute: an upstream 403 goes quiet too" {
+  mute_project proj-aaa111 api.example.com
+  add_req 1000.0 TCP_MISS/403 GET http://api.example.com/v1 proj-aaa111
+  proc
+  [ -z "$output" ]
+}
+
+@test "mute: a repeated denial stays quiet past the cooldown" {
+  # The cooldown is what makes a muted host cheap to keep muted: it is stamped
+  # whether or not an alert follows, so the helper is asked once per window.
+  mute_project proj-aaa111 noisy.aaa.test
+  add 1000.0 TCP_DENIED/403 noisy.aaa.test:443 proj-aaa111 NONE/-
+  add 2000.0 TCP_DENIED/403 noisy.aaa.test:443 proj-aaa111 NONE/-
+  add 3000.0 TCP_DENIED/403 noisy.aaa.test:443 proj-aaa111 NONE/-
+  proc
+  [ -z "$output" ]
+}
+
+@test "mute: the host is still recorded as contacted" {
+  # Muting silences the alert; it does not edit the history. `cid hosts` must
+  # still show what the project reached.
+  mute_project proj-aaa111 noisy.aaa.test
+  add 1000.0 TCP_DENIED/403 noisy.aaa.test:443 proj-aaa111 NONE/-
+  proc
+  run grep -Fx 'noisy.aaa.test' "$(seen_file proj-aaa111)"
+  [ "$status" -eq 0 ]
+}
+
+@test "mute: a muted denial is kept out of denied-hosts.txt" {
+  # That file is what `cid domains add --denied` reads. Muting a host is the
+  # statement that it should NOT be allowed, so offering it there would be wrong.
+  mute_project proj-aaa111 noisy.aaa.test
+  add 1000.0 TCP_DENIED/403 noisy.aaa.test:443 proj-aaa111 NONE/-
+  add 1001.0 TCP_DENIED/403 other.aaa.test:443 proj-aaa111 NONE/-
+  proc
+  run cat "$(denied_file proj-aaa111)"
+  [ "$output" = "other.aaa.test" ]
+}
+
+@test "mute: everything else still alerts" {
+  mute_project proj-aaa111 noisy.aaa.test
+  add 1000.0 TCP_DENIED/403 noisy.aaa.test:443 proj-aaa111 NONE/-
+  add 1001.0 TCP_DENIED/403 evil.test:443 proj-aaa111 NONE/-
+  proc
+  [ "$output" = "alert"$'\t'"proj-aaa111"$'\t'"evil.test"$'\t'"new-host-denied" ]
+}
+
+@test "mute: a baseline entry mutes every project, a wildcard its subdomains" {
+  mute_baseline .datadoghq.com
+  add 1000.0 TCP_DENIED/403 http-intake.logs.us5.datadoghq.com:443 proj-aaa111 NONE/-
+  add 1001.0 TCP_DENIED/403 http-intake.logs.us5.datadoghq.com:443 proj-bbb222 NONE/-
+  proc
+  [ -z "$output" ]
+}
+
+@test "mute: another project is not muted by this one's list" {
+  mute_project proj-aaa111 noisy.test
+  add 1000.0 TCP_DENIED/403 noisy.test:443 proj-bbb222 NONE/-
+  proc
+  [[ "$output" == "alert"$'\t'"proj-bbb222"$'\t'"noisy.test"$'\t'"new-host-denied" ]]
+}
+
+@test "mute: an empty or absent list changes nothing" {
+  # The property that makes this additive: with no mute list, byte-identical
+  # output to a watcher without the feature.
+  mute_baseline '# nothing muted'
+  add 1000.0 TCP_TUNNEL/200 api.anthropic.com:443 proj-aaa111
+  proc
+  [ "$output" = "info"$'\t'"proj-aaa111"$'\t'"api.anthropic.com"$'\t'"new-host" ]
+}
+
+@test "mute: a broken helper alerts rather than silently muting" {
+  # Fail toward the alert. A missing or wrong helper must never be able to
+  # silence the watcher.
+  mute_project proj-aaa111 noisy.aaa.test
+  export CID_HELPER="${BATS_TEST_TMPDIR}/nope/ext-allowlist.sh"
+  add 1000.0 TCP_DENIED/403 noisy.aaa.test:443 proj-aaa111 NONE/-
+  proc
+  [ "$output" = "alert"$'\t'"proj-aaa111"$'\t'"noisy.aaa.test"$'\t'"new-host-denied" ]
+}
+
+@test "mute: an alert names the command that silences it" {
+  pipe_notify "alert"$'\t'"proj-aaa111"$'\t'"noisy.test"$'\t'"denied"
+  run cat "${NOTIFY_LOG}"
+  [[ "$output" == *"cid mute add noisy.test"* ]]
+}
+
+@test "mute: a rule denial offers muting alongside the review command" {
+  pipe_notify "alert"$'\t'"proj-aaa111"$'\t'"noisy.test"$'\t'"denied-by-rule"
+  run cat "${NOTIFY_LOG}"
+  [[ "$output" == *"cid domains"* ]]
+  [[ "$output" == *"cid mute add noisy.test"* ]]
+}
+
+@test "mute: a multi-host burst suggests no single host to mute" {
+  # The hint names a host only when there is exactly one — otherwise it would be
+  # a command that mutes the wrong thing.
+  pipe_notify "alert"$'\t'"proj-aaa111"$'\t'"a.test"$'\t'"denied"$'\n'"alert"$'\t'"proj-aaa111"$'\t'"b.test"$'\t'"denied"
+  run cat "${NOTIFY_LOG}"
+  [[ "$output" != *"cid mute add"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# The resume point — where a restarted watcher picks the log up
+#
+# `docker logs --tail all` replays the whole log on every attach. The persistent
+# seen-set makes that harmless for a first-time host, but a denial has only the
+# in-memory cooldown behind it, so without a resume point every restart
+# re-notifies every denial in the log. Only the daemon sets CID_WATCH_POS; every
+# test above runs without it, which is how "unchanged for a hand-run" is pinned.
+# ---------------------------------------------------------------------------
+
+pos_file() { printf '%s' "${BATS_TEST_TMPDIR}/watcher.pos"; }
+
+@test "resume: a replayed log says nothing the second time" {
+  export CID_WATCH_POS="$(pos_file)"
+  add 1000.0 TCP_DENIED/403 evil.test:443 proj-aaa111 NONE/-
+  add 2000.0 TCP_DENIED/403 evil.test:443 proj-aaa111 NONE/-
+  proc
+  [ "$(hits 'evil.test')" -eq 2 ]
+  proc                      # the same log again, as a reattach replays it
+  [ -z "$output" ]
+}
+
+@test "resume: the position is the last line classified" {
+  export CID_WATCH_POS="$(pos_file)"
+  add 1000.0 TCP_DENIED/403 evil.test:443 proj-aaa111 NONE/-
+  add 2000.0 TCP_TUNNEL/200 api.anthropic.com:443 proj-aaa111
+  proc
+  run cat "$(pos_file)"
+  [ "$output" = "2000.000" ]
+}
+
+@test "resume: lines after the position are still classified" {
+  export CID_WATCH_POS="$(pos_file)"
+  add 1000.0 TCP_DENIED/403 evil.test:443 proj-aaa111 NONE/-
+  proc
+  LOG=''
+  add 900.0  TCP_DENIED/403 old.test:443 proj-aaa111 NONE/-    # before the mark
+  add 1100.0 TCP_DENIED/403 new.test:443 proj-aaa111 NONE/-    # after it
+  proc
+  [ "$(hits 'old.test')" -eq 0 ]
+  [ "$(hits 'new.test')" -eq 1 ]
+}
+
+@test "resume: a quiet stretch still advances the position" {
+  # Nothing alerts here, but a replay of it must not re-classify either.
+  export CID_WATCH_POS="$(pos_file)"
+  add 1000.0 TCP_TUNNEL/200 api.anthropic.com:443 proj-aaa111
+  proc
+  LOG=''
+  add 1006.0 TCP_TUNNEL/200 api.anthropic.com:443 proj-aaa111   # seen, silent
+  proc
+  run cat "$(pos_file)"
+  [ "$output" = "1006.000" ]
+}
+
+@test "resume: without CID_WATCH_POS nothing is skipped and no file is written" {
+  add 1000.0 TCP_DENIED/403 evil.test:443 proj-aaa111 NONE/-
+  proc
+  [ -n "$output" ]
+  proc
+  [ -n "$output" ]                 # replayed, and said again — the old behaviour
+  [ ! -f "$(pos_file)" ]
+}
+
+# ---------------------------------------------------------------------------
+# Lifecycle — start / stop / stale daemons
+#
+# A real daemon, with a stub `docker` that just blocks, so the whole tree exists
+# (daemon, notify subshell, `process`, its awk, `docker logs`) without Docker.
+# CID_CODE_STAMP stands in for the hash of the watcher's own files, so a code
+# change can be simulated without editing the repo.
+# ---------------------------------------------------------------------------
+
+lifecycle_setup() {
+  mkdir -p "${BATS_TEST_TMPDIR}/bin"
+  printf '#!/bin/sh\nexec sleep 30\n' > "${BATS_TEST_TMPDIR}/bin/docker"
+  chmod +x "${BATS_TEST_TMPDIR}/bin/docker"
+  PATH="${BATS_TEST_TMPDIR}/bin:${PATH}"
+  export PATH
+  export CID_CODE_STAMP=stamp-one
+}
+
+# Every process of a watcher of this watch.sh, as the script itself counts them.
+watcher_count() {
+  "${WATCH}" _procs 2>/dev/null | grep -c . || true
+}
+
+teardown() {
+  [[ -n "${CLAUDE_DOCKER_CONFIG_DIR:-}" ]] || return 0
+  "${WATCH}" stop >/dev/null 2>&1 || true
+}
+
+@test "lifecycle: start brings up a watcher, stop takes the whole tree down" {
+  lifecycle_setup
+  run "${WATCH}" start
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"watching"* ]]
+  [ "$(watcher_count)" -gt 1 ]     # daemon + pipeline, not just the one pid
+  run "${WATCH}" stop
+  [ "$status" -eq 0 ]
+  [ "$(watcher_count)" -eq 0 ]
+}
+
+@test "lifecycle: starting twice with the same code leaves the first alone" {
+  lifecycle_setup
+  "${WATCH}" start
+  local first; first="$(head -n1 "${CLAUDE_DOCKER_CONFIG_DIR}/watcher.pid")"
+  run "${WATCH}" start
+  [[ "$output" == *"already running"* ]]
+  [ "$(head -n1 "${CLAUDE_DOCKER_CONFIG_DIR}/watcher.pid")" = "${first}" ]
+}
+
+@test "lifecycle: the pidfile carries the code stamp" {
+  lifecycle_setup
+  "${WATCH}" start
+  run sed -n '2p' "${CLAUDE_DOCKER_CONFIG_DIR}/watcher.pid"
+  [ "$output" = "stamp-one" ]
+}
+
+@test "lifecycle: changed code restarts the watcher instead of leaving it" {
+  # The bug this exists for: the daemon outlives every session, so an edit to the
+  # classifier would otherwise take effect only after a manual stop/start, while
+  # the old one keeps notifying by the old rules.
+  lifecycle_setup
+  "${WATCH}" start
+  local first; first="$(head -n1 "${CLAUDE_DOCKER_CONFIG_DIR}/watcher.pid")"
+  export CID_CODE_STAMP=stamp-two
+  run "${WATCH}" start
+  [[ "$output" == *"superseded code"* ]]
+  local second; second="$(head -n1 "${CLAUDE_DOCKER_CONFIG_DIR}/watcher.pid")"
+  [ "${second}" != "${first}" ]
+  run ps -p "${first}" -o args=
+  [ -z "$output" ]                 # and the old one is gone, not just forgotten
+}
+
+@test "lifecycle: stop kills a daemon the pidfile has lost track of" {
+  # How the orphans in the field appear: the pidfile is replaced or removed while
+  # a daemon is still running, and nothing can name it again.
+  lifecycle_setup
+  "${WATCH}" start
+  rm -f "${CLAUDE_DOCKER_CONFIG_DIR}/watcher.pid"
+  "${WATCH}" start
+  [ "$(watcher_count)" -gt 2 ]     # two trees now
+  "${WATCH}" stop
+  [ "$(watcher_count)" -eq 0 ]
+}
+
+@test "lifecycle: status names the orphans it cannot otherwise show" {
+  lifecycle_setup
+  "${WATCH}" start
+  rm -f "${CLAUDE_DOCKER_CONFIG_DIR}/watcher.pid"
+  "${WATCH}" start
+  run "${WATCH}" status
+  [[ "$output" == *"other egress watcher process"* ]]
+  [[ "$output" == *"cid watch stop"* ]]
+}
+
+@test "lifecycle: stop with nothing running is not an error" {
+  lifecycle_setup
+  run "${WATCH}" stop
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no egress alert watcher running"* ]]
+}

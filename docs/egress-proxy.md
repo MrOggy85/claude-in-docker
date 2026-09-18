@@ -221,7 +221,7 @@ CLI](config-cli.md#domains-add--domains-rm).
 ## Files
 
 - [`proxy/squid.conf`](../proxy/squid.conf) — proxy config (auth + external ACL + default-deny + `ssl_bump`)
-- [`proxy/ext-allowlist.sh`](../proxy/ext-allowlist.sh) — per-project allowlist decision helper; `--skip-decryption` answers the decrypt-or-not question, `--explain` names the matching entry (see below)
+- [`proxy/ext-allowlist.sh`](../proxy/ext-allowlist.sh) — per-project allowlist decision helper; `--skip-decryption` answers the decrypt-or-not question, `--explain` names the matching entry (see below), `--muted` answers whether the alert is silenced ([Egress Alerts](egress-alerts.md#muting-a-host))
 - [`proxy/auth-ok.sh`](../proxy/auth-ok.sh) — basic-auth helper accepting any credentials (username = project key)
 - [`proxy/Dockerfile`](../proxy/Dockerfile), [`proxy/entrypoint.sh`](../proxy/entrypoint.sh) — the `squid-openssl` image and its CA / cert-DB setup
 - [`proxy/up.sh`](../proxy/up.sh) — build the image, create the network, (re)start the proxy

@@ -3,8 +3,8 @@
 `cid` inspects and edits the claude-in-docker configuration, which lives outside the repo in the
 config dir (`~/.config/claude-in-docker/` by default — see [Environment
 Variables](environment-variables.md)). It finds those files, prints them, and edits the allowlists in
-place so you never open `allowed-domains.txt`, `skip-decryption.txt` or `docker-containers.txt` by
-hand.
+place so you never open `allowed-domains.txt`, `skip-decryption.txt`, `muted-hosts.txt` or
+`docker-containers.txt` by hand.
 
 `cid` runs on the **host**, and refuses to run inside the container. In there it would derive the
 project key from `/home/dev/repo` — the path every session's repo is bind-mounted to, so every
@@ -29,6 +29,8 @@ host) is the marker; `CID_ALLOW_IN_CONTAINER=1` overrides it, and exists for the
 ./cid domains --browser add --denied   # add every host the browser has been refused
 ./cid skip-decryption [dir]               # hosts the proxy tunnels without decrypting TLS
 ./cid skip-decryption add|rm <host>...    # stop / resume decrypting a host
+./cid mute [dir]                          # hosts the egress alert watcher never notifies about
+./cid mute add|rm <host>...               # stop / resume being notified about a host
 ./cid ca                         # the egress CA: path, expiry, fingerprint, image copy status
 ./cid containers [dir]           # containers the docker bridge may inspect (baseline + project)
 ./cid containers add <name>...   # allow container(s) for the docker bridge
@@ -126,6 +128,21 @@ cid skip-decryption add api.example.com     # stop decrypting it, for THIS proje
 cid skip-decryption add -g .example.com     # ...for every project (baseline)
 cid skip-decryption rm  api.example.com     # decrypt it again
 cid skip-decryption                         # show the effective list
+```
+
+### `mute add` / `mute rm`
+
+The same machinery against `muted-hosts.txt`: a host listed there raises no
+[egress alert](egress-alerts.md#muting-a-host). It is the only list here that is policy for nothing
+— Squid never reads it, so a muted host is allowed or denied exactly as before and is still recorded
+by `cid hosts`. Same `-g`/`-C` behaviour and the same hostname-only grammar as `skip-decryption`; the
+edit applies to the next alert.
+
+```bash
+cid mute add http-intake.logs.us5.datadoghq.com   # stop being told, for THIS project
+cid mute add -g .datadoghq.com                    # ...for every project (baseline)
+cid mute rm  http-intake.logs.us5.datadoghq.com   # alert about it again
+cid mute                                          # show the effective list
 ```
 
 ### `ca`
@@ -266,7 +283,8 @@ ln -s "$PWD/cid" ~/.local/bin/cid    # or any dir already on $PATH
 ## Shell completion
 
 `cid` ships a zsh completion at `completions/_cid`. Tab after `cid ` gives subcommands; after
-`cid show ` config filenames; after `cid domains ` / `cid skip-decryption ` / `cid containers ` the `add` /
+`cid show ` config filenames; after `cid domains ` / `cid skip-decryption ` / `cid mute ` /
+`cid containers ` the `add` /
 `rm` / `ls` verbs; and after each `rm ` the entries already on that list.
 
 Install by putting the `completions` dir on your `fpath` before `compinit`:

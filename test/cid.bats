@@ -919,3 +919,77 @@ proj_containers() { echo "${CLAUDE_PROJECTS_DIR}"/*/docker-containers.txt; }
   run "${CID}" bogus
   [ "$status" -eq 2 ]
 }
+
+# ---------------------------------------------------------------------------
+# mute add|rm|show — the hosts the egress alert watcher stays quiet about. Same
+# machinery and hostname-only grammar as skip-decryption; it answers a third
+# question, and unlike the other two it is policy for nothing — proxy/watch.sh
+# reads it on the host, Squid never does.
+# ---------------------------------------------------------------------------
+
+proj_muted() { echo "${CLAUDE_PROJECTS_DIR}"/*[0-9a-f]/muted-hosts.txt; }
+
+@test "mute add: creates the per-project list and lowercases the host" {
+  run "${CID}" mute add Noisy.Example.COM -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_muted)"
+  [ "$output" = "noisy.example.com" ]
+}
+
+@test "mute add: a wildcard entry is accepted, an invalid host is not" {
+  run "${CID}" mute add .datadoghq.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run "${CID}" mute add 'not a host' -C "${PROJ}"
+  [[ "$output" == *"not a valid hostname"* ]]
+  run cat "$(proj_muted)"
+  [ "$output" = ".datadoghq.com" ]
+}
+
+@test "mute add: a path is rejected — muting is host-level" {
+  run "${CID}" mute add noisy.example.com/v1/input -C "${PROJ}"
+  [[ "$output" == *"not a valid hostname"* ]]
+}
+
+@test "mute add -g: creates the baseline list when it does not exist yet" {
+  # Unlike the two proxy-mounted baselines, nothing mounts this one, so an
+  # absent file is simply an empty list rather than a broken setup.
+  run "${CID}" mute add -g .datadoghq.com
+  [ "$status" -eq 0 ]
+  run grep -c '^.datadoghq.com$' "${CLAUDE_DOCKER_CONFIG_DIR}/muted-hosts.txt"
+  [ "$output" -eq 1 ]
+}
+
+@test "mute rm: removes the entry and keeps comments" {
+  "${CID}" mute add noisy.example.com -C "${PROJ}"
+  printf '# keep me\n' >> "$(proj_muted)"
+  run "${CID}" mute rm noisy.example.com -C "${PROJ}"
+  [ "$status" -eq 0 ]
+  run cat "$(proj_muted)"
+  [ "$output" = "# keep me" ]
+}
+
+@test "mute: shows baseline and per-project entries" {
+  "${CID}" mute add -g .datadoghq.com
+  "${CID}" mute add noisy.aaa.test -C "${PROJ}"
+  run "${CID}" mute "${PROJ}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *".datadoghq.com"* ]]
+  [[ "$output" == *"noisy.aaa.test"* ]]
+}
+
+@test "mute: editing does not touch the egress allowlist" {
+  # The whole point: muting is not allowing.
+  "${CID}" mute add noisy.example.com -C "${PROJ}"
+  run cat "${CLAUDE_DOCKER_CONFIG_DIR}/allowed-domains.txt"
+  [[ "$output" != *"noisy.example.com"* ]]
+  [ ! -f "$(dirname "$(proj_muted)")/allowed-domains.txt" ]
+}
+
+@test "mute: the domains-only flags are rejected" {
+  run "${CID}" mute add --browser noisy.example.com -C "${PROJ}"
+  [ "$status" -eq 2 ]
+  run "${CID}" mute add --for 2h noisy.example.com -C "${PROJ}"
+  [ "$status" -eq 2 ]
+  run "${CID}" mute add --denied -C "${PROJ}"
+  [ "$status" -eq 2 ]
+}

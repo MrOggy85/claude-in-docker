@@ -1,5 +1,5 @@
 #!/bin/sh
-# Squid external_acl helper, in three modes over one grammar:
+# Squid external_acl helper, in four modes over one grammar:
 #
 #   (no argument)  may this project make this request?  -> allowed-domains.txt
 #   --skip-decryption       should this host be tunnelled WITHOUT decryption, instead of
@@ -11,6 +11,10 @@
 #                  so the grammar keeps exactly one implementation. Its output
 #                  can never begin with "OK", so a squid.conf typo naming it
 #                  denies rather than opens. See docs/egress-alerts.md.
+#   --muted        is this host on the mute list, i.e. one the user has told the
+#                  watcher to stop notifying about? Host-side only too, and it
+#                  changes no decision either — a muted host is still denied,
+#                  just silently. -> muted-hosts.txt. See docs/egress-alerts.md.
 #
 # Per line on stdin Squid sends "<project-key> <method> <host> <path> -" (the
 # format is "%LOGIN %METHOD %DST %PATH"; Squid substitutes "-" for an empty value
@@ -38,6 +42,9 @@ BASELINE="${BASELINE:-/etc/squid/baseline-domains.txt}"
 BROWSER_BASELINE="${BROWSER_BASELINE:-/etc/squid/baseline-browser-domains.txt}"
 SKIP_DECRYPTION_BASELINE="${SKIP_DECRYPTION_BASELINE:-/etc/squid/baseline-skip-decryption.txt}"
 PROJECTS_DIR="${PROJECTS_DIR:-/etc/squid/projects}"
+# No /etc/squid default: --muted runs only on the host, where proxy/watch.sh sets
+# this. Unset means nothing is muted, which fails toward alerting.
+MUTED_BASELINE="${MUTED_BASELINE:-/nonexistent}"
 
 # Written by match_in_file on a match, read only by --explain: the entry that
 # matched, and its host token alone (leading '.' iff it is a wildcard). Cleared
@@ -54,8 +61,9 @@ case "${1:-}" in
   '') ;;
   --skip-decryption) MODE='skipdecrypt' ;;
   --explain) MODE='explain' ;;
+  --muted) MODE='muted' ;;
   *)
-    echo "ext-allowlist.sh: unknown mode '$1' (expected --skip-decryption, --explain or no argument)" >&2
+    echo "ext-allowlist.sh: unknown mode '$1' (expected --skip-decryption, --explain, --muted or no argument)" >&2
     exit 2
     ;;
 esac
@@ -288,6 +296,32 @@ while read -r key method host path _; do
       # construction: the comment is stripped and whitespace squeezed to single
       # spaces above, so neither can hold a tab or a newline.
       printf '%s\t%s\t%s\t%s\n' "$_src" "$_kind" "$MATCH_EHOST" "$MATCH_ENTRY"
+    fi
+    continue
+  fi
+
+  # Also not a decision: has the user told the watcher to stop notifying about
+  # this host? Nothing here is enforced — a muted host is allowed or denied
+  # exactly as before, and only proxy/watch.sh asks. Hostname-only, like
+  # skip-decryption.txt, so `connect` is the only mode that fits; the two files
+  # the browser adds are deliberately absent, so one mute covers both identities
+  # (the "-browser" suffix was stripped above). The verdict is a POSITIVE token:
+  # a missing file, an old helper or garbage all read as NOT muted, which fails
+  # toward alerting. See docs/egress-alerts.md.
+  if [ "$MODE" = muted ]; then
+    muted_project="${project_dir}/muted-hosts.txt"
+    if   match_in_file "$MUTED_BASELINE" connect; then _src=baseline
+    elif match_in_file "$muted_project"  connect; then _src=project
+    else _src=none
+    fi
+    if [ "$_src" = none ]; then
+      printf 'none\tnone\t-\t-\n'
+    else
+      case "$MATCH_EHOST" in
+        .*) _kind=wildcard ;;
+        *)  _kind=exact ;;
+      esac
+      printf 'muted\t%s\t%s\t%s\n' "$_src" "$_kind" "$MATCH_ENTRY"
     fi
     continue
   fi
