@@ -129,7 +129,16 @@ wrapped bullets.
   the only host-side file here: `run.sh` starts it per run, it tails
   `docker logs -f` on the proxy and notifies on a first-time or denied host. Its
   `process` verb is the whole classifier — access-log lines in, alert lines out,
-  no docker — so keep new parsing there, where test/watch.bats can reach it. It
+  no docker — so keep new parsing there, where test/watch.bats can reach it.
+  Being long-lived is what makes its lifecycle fiddly, and all three parts are
+  load-bearing: `start` stamps a hash of the watcher's own files into the pidfile
+  and restarts a daemon whose stamp differs (nothing else ever would — it
+  outlives every session); the daemon records how far it has read in
+  `watcher.pos` so that restart does not replay the log as fresh denials; and
+  `stop` kills the whole process tree of every watcher for this config dir, not
+  just the pidfile's pid, because none of daemon, notify subshell, `process`,
+  its awk or `docker logs` dies with its parent — and a surviving `process` goes
+  on recording hosts, which silences the watcher that replaced it. It
   tells a denied CONNECT (unlisted host) from a `403` inside a tunnel (a path or
   method rule refused it) because the suggested fix differs and one must never be
   offered for the other. Being

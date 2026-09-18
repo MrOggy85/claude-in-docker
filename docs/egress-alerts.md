@@ -112,8 +112,8 @@ What it does not change:
 - **The proxy.** `muted-hosts.txt` never leaves the host; Squid does not read it and is not
   restarted. A muted host that was denied stays denied, and one that was allowed stays allowed.
   Muting is not allowing.
-- **The record.** It is still appended to `seen-hosts.txt`, so `cid hosts` still shows every host the
-  project reached.
+- **The record.** It is still appended to `seen-hosts.txt`, so `cid hosts` still shows every host
+  the project reached.
 
 One thing it does change: a muted denial is kept out of `denied-hosts.txt`, so
 [`cid domains add --denied`](config-cli.md#domains-add--domains-rm) never offers to allow it. Muting
@@ -125,10 +125,48 @@ a leading `.` matching the apex and every subdomain, `#` comments, and the same
 [in-container browser](browser-vnc.md) shares its project's list — there is no separate browser mute
 list, since there is nothing here to widen.
 
-The matching is `proxy/ext-allowlist.sh --muted`, the same file and the same `match_in_file` as every
-other list, asked once per host per cooldown. So an edit takes effect on a running watcher without a
-restart, and a missing or broken helper reads as *not* muted: a failure costs a spurious alert, never
-a silent one.
+The matching is `proxy/ext-allowlist.sh --muted`, the same file and the same `match_in_file` as
+every other list, asked once per host per cooldown. So an edit takes effect on a running watcher
+without a restart, and a missing or broken helper reads as *not* muted: a failure costs a spurious
+alert, never a silent one.
+
+## Restarting it
+
+The watcher is long-lived on purpose — it outlives every session — so nothing
+would otherwise replace one running code you have since changed. `start` stamps a hash of the
+watcher's own files (`watch.sh`, `ext-allowlist.sh`, and the three it sources) into the pidfile and
+restarts a watcher whose stamp no longer matches:
+
+```
+>> egress alert watcher is running superseded code — restarting it
+>> egress alerts: watching claude-egress-proxy  (pid 41983; cid watch status)
+```
+
+`run.sh` calls `start` on every run, so an edit reaches the running watcher at your next session
+with nothing to remember. A list edit needs none of this: `cid mute` and `cid domains` are read per
+alert and per request.
+
+**A restart does not replay.** `docker logs --tail all` hands a fresh daemon the whole log, and
+while the persistent seen-set keeps that quiet for first-time hosts, a denial has only the in-memory
+cooldown behind it — so a restart used to re-notify every denial in the log. The daemon records how
+far it has read in `<config-dir>/watcher.pos` and resumes there. Only the daemon does: a hand-run
+`watch.sh process` still reads whatever it is given.
+
+**`stop` kills every watcher process, not just the pidfile's.** A daemon whose pidfile was replaced
+or removed keeps reading the proxy and notifying while `cid watch status` cannot see it — the state
+that produces alerts contradicting your config. `status` and `start` report them:
+
+```
+WARNING: 1 other egress watcher process(es) are running
+  pids 20021; they notify too and 'cid watch status' cannot see them.
+  Clear them: cid watch stop && cid watch start
+```
+
+The whole tree goes: the daemon, the subshell running the notify half, `process`, its awk, and
+`docker logs`. None of them die with their parent, and a surviving `process` is worse than noisy —
+it keeps recording hosts into `seen-hosts.txt`, so the replacement watcher reads them as already
+seen and stays silent about them. Each process carries its config dir in argv, so stopping one
+config dir's watcher never touches another's.
 
 ## Notifiers
 
@@ -194,6 +232,9 @@ edit its own record.
 - **It notifies, it does not block.** The request has already been allowed or denied by the time you
   see the alert. Gating a first-time host on your approval would mean stalling a Squid ACL helper on
   human input — a different and riskier feature.
+- **The resume point is a millisecond, not a line.** A log line sharing the exact timestamp the
+  daemon stopped at is not reclassified. That is the price of never repeating an alert across a
+  restart.
 - **A gap while the watcher is down is silent.** It reattaches within seconds of the proxy being
   recreated, and `run.sh` restarts it every session, but the access log lives in the proxy
   container's writable layer: traffic in a proxy container destroyed before the next session was

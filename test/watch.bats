@@ -807,3 +807,167 @@ denied_file() {  # <project-key>
   run cat "${NOTIFY_LOG}"
   [[ "$output" != *"cid mute add"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# The resume point — where a restarted watcher picks the log up
+#
+# `docker logs --tail all` replays the whole log on every attach. The persistent
+# seen-set makes that harmless for a first-time host, but a denial has only the
+# in-memory cooldown behind it, so without a resume point every restart
+# re-notifies every denial in the log. Only the daemon sets CID_WATCH_POS; every
+# test above runs without it, which is how "unchanged for a hand-run" is pinned.
+# ---------------------------------------------------------------------------
+
+pos_file() { printf '%s' "${BATS_TEST_TMPDIR}/watcher.pos"; }
+
+@test "resume: a replayed log says nothing the second time" {
+  export CID_WATCH_POS="$(pos_file)"
+  add 1000.0 TCP_DENIED/403 evil.test:443 proj-aaa111 NONE/-
+  add 2000.0 TCP_DENIED/403 evil.test:443 proj-aaa111 NONE/-
+  proc
+  [ "$(hits 'evil.test')" -eq 2 ]
+  proc                      # the same log again, as a reattach replays it
+  [ -z "$output" ]
+}
+
+@test "resume: the position is the last line classified" {
+  export CID_WATCH_POS="$(pos_file)"
+  add 1000.0 TCP_DENIED/403 evil.test:443 proj-aaa111 NONE/-
+  add 2000.0 TCP_TUNNEL/200 api.anthropic.com:443 proj-aaa111
+  proc
+  run cat "$(pos_file)"
+  [ "$output" = "2000.000" ]
+}
+
+@test "resume: lines after the position are still classified" {
+  export CID_WATCH_POS="$(pos_file)"
+  add 1000.0 TCP_DENIED/403 evil.test:443 proj-aaa111 NONE/-
+  proc
+  LOG=''
+  add 900.0  TCP_DENIED/403 old.test:443 proj-aaa111 NONE/-    # before the mark
+  add 1100.0 TCP_DENIED/403 new.test:443 proj-aaa111 NONE/-    # after it
+  proc
+  [ "$(hits 'old.test')" -eq 0 ]
+  [ "$(hits 'new.test')" -eq 1 ]
+}
+
+@test "resume: a quiet stretch still advances the position" {
+  # Nothing alerts here, but a replay of it must not re-classify either.
+  export CID_WATCH_POS="$(pos_file)"
+  add 1000.0 TCP_TUNNEL/200 api.anthropic.com:443 proj-aaa111
+  proc
+  LOG=''
+  add 1006.0 TCP_TUNNEL/200 api.anthropic.com:443 proj-aaa111   # seen, silent
+  proc
+  run cat "$(pos_file)"
+  [ "$output" = "1006.000" ]
+}
+
+@test "resume: without CID_WATCH_POS nothing is skipped and no file is written" {
+  add 1000.0 TCP_DENIED/403 evil.test:443 proj-aaa111 NONE/-
+  proc
+  [ -n "$output" ]
+  proc
+  [ -n "$output" ]                 # replayed, and said again — the old behaviour
+  [ ! -f "$(pos_file)" ]
+}
+
+# ---------------------------------------------------------------------------
+# Lifecycle — start / stop / stale daemons
+#
+# A real daemon, with a stub `docker` that just blocks, so the whole tree exists
+# (daemon, notify subshell, `process`, its awk, `docker logs`) without Docker.
+# CID_CODE_STAMP stands in for the hash of the watcher's own files, so a code
+# change can be simulated without editing the repo.
+# ---------------------------------------------------------------------------
+
+lifecycle_setup() {
+  mkdir -p "${BATS_TEST_TMPDIR}/bin"
+  printf '#!/bin/sh\nexec sleep 30\n' > "${BATS_TEST_TMPDIR}/bin/docker"
+  chmod +x "${BATS_TEST_TMPDIR}/bin/docker"
+  PATH="${BATS_TEST_TMPDIR}/bin:${PATH}"
+  export PATH
+  export CID_CODE_STAMP=stamp-one
+}
+
+# Every process of a watcher of this watch.sh, as the script itself counts them.
+watcher_count() {
+  "${WATCH}" _procs 2>/dev/null | grep -c . || true
+}
+
+teardown() {
+  [[ -n "${CLAUDE_DOCKER_CONFIG_DIR:-}" ]] || return 0
+  "${WATCH}" stop >/dev/null 2>&1 || true
+}
+
+@test "lifecycle: start brings up a watcher, stop takes the whole tree down" {
+  lifecycle_setup
+  run "${WATCH}" start
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"watching"* ]]
+  [ "$(watcher_count)" -gt 1 ]     # daemon + pipeline, not just the one pid
+  run "${WATCH}" stop
+  [ "$status" -eq 0 ]
+  [ "$(watcher_count)" -eq 0 ]
+}
+
+@test "lifecycle: starting twice with the same code leaves the first alone" {
+  lifecycle_setup
+  "${WATCH}" start
+  local first; first="$(head -n1 "${CLAUDE_DOCKER_CONFIG_DIR}/watcher.pid")"
+  run "${WATCH}" start
+  [[ "$output" == *"already running"* ]]
+  [ "$(head -n1 "${CLAUDE_DOCKER_CONFIG_DIR}/watcher.pid")" = "${first}" ]
+}
+
+@test "lifecycle: the pidfile carries the code stamp" {
+  lifecycle_setup
+  "${WATCH}" start
+  run sed -n '2p' "${CLAUDE_DOCKER_CONFIG_DIR}/watcher.pid"
+  [ "$output" = "stamp-one" ]
+}
+
+@test "lifecycle: changed code restarts the watcher instead of leaving it" {
+  # The bug this exists for: the daemon outlives every session, so an edit to the
+  # classifier would otherwise take effect only after a manual stop/start, while
+  # the old one keeps notifying by the old rules.
+  lifecycle_setup
+  "${WATCH}" start
+  local first; first="$(head -n1 "${CLAUDE_DOCKER_CONFIG_DIR}/watcher.pid")"
+  export CID_CODE_STAMP=stamp-two
+  run "${WATCH}" start
+  [[ "$output" == *"superseded code"* ]]
+  local second; second="$(head -n1 "${CLAUDE_DOCKER_CONFIG_DIR}/watcher.pid")"
+  [ "${second}" != "${first}" ]
+  run ps -p "${first}" -o args=
+  [ -z "$output" ]                 # and the old one is gone, not just forgotten
+}
+
+@test "lifecycle: stop kills a daemon the pidfile has lost track of" {
+  # How the orphans in the field appear: the pidfile is replaced or removed while
+  # a daemon is still running, and nothing can name it again.
+  lifecycle_setup
+  "${WATCH}" start
+  rm -f "${CLAUDE_DOCKER_CONFIG_DIR}/watcher.pid"
+  "${WATCH}" start
+  [ "$(watcher_count)" -gt 2 ]     # two trees now
+  "${WATCH}" stop
+  [ "$(watcher_count)" -eq 0 ]
+}
+
+@test "lifecycle: status names the orphans it cannot otherwise show" {
+  lifecycle_setup
+  "${WATCH}" start
+  rm -f "${CLAUDE_DOCKER_CONFIG_DIR}/watcher.pid"
+  "${WATCH}" start
+  run "${WATCH}" status
+  [[ "$output" == *"other egress watcher process"* ]]
+  [[ "$output" == *"cid watch stop"* ]]
+}
+
+@test "lifecycle: stop with nothing running is not an error" {
+  lifecycle_setup
+  run "${WATCH}" stop
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no egress alert watcher running"* ]]
+}
